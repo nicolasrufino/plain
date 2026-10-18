@@ -36,7 +36,20 @@ See the full walkthrough of building with Claude Code and then reviewing on GitH
 
 ## Status
 
-Design stage. Docs:
+Working prototype for Next.js + Prisma apps (TypeScript, Node 23.6+, no AI):
+
+```sh
+node src/cli.ts main                 # what changed vs. main, in plain English
+node src/cli.ts recap                # recap of a long Claude Code session (needs the plugin hooks)
+node src/cli.ts recap --refs a,b,c   # recap across git refs, one "request" per step
+npm test                             # self-check
+```
+
+As a Claude Code plugin (`.claude-plugin/` + `hooks/`), plain snapshots the code before and after every prompt (without touching your branch or staging area), shows a short card after each turn, and `plain recap` sums up the session: your app now, what each request did, what's still open, and 3 things to remember.
+
+Docs:
+
+- [Trials](docs/trials.md): 6 vibe-coder personas, plain vs. the agent explaining itself
 
 - [Scenario](docs/scenario.md): one PR, from building to reviewing
 - [Review research](docs/review-research.md): the review bottleneck, what exists, the gap
