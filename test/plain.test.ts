@@ -39,25 +39,24 @@ console.log(out)
 rmSync(dir, { recursive: true, force: true })
 
 const expect = [
-  '⚠ 3 problems  ·  5 unfinished  ·  4 steps before shipping', // verdict first
-  '✖ Broken   oldDiscount() was deleted, but /admin/refunds still uses it',
-  '⚠ Unsafe   /api/coupon has no login check, so anyone can call it',
-  '? Unasked  calculateTotal() in lib/money.ts changed, which also affects /api/checkout',
-  '+ /api/coupon     POST',                    // new endpoint
-  'reads Coupon',
-  '~ /api/checkout   💰 money code changed',   // money path
-  'now reads Coupon',
-  '+ Coupon   code, percentOff',               // new table
-  '~ Order    DELETES discount',
-  'getCoupons() returns made-up data',
-  "<CouponInput> was built but isn't shown on any page",
-  'Left a note: "TODO rate limit"',
-  'Errors are silently ignored in app/api/coupon/route.ts',
-  'Back up first: Order.discount will be deleted for good',
-  'Run `prisma migrate dev`',
-  'Set COUPON_SALT on your host, and add it to .env.example',
-  'upgraded 14.0.0 → 16.0.0',
-  'Hidden: 1 file only reformatted',           // lib/format.ts is whitespace-only
+  '⚠ 3 problems  ·  5 loose ends  ·  4 steps before you ship',           // verdict first
+  '⚠ Anyone can use the coupon part of your server without logging in.',  // no login check
+  '✖ oldDiscount() was deleted from lib/money.ts, but the admin refunds page still uses it',
+  '? The agent also changed calculateTotal() in lib/money.ts',             // unasked change...
+  "It's used by the checkout part of your server",                         // ...and what it affects
+  '+ New server code that looks up coupons.',
+  'The checkout part of your server now reads coupons. This is the code that charges your',
+  '+ Your database now stores coupons: code and percent off.',
+  'Orders will no longer store the discount.',
+  'The agent left a to-do: "rate limit"',
+  'the error is silently ignored',
+  'getCoupons() returns made-up data instead of reading your database.',
+  "The coupon input component was built, but it isn't shown on any page yet.",
+  'Back up your data first: the discount on orders will be deleted for good.',
+  'run `npx prisma migrate dev`',
+  "Add COUPON_SALT to your hosting settings (like Vercel). It's also missing from",
+  'it was upgraded from 14.0.0 to 16.0.0.',
+  '(Hidden: 1 file with only formatting changes, or lockfiles.)',          // lib/format.ts
 ]
 for (const e of expect) assert.ok(out.includes(e), `missing: ${e}`)
 assert.ok(!out.includes('lib/format.ts'), 'reformatted file should be hidden')

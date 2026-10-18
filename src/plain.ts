@@ -155,7 +155,7 @@ function models(schema = ''): Map<string, string[]> {
   const out = new Map<string, string[]>()
   for (const [, name, body] of blocks)
     out.set(name, body.split('\n').map(l => l.trim().split(/\s+/)).filter(([w]) => w && !w.startsWith('@') && !w.startsWith('//'))
-      .map(([w, type = '']) => names.has(type.replace(/[\[\]?]/g, '')) ? `→${type.replace(/[\[\]?]/g, '')}` : w))
+      .map(([w, type = '']) => names.has(type.replace(/[\[\]?]/g, '')) ? `→${type.replace(/[?]/g, '')}` : w))
   return out
 }
 
@@ -192,13 +192,50 @@ function appFacts(snap: Snap) {
   }
 }
 
+// ---------- English ----------
+// Every sentence below is a fixed template filled with facts. No model writes any of it.
+
+const words = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[-_]/g, ' ').toLowerCase()
+const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : s.endsWith('sses') ? s.slice(0, -2) : s.endsWith('s') ? s.slice(0, -1) : s
+const pluralize = (s: string) => s.endsWith('s') ? s : s.endsWith('y') ? s.slice(0, -1) + 'ies' : s + 's'
+const things = (model: string) => pluralize(words(model))
+const an = (w: string) => (/^[aeiou]/.test(w) ? 'an ' : 'a ') + w
+const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`
+const DATES: Record<string, string> = { createdAt: 'date created', updatedAt: 'date updated', expiresAt: 'expiry date', deletedAt: 'date deleted' }
+const fieldName = (f: string) =>
+  f === 'id' || /Id$/.test(f) ? '' : DATES[f] ?? (/At$/.test(f) ? words(f.slice(0, -2)) + ' date' : words(f.replace(/Cents$/, '')))
+const fieldList = (fs: string[]) => list(fs.filter(f => !f.startsWith('→')).map(fieldName).filter(Boolean))
+
+// "/products/[slug]/reviews" -> ["product", "reviews"]: a segment before a [param] is one of many
+const named = (url: string) => {
+  const segs = url.split('/').filter(s => s && s !== 'api')
+  return segs.flatMap((s, i) => s.startsWith('[') ? [] : [segs[i + 1]?.startsWith('[') ? singular(words(s)) : words(s)])
+}
+function pageName(url: string) {
+  if (url === '/') return 'the home page'
+  const n = named(url)
+  return url.endsWith(']') ? `each ${n.join(' ')} page` : `the ${n.join(' ')} page`
+}
+const serverName = (url: string) => `the ${named(url).join(' ') || 'main'} part of your server`
+const placeName = (path: string) => { const r = route(path); return r ? (r.kind === 'page' ? pageName(r.url) : serverName(r.url)) : path }
+
+const VERBS: Record<string, string> = { create: 'create', retrieve: 'look up', update: 'update', del: 'delete', delete: 'delete', list: 'list', send: 'send' }
+function outsidePhrase(o: string) {
+  const [svc, chain] = o.split(': ')
+  if (chain === 'checkout.sessions.create') return `starts a ${svc} checkout`
+  const parts = chain.split('.'), verb = parts.at(-1)!, what = singular(words(parts.at(-2) ?? ''))
+  return VERBS[verb] ? `asks ${svc} to ${VERBS[verb]} ${verb === 'list' ? pluralize(what) : `a ${what}`}` : `calls ${svc} (${chain})`
+}
+const uiPhrase = (u: string) => u.startsWith('box ') ? `a box for ${u.slice(4)}` : `a ${u.slice(7)} button`
+const norm = (u: string) => u.replace(/\[[^\]]*\]/g, '*')
+
 // ---------- the diff ----------
 
 const STOP = new Set(['with', 'that', 'this', 'from', 'make', 'code', 'codes', 'page', 'some', 'please', 'have', 'into', 'when', 'also', 'should', 'want'])
 const keywords = (asked: string) =>
   asked.toLowerCase().match(/[a-z]{4,}/g)?.filter(w => !STOP.has(w)).map(w => w.replace(/(es|s)$/, '')) ?? []
 
-type Item = { sign: '+' | '~' | '-'; name: string; notes: string[] }
+type Change = { group: 'Pages' | 'Server' | 'Database' | 'Outside services'; isNew?: boolean; text: string; detail?: string }
 type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: string }
 // ponytail: name-based guess at what's sensitive; a config file can override it later
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
@@ -213,74 +250,96 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
     else real.push(p)
   }
   const usersOf = (name: string, self: string) =>
-    [...B.files].filter(([p, f]) => p !== self && (f.used.has(name) || f.jsx.has(name))).map(([p]) => route(p)?.url ?? p)
+    [...B.files].filter(([p, f]) => p !== self && (f.used.has(name) || f.jsx.has(name))).map(([p]) => placeName(p))
+  const mainTable = (f: FileFacts, url: string) =>
+    named(url).reverse().map(seg => [...f.tables].find(t => things(t) === pluralize(seg))).find(Boolean)
+      ?? [...f.written][0] ?? [...f.tables][0]
+  const endpoint = (path: string) => [...B.files].find(([p]) => { const r = route(p); return r?.kind === 'endpoint' && norm(r.url) === norm(path) })
+  const fetchPhrase = (path: string) => {
+    const e = endpoint(path), r = e && route(e[0])!
+    const t = e && mainTable(e[1], r!.url), noun = t ? things(t) : 'data'
+    return e?.[1].fns.has('POST') ? `sends ${noun} to your server` : `loads ${noun} from your server`
+  }
+  const newOnly = <T,>(a: Set<T> | undefined, b: Set<T>) => [...b].filter(x => !a?.has(x))
 
-  const pages: Item[] = [], api: Item[] = [], db: Item[] = [], services: Item[] = []
-  const problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []
-  const added = (a: Set<string>, b: Set<string>, say: (x: string) => string) => [...b].filter(x => !a.has(x)).map(say)
-  const describe = (f: FileFacts) => [
-    f.money ? '💰 charges money' : '',
-    f.written.size ? `saves to ${[...f.written].join(', ')}` : '',
-    [...f.tables].some(t => !f.written.has(t)) ? `reads ${[...f.tables].filter(t => !f.written.has(t)).join(', ')}` : '',
-    ...[...f.outside].filter(o => !o.startsWith('Stripe: checkout.sessions')).map(o => `calls ${o}`),
-    ...f.ui, ...[...f.fetches].map(x => `sends to ${x}`), ...[...f.links].map(x => `links to ${x}`),
-    f.auth ? 'login required ✓' : '',
-  ].filter(Boolean)
+  const changes: Change[] = [], problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []
 
-  // pages and API
+  // pages and server code
   for (const p of real) {
     const r = route(p); if (!r) continue
     const a = A.files.get(p), b = B.files.get(p)
-    const list = r.kind === 'page' ? pages : api
-    const methods = b ? METHODS.filter(m => b.fns.has(m)).join(', ') : ''
-    if (!a && b) list.push({ sign: '+', name: r.url, notes: [...(methods ? [methods] : []), ...describe(b)] })
-    else if (a && !b) list.push({ sign: '-', name: r.url, notes: ['removed'] })
-    else if (a && b) {
-      const notes = [
-        !a.money && b.money ? '💰 now charges money' : a.money && b.money ? '💰 money code changed' : '',
-        a.auth && !b.auth ? 'login check REMOVED' : '',
-        ...added(a.written, b.written, t => `now saves to ${t}`),
-        ...added(a.tables, b.tables, t => b.written.has(t) ? '' : `now reads ${t}`),
-        ...added(b.tables, a.tables, t => `no longer uses ${t}`),
-        ...added(a.outside, b.outside, x => `now calls ${x}`),
-        ...added(a.ui, b.ui, x => `new ${x}`),
-        ...added(a.fetches, b.fetches, x => `now sends to ${x}`),
-        ...added(a.links, b.links, x => `now links to ${x}`),
-      ].filter(Boolean)
-      list.push({ sign: '~', name: r.url, notes: notes.length ? notes : ['behind-the-scenes changes'] })
+    if (!b) { changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', text: `${cap(placeName(p))} was removed.`, detail: r.url }); continue }
+    const clauses: string[] = []
+    if (r.kind === 'page') {
+      const ui = newOnly(a?.ui, b.ui).map(uiPhrase)
+      if (ui.length) clauses.push(`${a ? 'now has' : 'has'} ${list(ui)}`)
+      for (const t of newOnly(a?.tables, b.tables).filter(t => !b.written.has(t))) clauses.push(`${a ? 'now shows' : 'shows'} ${things(t)}`)
+      for (const x of newOnly(a?.fetches, b.fetches)) clauses.push((a ? 'now ' : '') + fetchPhrase(x))
+      for (const x of newOnly(a?.links, b.links)) clauses.push(`${a ? 'now links' : 'links'} to ${pageName(x)}`)
+      if (!a && b.auth) clauses.push('requires login ✓')
+    } else {
+      const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
+      if (!a) {
+        const can: string[] = []
+        if (b.fns.has('GET')) can.push(`lists ${noun}`)
+        if (b.fns.has('POST')) can.push(b.written.size ? (can.length ? 'saves new ones' : `saves new ${noun}`) : t ? `looks up ${noun}` : 'accepts requests')
+        if (b.fns.has('PUT') || b.fns.has('PATCH')) can.push(`updates ${noun}`)
+        if (b.fns.has('DELETE')) can.push(`deletes ${noun}`)
+        clauses.push(...can)
+        if (b.money) clauses.push('charges customers 💰')
+        if (b.auth) clauses.push('requires login ✓')
+      } else {
+        for (const x of newOnly(a.written, b.written)) clauses.push(`saves ${things(x)}`)
+        for (const x of newOnly(a.tables, b.tables).filter(x => !b.written.has(x))) clauses.push(`reads ${things(x)}`)
+        if (!a.money && b.money) clauses.push('charges customers 💰')
+      }
+      for (const o of newOnly(a?.outside, b.outside).filter(o => !o.startsWith('Stripe: checkout.sessions'))) clauses.push(outsidePhrase(o))
     }
-    if (b && !b.auth) {
-      const sensitive = r.kind === 'page' ? /admin|dashboard|account/.test(r.url) : (b.writes || METHODS.slice(1).some(m => b.fns.has(m)))
-      if ((!a || a.auth) && sensitive && !/webhook/.test(r.url))
-        problems.push(r.kind === 'page' || SENSITIVE.test(r.url) || [...b.written].some(t => SENSITIVE.test(t))
-          ? { kind: 'Unsafe', text: `${r.url} has no login check, so anyone can ${r.kind === 'page' ? 'open it' : 'call it'}` }
-          : { kind: 'Check', text: `anyone can post to ${r.url} without logging in. Fine for a public form, but nothing limits spam or fake entries` })
+    const name = placeName(p)
+    const text = !a
+      ? (r.kind === 'page' ? `${cap(name)} is new. It ${list(clauses) || 'is a new page'}.` : `New server code that ${list(clauses) || 'handles requests'}.`)
+      : clauses.length ? `${cap(name)} now ${list(clauses).replace(/\bnow /g, '')}.` : `${cap(name)} had small behind-the-scenes changes.`
+    changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰' : ''), detail: r.url })
+
+    if (!b.auth && (!a || a.auth) && !/webhook/.test(r.url)) {
+      const writes = b.written.size || METHODS.slice(1).some(m => b.fns.has(m))
+      if (r.kind === 'page' && /admin|dashboard|account/.test(r.url))
+        problems.push({ kind: 'Unsafe', text: `Anyone can open ${name} without logging in.` })
+      else if (r.kind === 'endpoint' && writes && (SENSITIVE.test(r.url) || [...b.written].some(t => SENSITIVE.test(t))))
+        problems.push({ kind: 'Unsafe', text: `Anyone can use ${name} without logging in.` })
+      else if (r.kind === 'endpoint' && writes) {
+        const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
+        problems.push({ kind: 'Check', text: `Anyone can post ${noun} without logging in, and nothing limits spam or fake ${noun}. That's normal for some things (like reviews), but make sure it's what you want.` })
+      }
     }
   }
 
   // database
-  const rel = (fs: string[]) => {
-    const cols = fs.filter(x => !x.startsWith('→')), links = fs.filter(x => x.startsWith('→')).map(x => x.slice(1))
-    return [cols.join(', '), links.length ? `linked to ${links.join(', ')}` : ''].filter(Boolean)
-  }
   for (const [m, fields] of B.models) {
-    const old = A.models.get(m)
-    if (!old) { db.push({ sign: '+', name: m, notes: rel(fields) }); continue }
+    const old = A.models.get(m), links = (fs: string[]) => fs.filter(f => f.startsWith('→')).map(f => f.slice(1))
+    if (!old) {
+      const l = links(fields)
+      const one = l.filter(x => !x.endsWith('[]')).map(x => an(words(x))), many = l.filter(x => x.endsWith('[]')).map(x => things(x.slice(0, -2)))
+      const rels = [one.length ? `belongs to ${list(one)}` : '', many.length ? `can have many ${list(many)}` : ''].filter(Boolean)
+      changes.push({ group: 'Database', isNew: true, text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}` })
+      continue
+    }
     const add = fields.filter(x => !old.includes(x)), del = old.filter(x => !fields.includes(x))
-    if (add.length || del.length) db.push({ sign: '~', name: m, notes: [
-      ...rel(add).map((n, i) => i === 0 && !n.startsWith('linked') ? `+ ${n}` : `now ${n}`),
-      ...(del.length ? [`DELETES ${del.join(', ')}`] : []),
-    ] })
-    if (del.length) ship.push(`Back up first: ${del.map(d => `${m}.${d}`).join(', ')} will be deleted for good`)
+    if (fieldList(add)) changes.push({ group: 'Database', text: `${cap(things(m))} now also store the ${fieldList(add)}.` })
+    if (links(add).length) changes.push({ group: 'Database', text: `${cap(things(m))} are now linked to ${list(links(add).map(x => things(x.replace('[]', ''))))}.` })
+    if (del.length) {
+      changes.push({ group: 'Database', text: `${cap(things(m))} will no longer store the ${fieldList(del) || list(del)}.` })
+      ship.push(`Back up your data first: the ${fieldList(del) || list(del)} on ${things(m)} will be deleted for good.`)
+    }
   }
   for (const m of A.models.keys()) if (!B.models.has(m)) {
-    db.push({ sign: '-', name: m, notes: ['removed'] })
-    ship.push(`Back up first: the ${m} table will be deleted for good`)
+    changes.push({ group: 'Database', text: `Your database will no longer store ${things(m)}.` })
+    ship.push(`Back up your data first: all ${things(m)} will be deleted for good.`)
   }
   const newMigrations = B.migrations.filter(m => !A.migrations.includes(m))
   if (changed.some(p => p.endsWith('schema.prisma')) && !newMigrations.length)
-    ship.push('Run `prisma migrate dev`: the database changed but no migration was added')
-  for (const m of newMigrations) if (/\bDROP\b/i.test(after.get(m) ?? '')) ship.push(`Back up first: ${m} deletes data and can't be undone`)
+    ship.push("Update your database: run `npx prisma migrate dev`. The database's structure changed, but no migration was created.")
+  for (const m of newMigrations) if (/\bDROP\b/i.test(after.get(m) ?? '')) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
 
   // broken, unasked, unfinished
   const allBefore = new Map<string, string>(), allAfter = new Set<string>()
@@ -288,98 +347,98 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
   for (const f of B.files.values()) for (const n of f.fns.keys()) allAfter.add(n)
   for (const [n, p] of allBefore) if (!allAfter.has(n) && !METHODS.includes(n)) {
     const users = usersOf(n, p)
-    if (users.length) problems.push({ kind: 'Broken', text: `${n}() was deleted, but ${users.join(', ')} still ${users.length > 1 ? 'use' : 'uses'} it` })
+    if (users.length) problems.push({ kind: 'Broken', text: `${n}() was deleted from ${p}, but ${list(users)} still ${users.length > 1 ? 'use' : 'uses'} it, so that will break.` })
   }
   const kw = opts.asked ? keywords(opts.asked) : []
   for (const p of real) {
     const a = A.files.get(p), b = B.files.get(p)
     if (kw.length && a && b && !route(p) && !kw.some(k => (after.get(p) ?? '').toLowerCase().includes(k))) {
       const fns = [...b.fns].filter(([n, s]) => a.fns.has(n) && a.fns.get(n) !== s).map(([n]) => n)
-      if (!fns.length) problems.push({ kind: 'Unasked', text: `${p} changed` })
+      if (!fns.length) problems.push({ kind: 'Unasked', text: `The agent also changed ${p}, which doesn't look related to what you asked for.` })
       for (const n of fns) {
         const u = usersOf(n, p)
-        problems.push({ kind: 'Unasked', text: `${n}() in ${p} changed${u.length ? `, which also affects ${u.join(', ')}` : ''}` })
+        problems.push({ kind: 'Unasked', text: `The agent also changed ${n}() in ${p}, which doesn't look related to what you asked for.${u.length ? ` It's used by ${list(u)}, so check that ${u.length > 1 ? 'they' : 'it'} still ${u.length > 1 ? 'work' : 'works'}.` : ''}` })
       }
     }
     if (!b) continue
-    for (const t of b.todos.filter(t => !a?.todos.includes(t))) unfinished.push(`Left a note: "${t}" (${p})`)
-    for (const h of b.hardcoded.filter(h => !a?.hardcoded.includes(h))) unfinished.push(`${h}() returns made-up data, not the database`)
-    if (b.emptyCatch > (a?.emptyCatch ?? 0)) unfinished.push(`Errors are silently ignored in ${p} (empty catch)`)
-    if (b.anys > (a?.anys ?? 0)) { const n = b.anys - (a?.anys ?? 0); unfinished.push(`${n} spot${n === 1 ? '' : 's'} skip${n === 1 ? 's' : ''} type checking in ${p} (\`any\`)`) }
+    for (const t of b.todos.filter(t => !a?.todos.includes(t))) unfinished.push(`The agent left a to-do: "${t.replace(/^(TODO|FIXME|HACK):?\s*/, '')}" (in ${p}).`)
+    for (const h of b.hardcoded.filter(h => !a?.hardcoded.includes(h))) unfinished.push(`${h}() returns made-up data instead of reading your database.`)
+    if (b.emptyCatch > (a?.emptyCatch ?? 0)) unfinished.push(`If something goes wrong in ${placeName(p)}, the error is silently ignored (an empty catch in ${p}).`)
+    if (b.anys > (a?.anys ?? 0)) { const n = b.anys - (a?.anys ?? 0); unfinished.push(`Type checking is turned off in ${n} spot${n === 1 ? '' : 's'} in ${p} (\`any\`).`) }
   }
   for (const [p, f] of B.files) if (/(^|\/)components\//.test(p))
     for (const n of f.fns.keys()) if (/^[A-Z]/.test(n) && !usersOf(n, p).length && !A.files.get(p)?.fns.has(n))
-      unfinished.push(`<${n}> was built but isn't shown on any page`)
+      unfinished.push(`The ${words(n)} component was built, but it isn't shown on any page yet.`)
 
   // env, packages, services
   const usedBefore = new Set([...A.files.values()].flatMap(f => [...f.env]))
   for (const k of new Set([...B.files.values()].flatMap(f => [...f.env]))) if (!usedBefore.has(k))
-    ship.push(B.envExample.has(k) ? `Set ${k} on your host (e.g. Vercel)` : `Set ${k} on your host, and add it to .env.example (it's missing)`)
+    ship.push(`Add ${k} to your hosting settings (like Vercel).${B.envExample.has(k) ? '' : ' It\'s also missing from .env.example.'}`)
   for (const [d, v] of Object.entries(B.deps)) {
-    if (!(d in A.deps)) ship.push(`Check the new package ${d}@${v}`)
-    else if (A.deps[d] !== v) ship.push(`Test everything that uses ${d}: upgraded ${A.deps[d]} → ${v}`)
+    if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)
+    else if (A.deps[d] !== v) ship.push(`Test anything that uses ${d}: it was upgraded from ${A.deps[d]} to ${v}.`)
   }
   const svcBefore = new Set([...A.files.values()].flatMap(f => [...f.services]))
   for (const s of new Set([...B.files.values()].flatMap(f => [...f.services]))) if (!svcBefore.has(s))
-    services.push({ sign: '+', name: s, notes: ['new outside service'] })
+    changes.push({ group: 'Outside services', isNew: true, text: `Your app now uses ${s}.` })
 
-  return render({ ...opts, files: real.length, noise: noise.length, pages, api, db, services, problems, unfinished, ship })
+  return render({ ...opts, files: real.length, noise: noise.length, changes, problems, unfinished, ship })
 }
 
 function render(r: {
   ref: string; asked?: string; color?: boolean; files: number; noise: number
-  pages: Item[]; api: Item[]; db: Item[]; services: Item[]; problems: Problem[]; unfinished: string[]; ship: string[]
+  changes: Change[]; problems: Problem[]; unfinished: string[]; ship: string[]
 }): string {
   const c = (code: string) => (t: string) => r.color ? `\x1b[${code}m${t}\x1b[0m` : t
   const bold = c('1'), dim = c('2'), red = c('31'), yellow = c('33'), green = c('32')
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
+  const wrap = (text: string, first: string, rest: string, width = 92) => {
+    const lines: string[] = []; let line = first
+    for (const w of text.split(' ')) {
+      if (line.trim() && (line + ' ' + w).length > width) { lines.push(line); line = rest + w }
+      else line = line.endsWith(' ') || !line.trim() ? line + w : line + ' ' + w
+    }
+    return [...lines, line]
+  }
   const out: string[] = [`${bold('plain')} · ${plural(r.files, 'file')} changed since ${r.ref}`]
   if (r.asked) out.push(dim(`You asked: "${r.asked.length > 80 ? r.asked.slice(0, 77) + '...' : r.asked}"`))
-
-  const groups: [string, Item[]][] = [['Pages', r.pages], ['API', r.api], ['Database', r.db], ['Services', r.services]]
-  if (!groups.some(([, g]) => g.length) && !r.problems.length && !r.unfinished.length && !r.ship.length)
+  if (!r.changes.length && !r.problems.length && !r.unfinished.length && !r.ship.length)
     return [...out, '', 'Nothing about the app changed.'].join('\n')
 
   const checks = r.problems.filter(p => p.kind === 'Check').length, bad = r.problems.length - checks
-  const verdict = [
-    bad ? red(`⚠ ${plural(bad, 'problem')}`) : green('✓ No problems found'),
-    checks ? yellow(`${plural(checks, 'thing')} to check`) : '',
-    r.unfinished.length ? yellow(`${r.unfinished.length} unfinished`) : '',
-    r.ship.length ? `${plural(r.ship.length, 'step')} before shipping` : '',
-  ].filter(Boolean).join('  ·  ')
-  out.push('', `  ${verdict}`)
+  out.push('', '  ' + [
+    bad ? red(`⚠ ${plural(bad, 'problem')}`) : green('✓ Nothing looks broken'),
+    checks ? yellow(`${plural(checks, 'thing')} to decide`) : '',
+    r.unfinished.length ? yellow(`${plural(r.unfinished.length, 'loose end')}`) : '',
+    r.ship.length ? `${plural(r.ship.length, 'step')} before you ship` : '',
+  ].filter(Boolean).join('  ·  '))
 
   if (r.problems.length) {
-    out.push('', bold('NEEDS ATTENTION'))
+    out.push('', bold('LOOK AT THIS FIRST'))
     const icon = { Broken: red('✖'), Unsafe: red('⚠'), Check: yellow('!'), Unasked: yellow('?') }
-    for (const p of r.problems) out.push(`  ${icon[p.kind]} ${p.kind.padEnd(8)} ${p.text}${p.kind === 'Unasked' ? dim('  (guess)') : ''}`)
+    for (const p of r.problems) out.push(...wrap(p.text + (p.kind === 'Unasked' ? ' (This is a guess.)' : ''), `  ${icon[p.kind]} `, '    '))
   }
-
-  if (groups.some(([, g]) => g.length)) {
-    out.push('', bold('WHAT YOU GOT'))
-    const sign = { '+': green('+'), '~': yellow('~'), '-': red('-') }
-    const order = { '+': 0, '~': 1, '-': 2 }
-    for (const [title, items] of groups) {
+  if (r.changes.length) {
+    out.push('', bold('WHAT CHANGED'))
+    for (const g of ['Pages', 'Server', 'Database', 'Outside services'] as const) {
+      const items = r.changes.filter(x => x.group === g).sort((x, y) => Number(!!y.isNew) - Number(!!x.isNew))
       if (!items.length) continue
-      out.push(`  ${title}`)
-      const w = Math.max(...items.map(i => i.name.length))
-      for (const i of items.sort((x, y) => order[x.sign] - order[y.sign])) {
-        const [first = '', ...rest] = i.notes
-        out.push(`    ${sign[i.sign]} ${i.name.padEnd(w)}   ${first}`)
-        for (const n of rest) out.push(`      ${' '.repeat(w)}   ${dim(n)}`)
+      out.push(`  ${g}`)
+      for (const i of items) {
+        out.push(...wrap(i.text, `    ${i.isNew ? green('+') : '•'} `, '      '))
+        if (i.detail) out.push(dim(`      ${i.detail}`))
       }
     }
   }
-
   if (r.unfinished.length) {
-    out.push('', bold('UNFINISHED'))
-    for (const u of r.unfinished) out.push(`  ${yellow('◐')} ${u}`)
+    out.push('', bold('LOOSE ENDS'))
+    for (const u of r.unfinished) out.push(...wrap(u, `  ${yellow('◐')} `, '    '))
   }
   if (r.ship.length) {
     out.push('', bold('BEFORE YOU SHIP'))
-    r.ship.forEach((s, i) => out.push(`  ${i + 1}. ${s}`))
+    r.ship.forEach((s, i) => out.push(...wrap(s, `  ${i + 1}. `, '     ')))
   }
-  if (r.noise) out.push('', dim(`◌ Hidden: ${plural(r.noise, 'file')} only reformatted or lockfiles`))
+  if (r.noise) out.push('', dim(`(Hidden: ${plural(r.noise, 'file')} with only formatting changes, or lockfiles.)`))
   return out.join('\n')
 }
 
