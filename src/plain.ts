@@ -352,7 +352,7 @@ if (import.meta.main) {
   const cwd = process.cwd()
   const i = args.indexOf('--asked')
   let asked = i >= 0 ? args[i + 1] : undefined
-  const ref = args.find((a, j) => !a.startsWith('--') && j !== i + 1) ?? 'HEAD'
+  const ref = args.find((a, j) => !a.startsWith('--') && (i < 0 || j !== i + 1)) ?? 'HEAD'
   if (args.includes('--hook')) {
     const input = JSON.parse(readFileSync(0, 'utf8') || '{}')
     if (input.transcript_path && existsSync(input.transcript_path)) asked ??= lastPrompt(input.transcript_path)
