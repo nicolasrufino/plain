@@ -1,49 +1,59 @@
 # plain
 
-**Turn code into plain English, using fixed rules instead of AI.**
+**See what your app does differently now, without reading the code.**
 
-```ts
-const bigTotal = (xs: number[], limit: number) =>
-  xs.filter(x => x > limit).reduce((a, b) => a + b, 0)
+AI writes most of the code now. At Anthropic, more than 80% of merged code is written by Claude.
+Writing is no longer the bottleneck; understanding is. PRs are 154% bigger, reviews take 91%
+longer, and "what did we just change?" has become a question you ask the agent instead of
+something you know ([research](docs/review-research.md)).
+
+plain reads your code and shows **what changed in your app**: new features, changed flows,
+new data, risks. Each one links to the exact code, and you can zoom from the app level down to
+individual lines in plain English.
+
+```
+✚ NEW FEATURE   Coupon codes at checkout
+   Checkout page → POST /api/coupon → reads Coupon → returns discount
+✎ CHANGED   /api/checkout · the amount sent to Stripe now depends on the coupon 💰
+⚠ RISK   /api/coupon has no login check
+◌ 9 files only reformatted (hidden)
 ```
 
-> bigTotal takes a list of numbers `xs` and a number `limit`, and adds up every `x` in `xs` that is greater than `limit`.
+The facts come from fixed rules, not an LLM, so they can't be made up. AI is optional and
+only used for wording, and it's always labeled.
 
-The English is generated from the code's syntax tree by fixed rules, with no LLM involved. That gives it three properties:
+## Where it runs
 
-- **Faithful.** It describes what the code actually does. It can't invent anything.
-- **Instant and free.** It runs offline, with no API key and no tokens.
-- **Honest about its limits.** In strict mode, code it can't explain is reported as unexplained instead of being described wrongly.
+1. **`npx plain`**: shows your branch compared to main as a local web page. No sign-up.
+2. **GitHub Action**: posts the summary on every PR, with a reading order and noise hidden.
+3. **Claude Code / Cursor hook**: shows a summary after every agent session, with one key to send the risks back to the agent.
+4. **VS Code extension**: later.
 
-## Who it's for
+## How it looks
 
-- **Learners.** See every line of a new language in English, and notice that Python, TypeScript and F# say the same things.
-- **Reviewers of AI-written code.** Read what the code really does before you merge it.
-- **Screen-reader users.** Get spoken descriptions of code structure ([research](docs/research.md#accessibility)).
+See the full walkthrough of building with Claude Code and then reviewing on GitHub:
+**[docs/scenario.md](docs/scenario.md)**.
 
 ## Status
 
-Early design. There's a working Python prototype in [`prototype/`](prototype/):
+Design stage. Docs:
 
-```sh
-python3 prototype/plain.py prototype/demo.pln         # explain
-python3 prototype/plain.py prototype/demo.pln --run   # run
-python3 prototype/plain.py                            # self-check
-```
+- [Scenario](docs/scenario.md): one PR, from building to reviewing
+- [Review research](docs/review-research.md): the review bottleneck, what exists, the gap
+- [Code-to-English research](docs/research.md): the line-level engine and prior work
+- [Architecture](docs/architecture.md): parsing, the shared core tree, and English output
+- [Languages](docs/languages.md): TypeScript, Python, C, F#
 
-## Docs
-
-- [Research](docs/research.md): why this matters, and who has tried it before
-- [Architecture](docs/architecture.md): how the pipeline works
-- [Languages](docs/languages.md): TypeScript, Python, C, F#, and how to add one
+The line-level English engine has a Python prototype in [`prototype/`](prototype/).
 
 ## Roadmap
 
-1. **v0.1:** TypeScript and Python explained line by line through the shared core, as an `npx` CLI.
-2. **v0.2:** Recognize common patterns, so whole loops and chains like filter, map and sum become one sentence.
-3. **v0.3:** A VS Code extension with hover and a side-by-side view.
-4. **v0.4:** C and F#.
-5. **Later:** Learning mode (read the English, then write the code), a strict-mode lint for CI, and more languages.
+1. **Spike:** extract facts from a Next.js + Prisma repo (routes, tables, services, env, login checks) and compare two branches
+2. **v0.1:** `npx plain` that opens a local page for the current branch compared to main
+3. **v0.2:** Claude Code hook (the post-session summary and "fix the risks")
+4. **v0.3:** GitHub Action (PR comment and interactive view)
+5. **v0.4:** Zoom into functions with the English engine (TypeScript)
+6. **Later:** More frameworks (Express, Supabase, Django), more languages (Python, C, F#), VS Code extension
 
 ## License
 
