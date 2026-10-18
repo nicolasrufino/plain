@@ -1,0 +1,11 @@
+{
+  "name": "plain-app-diff",
+  "version": "0.0.1",
+  "description": "See what your app does differently now, without reading the code.",
+  "type": "module",
+  "bin": { "plain": "src/plain.ts" },
+  "scripts": { "test": "node test/plain.test.ts" },
+  "engines": { "node": ">=23.6" },
+  "license": "MIT",
+  "dependencies": { "typescript": "^5.9.3" }
+}

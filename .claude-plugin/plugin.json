@@ -1,0 +1,5 @@
+{
+  "name": "plain",
+  "description": "After every Claude turn, shows what changed in your app: new features, unasked changes, breakage, risks, and what to do before shipping.",
+  "version": "0.0.1"
+}
