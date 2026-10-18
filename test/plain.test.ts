@@ -39,21 +39,25 @@ console.log(out)
 rmSync(dir, { recursive: true, force: true })
 
 const expect = [
-  'endpoint POST /api/coupon · reads Coupon',   // new endpoint, what it touches
-  'table Coupon (code, percentOff)',            // new table
-  'endpoint POST /api/checkout · now uses Coupon · 💰 money path touched',
-  'lib/money.ts: calculateTotal() changed → also affects /api/checkout', // unasked change + blast radius
-  'oldDiscount() was deleted from lib/money.ts but page /admin/refunds still uses it',
-  'getCoupons() returns hardcoded data',
-  '<CouponInput> is never shown on any page',
-  'TODO rate limit',
-  'empty catch {} hides errors',
-  'endpoint POST /api/coupon has no login check',
-  'COUPON_SALT is used but missing from .env.example',
-  'table Order drops discount',
-  'no migration was added',
-  'stripe upgraded 14.0.0 → 16.0.0',
-  '1 file only reformatted',                    // lib/format.ts whitespace-only
+  '⚠ 3 problems  ·  5 unfinished  ·  4 steps before shipping', // verdict first
+  '✖ Broken   oldDiscount() was deleted, but /admin/refunds still uses it',
+  '⚠ Unsafe   /api/coupon has no login check, so anyone can call it',
+  '? Unasked  calculateTotal() in lib/money.ts changed, which also affects /api/checkout',
+  '+ /api/coupon     POST',                    // new endpoint
+  'reads Coupon',
+  '~ /api/checkout   💰 money code changed',   // money path
+  'now uses Coupon',
+  '+ Coupon   code, percentOff',               // new table
+  '~ Order    DELETES discount',
+  'getCoupons() returns made-up data',
+  "<CouponInput> was built but isn't shown on any page",
+  'Left a note: "TODO rate limit"',
+  'Errors are silently ignored in app/api/coupon/route.ts',
+  'Back up first: Order.discount will be deleted for good',
+  'Run `prisma migrate dev`',
+  'Set COUPON_SALT on your host, and add it to .env.example',
+  'upgraded 14.0.0 → 16.0.0',
+  'Hidden: 1 file only reformatted',           // lib/format.ts is whitespace-only
 ]
 for (const e of expect) assert.ok(out.includes(e), `missing: ${e}`)
 assert.ok(!out.includes('lib/format.ts'), 'reformatted file should be hidden')
