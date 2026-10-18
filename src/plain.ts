@@ -44,7 +44,7 @@ type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
   tables: Set<string>; writes: boolean; env: Set<string>; auth: boolean; money: boolean
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
-  outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]
+  outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>
 }
 
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
@@ -59,10 +59,10 @@ export function fileFacts(path: string, text: string): FileFacts {
     writes: false, env: new Set(), auth: false, money: false, emptyCatch: 0,
     todos: text.match(/\/\/\s*(TODO|FIXME|HACK)\b[^\n]*/g)?.map(t => t.replace(/^\/\/\s*/, '')) ?? [],
     hardcoded: [], anys: 0, printed: printer.printFile(sf),
-    outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [],
+    outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(),
   }
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
-    : e && ts.isTemplateExpression(e) ? e.head.text : undefined
+    : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
   const visit = (n: ts.Node) => {
     if (ts.isCallExpression(n)) {
       const callee = n.expression
@@ -75,7 +75,7 @@ export function fileFacts(path: string, text: string): FileFacts {
         const parts = callee.getText(sf).replace(/\s|\?/g, '').split('.')
         if (parts[0] === 'prisma' && parts.length === 3 && !parts[1].startsWith('$')) {
           f.tables.add(cap(parts[1]))
-          if (WRITES.test(parts[2])) f.writes = true
+          if (WRITES.test(parts[2])) { f.writes = true; f.written.add(cap(parts[1])) }
         }
         if (parts[0] === 'stripe' && parts.at(-1) === 'create') f.money = true
         if (CLIENTS[parts[0]] && parts.length > 1) f.outside.add(`${CLIENTS[parts[0]]}: ${parts.slice(1).join('.')}`)
@@ -179,7 +179,7 @@ function appFacts(snap: Snap) {
       if (!q || seen.has(q) || /(^|\/)lib\//.test(q)) continue
       seen.add(q)
       const c = files.get(q)!
-      for (const k of ['ui', 'fetches', 'links', 'outside', 'tables'] as const) for (const x of c[k]) into[k].add(x)
+      for (const k of ['ui', 'fetches', 'links', 'outside', 'tables', 'written'] as const) for (const x of c[k]) into[k].add(x)
       fold(q, into, seen)
     }
   }
@@ -199,7 +199,9 @@ const keywords = (asked: string) =>
   asked.toLowerCase().match(/[a-z]{4,}/g)?.filter(w => !STOP.has(w)).map(w => w.replace(/(es|s)$/, '')) ?? []
 
 type Item = { sign: '+' | '~' | '-'; name: string; notes: string[] }
-type Problem = { kind: 'Broken' | 'Unsafe' | 'Unasked'; text: string }
+type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: string }
+// ponytail: name-based guess at what's sensitive; a config file can override it later
+const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
 
 export function report(before: Snap, after: Snap, opts: { ref: string; asked?: string; color?: boolean }): string {
   const A = appFacts(before), B = appFacts(after)
@@ -218,7 +220,8 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
   const added = (a: Set<string>, b: Set<string>, say: (x: string) => string) => [...b].filter(x => !a.has(x)).map(say)
   const describe = (f: FileFacts) => [
     f.money ? '💰 charges money' : '',
-    f.tables.size ? `${f.writes ? 'saves to' : 'reads'} ${[...f.tables].join(', ')}` : '',
+    f.written.size ? `saves to ${[...f.written].join(', ')}` : '',
+    [...f.tables].some(t => !f.written.has(t)) ? `reads ${[...f.tables].filter(t => !f.written.has(t)).join(', ')}` : '',
     ...[...f.outside].filter(o => !o.startsWith('Stripe: checkout.sessions')).map(o => `calls ${o}`),
     ...f.ui, ...[...f.fetches].map(x => `sends to ${x}`), ...[...f.links].map(x => `links to ${x}`),
     f.auth ? 'login required ✓' : '',
@@ -236,7 +239,8 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
       const notes = [
         !a.money && b.money ? '💰 now charges money' : a.money && b.money ? '💰 money code changed' : '',
         a.auth && !b.auth ? 'login check REMOVED' : '',
-        ...added(a.tables, b.tables, t => `now uses ${t}`),
+        ...added(a.written, b.written, t => `now saves to ${t}`),
+        ...added(a.tables, b.tables, t => b.written.has(t) ? '' : `now reads ${t}`),
         ...added(b.tables, a.tables, t => `no longer uses ${t}`),
         ...added(a.outside, b.outside, x => `now calls ${x}`),
         ...added(a.ui, b.ui, x => `new ${x}`),
@@ -248,7 +252,9 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
     if (b && !b.auth) {
       const sensitive = r.kind === 'page' ? /admin|dashboard|account/.test(r.url) : (b.writes || METHODS.slice(1).some(m => b.fns.has(m)))
       if ((!a || a.auth) && sensitive && !/webhook/.test(r.url))
-        problems.push({ kind: 'Unsafe', text: `${r.url} has no login check, so anyone can ${r.kind === 'page' ? 'open it' : 'call it'}` })
+        problems.push(r.kind === 'page' || SENSITIVE.test(r.url) || [...b.written].some(t => SENSITIVE.test(t))
+          ? { kind: 'Unsafe', text: `${r.url} has no login check, so anyone can ${r.kind === 'page' ? 'open it' : 'call it'}` }
+          : { kind: 'Check', text: `anyone can post to ${r.url} without logging in. Fine for a public form, but nothing limits spam or fake entries` })
     }
   }
 
@@ -334,8 +340,10 @@ function render(r: {
   if (!groups.some(([, g]) => g.length) && !r.problems.length && !r.unfinished.length && !r.ship.length)
     return [...out, '', 'Nothing about the app changed.'].join('\n')
 
+  const checks = r.problems.filter(p => p.kind === 'Check').length, bad = r.problems.length - checks
   const verdict = [
-    r.problems.length ? red(`⚠ ${plural(r.problems.length, 'problem')}`) : green('✓ No problems found'),
+    bad ? red(`⚠ ${plural(bad, 'problem')}`) : green('✓ No problems found'),
+    checks ? yellow(`${plural(checks, 'thing')} to check`) : '',
     r.unfinished.length ? yellow(`${r.unfinished.length} unfinished`) : '',
     r.ship.length ? `${plural(r.ship.length, 'step')} before shipping` : '',
   ].filter(Boolean).join('  ·  ')
@@ -343,7 +351,7 @@ function render(r: {
 
   if (r.problems.length) {
     out.push('', bold('NEEDS ATTENTION'))
-    const icon = { Broken: red('✖'), Unsafe: red('⚠'), Unasked: yellow('?') }
+    const icon = { Broken: red('✖'), Unsafe: red('⚠'), Check: yellow('!'), Unasked: yellow('?') }
     for (const p of r.problems) out.push(`  ${icon[p.kind]} ${p.kind.padEnd(8)} ${p.text}${p.kind === 'Unasked' ? dim('  (guess)') : ''}`)
   }
 

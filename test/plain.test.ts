@@ -46,7 +46,7 @@ const expect = [
   '+ /api/coupon     POST',                    // new endpoint
   'reads Coupon',
   '~ /api/checkout   💰 money code changed',   // money path
-  'now uses Coupon',
+  'now reads Coupon',
   '+ Coupon   code, percentOff',               // new table
   '~ Order    DELETES discount',
   'getCoupons() returns made-up data',
