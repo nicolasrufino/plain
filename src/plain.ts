@@ -44,7 +44,7 @@ type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
   tables: Set<string>; writes: boolean; env: Set<string>; auth: boolean; money: boolean
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
-  outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>
+  outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
 }
 
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
@@ -59,7 +59,7 @@ export function fileFacts(path: string, text: string): FileFacts {
     writes: false, env: new Set(), auth: false, money: false, emptyCatch: 0,
     todos: text.match(/\/\/\s*(TODO|FIXME|HACK)\b[^\n]*/g)?.map(t => t.replace(/^\/\/\s*/, '')) ?? [],
     hardcoded: [], anys: 0, printed: printer.printFile(sf),
-    outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(),
+    outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(), headings: [], forms: 0,
   }
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
     : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
@@ -96,8 +96,15 @@ export function fileFacts(path: string, text: string): FileFacts {
     if (ts.isJsxAttribute(n) && n.initializer) {
       const v = str(n.initializer), name = n.name.getText(sf)
       if (v && name === 'href' && v.startsWith('/')) f.links.add(v)
-      if (v && (name === 'placeholder' || name === 'aria-label')) f.ui.add(`box "${v}"`)
+      const tag = n.parent.parent.tagName.getText(sf)
+      if (v && (name === 'placeholder' || name === 'aria-label') && /^(input|textarea|select)$/.test(tag)) f.ui.add(`box "${v}"`)
     }
+    const textOf = (el: ts.JsxElement): string => el.children.map(c => ts.isJsxText(c) ? c.text : ts.isJsxElement(c) ? textOf(c) : '').join('').replace(/\s+/g, ' ').trim()
+    if (ts.isJsxElement(n) && /^h[1-3]$/.test(n.openingElement.tagName.getText(sf))) {
+      const t = textOf(n)
+      if (t) f.headings.push(`${n.openingElement.tagName.getText(sf)}:${t}`)
+    }
+    if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText(sf) === 'form') f.forms++
     if (ts.isJsxElement(n) && n.openingElement.tagName.getText(sf) === 'button') {
       const t = n.children.filter(ts.isJsxText).map(c => c.text.trim()).join(' ').trim()
       if (t) f.ui.add(`button "${t}"`)
@@ -180,6 +187,7 @@ function appFacts(snap: Snap) {
       seen.add(q)
       const c = files.get(q)!
       for (const k of ['ui', 'fetches', 'links', 'outside', 'tables', 'written'] as const) for (const x of c[k]) into[k].add(x)
+      into.headings.push(...c.headings); into.forms += c.forms
       fold(q, into, seen)
     }
   }
@@ -226,6 +234,17 @@ function outsidePhrase(o: string) {
   const parts = chain.split('.'), verb = parts.at(-1)!, what = singular(words(parts.at(-2) ?? ''))
   return VERBS[verb] ? `asks ${svc} to ${VERBS[verb]} ${verb === 'list' ? pluralize(what) : `a ${what}`}` : `calls ${svc} (${chain})`
 }
+const VERB = /^((?:now )?(?:shows|links to|has|reads|saves|sends|loads|lists|looks up|asks \w+ to \w+))\s(.+)$/
+function merge(clauses: string[]): string[] {
+  const groups = new Map<string, string[]>()
+  for (const c of clauses) {
+    const m = c.match(VERB), key = m ? m[1] : c
+    groups.set(key, [...(groups.get(key) ?? []), ...(m ? [m[2]] : [])])
+  }
+  return [...groups].map(([verb, objs]) => objs.length ? `${verb} ${list(objs)}` : verb)
+}
+const NICE: Record<string, string> = { nav: 'navigation menu', btn: 'button', img: 'image' }
+const nice = (s: string) => words(s).split(' ').map(w => NICE[w] ?? w).join(' ')
 const uiPhrase = (u: string) => u.startsWith('box ') ? `a box for ${u.slice(4)}` : `a ${u.slice(7)} button`
 const norm = (u: string) => u.replace(/\[[^\]]*\]/g, '*')
 
@@ -235,7 +254,7 @@ const STOP = new Set(['with', 'that', 'this', 'from', 'make', 'code', 'codes', '
 const keywords = (asked: string) =>
   asked.toLowerCase().match(/[a-z]{4,}/g)?.filter(w => !STOP.has(w)).map(w => w.replace(/(es|s)$/, '')) ?? []
 
-type Change = { group: 'Pages' | 'Server' | 'Database' | 'Outside services'; isNew?: boolean; text: string; detail?: string }
+type Change = { group: 'Pages' | 'Server' | 'Database' | 'Outside services' | 'Other files'; isNew?: boolean; text: string; detail?: string }
 type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: string }
 // ponytail: name-based guess at what's sensitive; a config file can override it later
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
@@ -261,6 +280,19 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
     return e?.[1].fns.has('POST') ? `sends ${noun} to your server` : `loads ${noun} from your server`
   }
   const newOnly = <T,>(a: Set<T> | undefined, b: Set<T>) => [...b].filter(x => !a?.has(x))
+  const newPage = (name: string, f: FileFacts, clauses: string[]) => {
+    const title = f.headings.find(h => h.startsWith('h1:'))?.slice(3)
+    const sections = f.headings.filter(h => !h.startsWith('h1:')).map(h => h.slice(3))
+    const rest = merge(clauses.filter(c => c !== 'requires login ✓'))
+    return [
+      `${cap(name)} is new${title ? `, titled "${title}"` : ''}.`,
+      sections.length ? `It has sections for ${list(sections)}.` : '',
+      rest.length ? `It ${list(rest)}.` : '',
+      viewOnly(f) ? 'It only shows information: nothing on it lets you change anything.' : '',
+      f.auth ? 'You have to log in to open it ✓' : '',
+    ].filter(Boolean).join(' ')
+  }
+  const viewOnly = (f: FileFacts) => !f.fetches.size && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
 
   const changes: Change[] = [], problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []
 
@@ -276,6 +308,8 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
       for (const t of newOnly(a?.tables, b.tables).filter(t => !b.written.has(t))) clauses.push(`${a ? 'now shows' : 'shows'} ${things(t)}`)
       for (const x of newOnly(a?.fetches, b.fetches)) clauses.push((a ? 'now ' : '') + fetchPhrase(x))
       for (const x of newOnly(a?.links, b.links)) clauses.push(`${a ? 'now links' : 'links'} to ${pageName(x)}`)
+      const comps = newOnly(a?.jsx, b.jsx).filter(x => /^[A-Z]/.test(x) && !/^(Link|Image|Script|Head)$/.test(x) && !x.includes('.'))
+      if (a && comps.length) clauses.push(`now shows the ${list(comps.map(nice))}`)
       if (!a && b.auth) clauses.push('requires login ✓')
     } else {
       const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
@@ -297,8 +331,8 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
     }
     const name = placeName(p)
     const text = !a
-      ? (r.kind === 'page' ? `${cap(name)} is new. It ${list(clauses) || 'is a new page'}.` : `New server code that ${list(clauses) || 'handles requests'}.`)
-      : clauses.length ? `${cap(name)} now ${list(clauses).replace(/\bnow /g, '')}.` : `${cap(name)} had small behind-the-scenes changes.`
+      ? (r.kind === 'page' ? newPage(name, b, clauses) : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
+      : clauses.length ? `${cap(name)} now ${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : `${cap(name)} had small behind-the-scenes changes.`
     changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰' : ''), detail: r.url })
 
     if (!b.auth && (!a || a.auth) && !/webhook/.test(r.url)) {
@@ -313,6 +347,17 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
       }
     }
   }
+
+  // asked to change things, but nothing new can change anything
+  const verb = opts.asked?.toLowerCase().match(/\b(control|manage|edit|change|update|delete|cancel|refund)\b/)?.[1]
+  const writesNow = [...B.files].some(([p, f]) => route(p) && f.written.size && !(A.files.get(p)?.written.size))
+  const newViewOnly = real.filter(p => route(p)?.kind === 'page' && !A.files.has(p) && B.files.has(p) && viewOnly(B.files.get(p)!))
+  if (verb && !writesNow && newViewOnly.length)
+    problems.push({ kind: 'Check', text: `You asked to "${verb}", but nothing new lets you change anything: ${list(newViewOnly.map(placeName))} only ${newViewOnly.length > 1 ? 'show' : 'shows'} information. If you wanted buttons to act on things (like refunding or cancelling orders), ask for that. (This is a guess.)` })
+
+  // files that aren't code
+  for (const p of real) if (!CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore)$|prisma\/migrations\//.test(p))
+    changes.push({ group: 'Other files', isNew: !before.has(p), text: `The agent ${!before.has(p) ? 'added' : !after.has(p) ? 'deleted' : 'changed'} ${p}${/\.md$/i.test(p) ? ', a notes file (not code)' : ''}.` })
 
   // database
   for (const [m, fields] of B.models) {
@@ -420,7 +465,7 @@ function render(r: {
   }
   if (r.changes.length) {
     out.push('', bold('WHAT CHANGED'))
-    for (const g of ['Pages', 'Server', 'Database', 'Outside services'] as const) {
+    for (const g of ['Pages', 'Server', 'Database', 'Outside services', 'Other files'] as const) {
       const items = r.changes.filter(x => x.group === g).sort((x, y) => Number(!!y.isNew) - Number(!!x.isNew))
       if (!items.length) continue
       out.push(`  ${g}`)

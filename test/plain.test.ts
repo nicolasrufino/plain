@@ -61,3 +61,10 @@ const expect = [
 for (const e of expect) assert.ok(out.includes(e), `missing: ${e}`)
 assert.ok(!out.includes('lib/format.ts'), 'reformatted file should be hidden')
 console.log('\nok')
+
+// Asked to control something, got a page that only shows information.
+const viewOnly = report(new Map(), new Map([['app/admin/page.tsx', 'export default function P() { return <h1>Sales</h1> }']]),
+  { ref: 'main', asked: 'make a dashboard to control sales' })
+assert.ok(viewOnly.includes('You asked to "control", but nothing new lets you change anything'), viewOnly)
+assert.ok(viewOnly.includes('titled "Sales"') && viewOnly.includes('It only shows information'), viewOnly)
+console.log('ok (view-only)')
