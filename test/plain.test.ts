@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { report, snapshot } from '../src/plain.ts'
+import { recapCli } from '../src/session.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'plain-test-'))
 const write = (files: Record<string, string>) => {
@@ -36,6 +37,13 @@ write({
 
 const out = report(snapshot(dir, 'main'), snapshot(dir, null), { ref: 'main', asked: 'add coupon codes at checkout' })
 console.log(out)
+// The recap over the same change, treated as a one-request session.
+const start = git('rev-parse', 'HEAD').toString().trim()
+git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'coupons')
+const rc = recapCli(dir, ['--refs', `${start},HEAD`, '--asks', 'add coupon codes at checkout'], false)
+for (const e of ['plain recap · 1 request', 'YOUR APP NOW', '1. "add coupon codes at checkout"', 'STILL OPEN',
+  '⚠ Anyone can use the coupon part of your server without logging in. (request 1)', '3 THINGS TO REMEMBER', 'Money goes through checkout'])
+  assert.ok(rc.includes(e), `recap missing: ${e}\n${rc}`)
 rmSync(dir, { recursive: true, force: true })
 
 const expect = [

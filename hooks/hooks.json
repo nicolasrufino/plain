@@ -1,7 +1,10 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/cli.ts\" --hook", "timeout": 15 }] }
+    ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/plain.ts\" --hook", "timeout": 30 }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/cli.ts\" --hook", "timeout": 30 }] }
     ]
   }
 }

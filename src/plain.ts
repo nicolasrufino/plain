@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-type Snap = Map<string, string>
+export type Snap = Map<string, string>
 
 const git = (args: string[], cwd: string) =>
   execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 1 << 28 })
@@ -47,7 +47,7 @@ type FileFacts = {
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
 }
 
-const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
+export const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
 const isExported = (n: ts.Node) =>
   ts.canHaveModifiers(n) && !!ts.getModifiers(n)?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)
 
@@ -169,7 +169,7 @@ function models(schema = ''): Map<string, string[]> {
 const envKeys = (text = '') => new Set([...text.matchAll(/^\s*([A-Z0-9_]+)\s*=/gm)].map(m => m[1]))
 const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.dependencies, ...p.devDependencies } as Record<string, string> } catch { return {} } }
 
-function appFacts(snap: Snap) {
+export function appFacts(snap: Snap) {
   const files = new Map<string, FileFacts>()
   for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/')) {
     try { files.set(p, fileFacts(p, t)) } catch { /* unparsable file: report nothing about it */ }
@@ -206,20 +206,20 @@ function appFacts(snap: Snap) {
 const words = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[-_]/g, ' ').toLowerCase()
 const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : s.endsWith('sses') ? s.slice(0, -2) : s.endsWith('s') ? s.slice(0, -1) : s
 const pluralize = (s: string) => s.endsWith('s') ? s : s.endsWith('y') ? s.slice(0, -1) + 'ies' : s + 's'
-const things = (model: string) => pluralize(words(model))
+export const things = (model: string) => pluralize(words(model))
 const an = (w: string) => (/^[aeiou]/.test(w) ? 'an ' : 'a ') + w
-const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`
+export const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`
 const DATES: Record<string, string> = { createdAt: 'date created', updatedAt: 'date updated', expiresAt: 'expiry date', deletedAt: 'date deleted' }
 const fieldName = (f: string) =>
   f === 'id' || /Id$/.test(f) ? '' : DATES[f] ?? (/At$/.test(f) ? words(f.slice(0, -2)) + ' date' : words(f.replace(/Cents$/, '')))
 const fieldList = (fs: string[]) => list(fs.filter(f => !f.startsWith('→')).map(fieldName).filter(Boolean))
 
 // "/products/[slug]/reviews" -> ["product", "reviews"]: a segment before a [param] is one of many
-const named = (url: string) => {
+export const named = (url: string) => {
   const segs = url.split('/').filter(s => s && s !== 'api')
   return segs.flatMap((s, i) => s.startsWith('[') ? [] : [segs[i + 1]?.startsWith('[') ? singular(words(s)) : words(s)])
 }
-function pageName(url: string) {
+export function pageName(url: string) {
   if (url === '/') return 'the home page'
   const n = named(url)
   return url.endsWith(']') ? `each ${n.join(' ')} page` : `the ${n.join(' ')} page`
@@ -254,12 +254,15 @@ const STOP = new Set(['with', 'that', 'this', 'from', 'make', 'code', 'codes', '
 const keywords = (asked: string) =>
   asked.toLowerCase().match(/[a-z]{4,}/g)?.filter(w => !STOP.has(w)).map(w => w.replace(/(es|s)$/, '')) ?? []
 
-type Change = { group: 'Pages' | 'Server' | 'Database' | 'Outside services' | 'Other files'; isNew?: boolean; text: string; detail?: string }
-type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: string }
+export type Change = { group: 'Pages' | 'Server' | 'Database' | 'Outside services' | 'Other files'; isNew?: boolean; text: string; detail?: string; name?: string; money?: boolean }
+export type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: string }
 // ponytail: name-based guess at what's sensitive; a config file can override it later
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
 
-export function report(before: Snap, after: Snap, opts: { ref: string; asked?: string; color?: boolean }): string {
+export type Analysis = ReturnType<typeof analyze>
+export const report = (before: Snap, after: Snap, opts: { ref: string; asked?: string; color?: boolean }) => render(analyze(before, after, opts))
+
+export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: string; color?: boolean }) {
   const A = appFacts(before), B = appFacts(after)
   const changed = [...new Set([...before.keys(), ...after.keys()])].filter(p => before.get(p) !== after.get(p)).sort()
   const noise: string[] = [], real: string[] = []
@@ -300,7 +303,7 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
   for (const p of real) {
     const r = route(p); if (!r) continue
     const a = A.files.get(p), b = B.files.get(p)
-    if (!b) { changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', text: `${cap(placeName(p))} was removed.`, detail: r.url }); continue }
+    if (!b) { changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', text: `${cap(placeName(p))} was removed.`, detail: r.url, name: placeName(p) }); continue }
     const clauses: string[] = []
     if (r.kind === 'page') {
       const ui = newOnly(a?.ui, b.ui).map(uiPhrase)
@@ -333,7 +336,7 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
     const text = !a
       ? (r.kind === 'page' ? newPage(name, b, clauses) : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
       : clauses.length ? `${cap(name)} now ${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : `${cap(name)} had small behind-the-scenes changes.`
-    changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰' : ''), detail: r.url })
+    changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰' : ''), detail: r.url, name: r.kind === 'page' ? pageName(r.url) + (!a && b.headings.find(h => h.startsWith('h1:')) ? ` ("${b.headings.find(h => h.startsWith('h1:'))!.slice(3)}")` : '') : named(r.url).join(' ') || 'main', money: b.money })
 
     if (!b.auth && (!a || a.auth) && !/webhook/.test(r.url)) {
       const writes = b.written.size || METHODS.slice(1).some(m => b.fns.has(m))
@@ -366,11 +369,11 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
       const l = links(fields)
       const one = l.filter(x => !x.endsWith('[]')).map(x => an(words(x))), many = l.filter(x => x.endsWith('[]')).map(x => things(x.slice(0, -2)))
       const rels = [one.length ? `belongs to ${list(one)}` : '', many.length ? `can have many ${list(many)}` : ''].filter(Boolean)
-      changes.push({ group: 'Database', isNew: true, text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}` })
+      changes.push({ group: 'Database', isNew: true, name: things(m), text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}` })
       continue
     }
     const add = fields.filter(x => !old.includes(x)), del = old.filter(x => !fields.includes(x))
-    if (fieldList(add)) changes.push({ group: 'Database', text: `${cap(things(m))} now also store the ${fieldList(add)}.` })
+    if (fieldList(add)) changes.push({ group: 'Database', name: things(m), text: `${cap(things(m))} now also store the ${fieldList(add)}.` })
     if (links(add).length) changes.push({ group: 'Database', text: `${cap(things(m))} are now linked to ${list(links(add).map(x => things(x.replace('[]', ''))))}.` })
     if (del.length) {
       changes.push({ group: 'Database', text: `${cap(things(m))} will no longer store the ${fieldList(del) || list(del)}.` })
@@ -427,10 +430,10 @@ export function report(before: Snap, after: Snap, opts: { ref: string; asked?: s
   for (const s of new Set([...B.files.values()].flatMap(f => [...f.services]))) if (!svcBefore.has(s))
     changes.push({ group: 'Outside services', isNew: true, text: `Your app now uses ${s}.` })
 
-  return render({ ...opts, files: real.length, noise: noise.length, changes, problems, unfinished, ship })
+  return { ...opts, files: real.length, noise: noise.length, changes, problems, unfinished, ship, A, B, schemaChanged: changed.some(p => p.endsWith('schema.prisma')) }
 }
 
-function render(r: {
+export function render(r: {
   ref: string; asked?: string; color?: boolean; files: number; noise: number
   changes: Change[]; problems: Problem[]; unfinished: string[]; ship: string[]
 }): string {
@@ -485,35 +488,4 @@ function render(r: {
   }
   if (r.noise) out.push('', dim(`(Hidden: ${plural(r.noise, 'file')} with only formatting changes, or lockfiles.)`))
   return out.join('\n')
-}
-
-// Last real user prompt from a Claude Code transcript (JSONL).
-function lastPrompt(transcriptPath: string): string | undefined {
-  let last: string | undefined
-  for (const line of readFileSync(transcriptPath, 'utf8').split('\n')) {
-    try {
-      const e = JSON.parse(line)
-      if (e.type !== 'user') continue
-      const c = e.message?.content
-      const text = typeof c === 'string' ? c : c?.find?.((x: any) => x.type === 'text')?.text
-      if (text && !text.startsWith('<')) last = text
-    } catch { /* partial line */ }
-  }
-  return last
-}
-
-if (import.meta.main) {
-  const args = process.argv.slice(2)
-  const cwd = process.cwd()
-  const i = args.indexOf('--asked')
-  let asked = i >= 0 ? args[i + 1] : undefined
-  const ref = args.find((a, j) => !a.startsWith('--') && (i < 0 || j !== i + 1)) ?? 'HEAD'
-  if (args.includes('--hook')) {
-    const input = JSON.parse(readFileSync(0, 'utf8') || '{}')
-    if (input.transcript_path && existsSync(input.transcript_path)) asked ??= lastPrompt(input.transcript_path)
-    const text = report(snapshot(cwd, ref), snapshot(cwd, null), { ref, asked })
-    if (!text.endsWith('Nothing about the app changed.')) console.log(JSON.stringify({ systemMessage: text }))
-  } else {
-    console.log(report(snapshot(cwd, ref), snapshot(cwd, null), { ref, asked, color: process.stdout.isTTY && !process.env.NO_COLOR }))
-  }
 }
