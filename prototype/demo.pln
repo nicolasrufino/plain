@@ -1,0 +1,8 @@
+def big_total(xs, limit):
+    t = 0
+    for x in xs:
+        if x > limit:
+            t += x
+    return t
+
+print(big_total([5, 20, 30], 10))
