@@ -1,5 +1,8 @@
 {
   "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "[ -d \"${CLAUDE_PLUGIN_ROOT}/node_modules/typescript\" ] || npm install --prefix \"${CLAUDE_PLUGIN_ROOT}\" --omit=dev --silent >/dev/null 2>&1", "timeout": 120 }] }
+    ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/cli.ts\" --hook", "timeout": 15 }] }
     ],

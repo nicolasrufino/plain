@@ -45,6 +45,12 @@ node src/cli.ts recap --refs a,b,c   # recap across git refs, one "request" per 
 npm test                             # self-check
 ```
 
+Install the Claude Code plugin:
+
+```
+/plugin install plain --marketplace nicolasrufino/plain
+```
+
 As a Claude Code plugin (`.claude-plugin/` + `hooks/`), plain snapshots the code before and after every prompt (without touching your branch or staging area), shows a short card after each turn, and `plain recap` sums up the session: your app now, what each request did, what's still open, and 3 things to remember.
 
 Docs:

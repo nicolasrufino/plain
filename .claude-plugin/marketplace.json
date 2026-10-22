@@ -1,0 +1,14 @@
+{
+  "name": "plain",
+  "description": "plain: see what your app does differently now, without reading the code.",
+  "owner": {
+    "name": "Nicolas Rufino"
+  },
+  "plugins": [
+    {
+      "name": "plain",
+      "source": "./",
+      "description": "After every Claude turn, shows what changed in your app in plain English, and recaps long sessions."
+    }
+  ]
+}
