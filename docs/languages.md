@@ -10,9 +10,9 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | Node servers: Express (Fastify, Hono written the same way) | ✅ Supported |
 | React with React Router (Vite, Create React App) | ✅ Supported |
 | Prisma (database) | ✅ Supported |
-| Stripe, OpenAI, Anthropic, Resend, Supabase, Twilio (outside services) | ✅ Recognized |
-| 1. **Supabase** (tables, Row Level Security, edge functions) | 🔜 Next |
-| 2. TanStack Start | 🔜 After Supabase |
+| **Supabase** (tables, Row Level Security, edge functions) | ✅ Supported |
+| Stripe, OpenAI, Anthropic, Resend, Twilio (outside services) | ✅ Recognized |
+| 2. TanStack Start | 🔜 Next |
 | 3. Python: FastAPI, Flask, Django | Planned |
 | 4. Vue / Nuxt, SvelteKit | Planned |
 | 5. Angular | Planned |
@@ -128,43 +128,83 @@ officially documented. The surveys cover professional developers, not vibe coder
 
 ---
 
-## Supabase 🔜
+## Supabase ✅
 
 How a Supabase app works: the browser calls `supabase.from('orders').select()` directly. The
 only thing stopping anyone from reading or changing every row is the table's **Row Level
 Security (RLS)** policies, written in SQL in `supabase/migrations/*.sql`.
 
-**What plain will read**
-- Calls: `supabase.from('t').select/insert/update/upsert/delete`, `rpc`, `storage`, and
-  `functions.invoke('name')`.
-- Migrations: tables, columns, `enable row level security`, `create policy ... using (...)
-  with check (...)`.
-- Edge functions: `supabase/functions/<name>/index.ts`, served at `/functions/v1/<name>`.
-- `supabase/config.toml`.
+**What plain reads**
+- **Migrations:** `supabase/migrations/*.sql`, replayed in order. That gives tables, columns,
+  links to other tables, RLS on/off, policies (created, changed, dropped) and public storage
+  buckets.
+- **Browser and server code:** `supabase.from('t').select/insert/update/upsert/delete`,
+  `supabase.functions.invoke('name')` and `supabase.auth.getUser()`.
+- **Edge functions:** `supabase/functions/<name>/index.ts` is a server address at
+  `/functions/v1/<name>`. Their secrets come from `Deno.env.get(...)`, and their imports can be
+  `npm:`, `jsr:` or `esm.sh`.
 
-**What plain will warn about.** Each item comes from Supabase's own database checks
+**What plain warns about.** Each item comes from Supabase's own database checks
 ([advisors][advisors]) or a real incident:
-- A table the app uses with **no RLS turned on**. This is exactly CVE-2025-48757.
-- A policy that lets **everyone** in: `using (true)` or `with check (true)`, especially `to anon`.
-- A policy that only checks **"is logged in"** (`auth.role() = 'authenticated'`), so every
-  user can see every other user's rows.
-- A policy based on `user_metadata`, which users can edit themselves.
-- Users who can set columns like `status`, `paid`, `role` or `credits` on their own rows. In
-  CVE-2025-48757 an insert with `payment_status: "paid"` skipped payment.
-- The **service-role key** used in browser code. It skips every policy.
-- An edge function with `verify_jwt = false`.
-- A public storage bucket.
-- Destructive SQL: `drop table`, `drop column`, `truncate`, `delete` without `where`.
+
+| Situation | Card says | Level |
+|---|---|---|
+| A table with RLS off | "Anyone can read and change every row of …" (exactly CVE-2025-48757) | ⚠ |
+| `using (true)` for reading | "Anyone … can read …". ⚠ for private-sounding tables (users, orders, messages, or columns like email or phone); otherwise a "thing to decide", since a public catalog is normal | ⚠ / ! |
+| Only checks "is logged in" (`auth.role() = 'authenticated'`) | "Every logged-in user can read every one of your …, including other people's" | ⚠ / ! |
+| `with check (true)` / `using (true)` for writing | "… can change / delete every one of …". Inserts into tables without an owner (a contact form) are a "thing to decide" | ⚠ / ! |
+| A rule that trusts `user_metadata` | users can edit it themselves | ⚠ |
+| Users can set `status`, `paid`, `role`, `credits`, … on their own rows | the CVE-2025-48757 "mark it paid" trick | ! |
+| RLS on but no rule, for a table the app uses | the app can't read or save it | ! |
+| A public storage bucket | anyone with the link can open the files | ! |
+| A view without `security_invoker` | it skips the access rules of the tables it reads | ⚠ / ! |
+| A migration that empties a table, deletes all rows, or changes a column's type | "Back up your data first" | before you ship |
+
+**Before you ship:**
+- Every new migration gets a reminder to reach the live database (`supabase db push`; Lovable
+  does it for you).
+- Edge-function secrets go into Supabase's secrets, not your hosting. `SUPABASE_URL` and its
+  keys are provided by Supabase, so they're not listed.
 
 **Design decisions**
 - **The whole history, not just the diff.** RLS is rebuilt from all migrations, because one
-  change can make an old table unsafe.
-- **Honest wording.** The card will say "based on this repo's migrations", since policies can
-  also be changed in the Supabase dashboard, where plain can't see them.
-- **Parser.** Regular expressions break on SQL comments, quoted names, and function bodies
-  that contain policy-like text. The candidate is `libpg-query`: the real Postgres parser,
-  compiled to WebAssembly, about 1.8 MB. We'll check it installs cleanly with no build step
-  before choosing it.
+  change can make an old table unsafe. The card only shows findings that are new in this
+  change.
+- **Honest wording.** When the card says anything about access rules, it adds that they're
+  read from `supabase/migrations`, and that rules changed in the Supabase dashboard aren't
+  visible.
+- **Parser: `libpg-query` 18.2.1.** It's the real Postgres parser in WebAssembly: 1.9 MB, no
+  install scripts, loads in about 7 ms, parses a migration in about 6 ms. Regular expressions
+  were ruled out because comments, quoted names and function bodies (`$$ ... $$`) that contain
+  policy-like text would fool them. A file Postgres can't parse is skipped, not guessed at.
+- **Rules are read as a tree, not as text.**
+  - `auth.uid() = user_id`, and the faster `(select auth.uid()) = user_id`, mean "your own rows".
+  - `auth.uid() is not null`, `auth.role() = 'authenticated'` and `auth.jwt() ->> 'role'` mean
+    "any logged-in user".
+  - `true`, `1 = 1` and `x or true` mean "everyone".
+  - Restrictive rules (`as restrictive`) narrow what the other rules allow.
+  - Rules only for `service_role` are ignored, since that key skips the rules anyway.
+  - A check hidden in a subquery or helper function (like an admin lookup) is trusted, so it
+    never raises an alarm.
+- **Other things the replay keeps track of:**
+  - `create table if not exists` for an existing table changes nothing.
+  - Renamed tables keep their rules.
+  - `revoke ... from anon, authenticated` takes a table out of the API entirely.
+- **Logging in, by where it runs:**
+  - `supabase.auth.getUser()` counts as a login check on a server (edge functions, Next.js).
+  - In the browser it doesn't, since reading the session redirects nobody.
+  - Tables that only edge functions use don't count as "used by your app", because those
+    functions usually run with the service key.
+- **Private or not is a name-based guess** (users, orders, payments, messages, … or columns
+  like email or phone), like the rest of plain. That's why reading rules on other tables are
+  "things to decide", not alarms.
+
+**Not yet:**
+- `security definer` functions callable by anyone
+- `verify_jwt = false` in `supabase/config.toml`
+- grants on single columns
+- `rpc()` and storage calls from the browser
+- logic hidden inside helper functions used in rules
 
 ## TanStack Start 🔜
 

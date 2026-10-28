@@ -29,7 +29,7 @@ export function snapshot(cwd: string, ref: string | null): Snap {
 
 // ---------- facts from one file ----------
 
-const AUTH = new Set(['auth', 'getServerSession', 'getUser', 'getSession', 'currentUser', 'requireAdmin', 'requireUser'])
+const AUTH = new Set(['auth', 'getServerSession', 'getUser', 'currentUser', 'requireAdmin', 'requireUser'])
 // npm:stripe@14, https://esm.sh/stripe@14?target=deno, jsr:@supabase/supabase-js@2 (Deno, edge functions) -> the package name
 const pkgName = (m: string) => m.replace(/^(npm:|jsr:|https:\/\/esm\.sh\/)/, '').replace(/\?.*$/, '').replace(/(.)@[^/]*$/, '$1')
 const SB_OPS: Record<string, string> = { insert: 'create', update: 'update', upsert: 'update', delete: 'delete' }
@@ -46,7 +46,7 @@ const printer = ts.createPrinter({ removeComments: true })
 
 type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
-  tables: Set<string>; ops: Set<string>; writes: boolean; env: Set<string>; auth: boolean; money: boolean
+  tables: Set<string>; ops: Set<string>; writes: boolean; sbAuth: boolean; env: Set<string>; auth: boolean; money: boolean   // sbAuth: supabase.auth.getUser(), a real check only on a server
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
@@ -68,7 +68,7 @@ const NOT_GUARD = /(^|\.)session\(|passport\.(initialize|session)|cookie|csrf|co
 const PAGE_GUARD = /auth|protect|private|require|guard|signedin|loggedin/i   // client wrapper that does
 const empty = (printed = ''): FileFacts => ({
   fns: new Map(), used: new Set(), jsx: new Set(), services: new Set(), tables: new Set(), ops: new Set(),
-  writes: false, env: new Set(), auth: false, money: false, emptyCatch: 0, todos: [], hardcoded: [], anys: 0, printed,
+  writes: false, sbAuth: false, env: new Set(), auth: false, money: false, emptyCatch: 0, todos: [], hardcoded: [], anys: 0, printed,
   outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(), headings: [], forms: 0,
   binds: new Map(), locals: new Map(), handlers: [], mounts: [], pages: [], calls: [], wrappers: new Map(),
 })
@@ -156,7 +156,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         }
         if (last === 'invoke' && /functions$/.test(obj) && arg) f.fetches.add(`POST /functions/v1/${arg}`)
         if (obj === 'Deno.env' && last === 'get' && arg) f.env.add(arg)
-        if (AUTH.has(last) && /auth$/.test(obj)) f.auth = true   // supabase.auth.getUser()
+        if (/^(getUser|getSession|getClaims)$/.test(last) && /auth$/.test(obj)) f.sbAuth = true   // supabase.auth.getUser()
         if (/^(prisma|db)$/.test(parts[0]) && parts.length === 3 && !parts[1].startsWith('$') && !parts[1].includes('(')) {
           f.tables.add(cap(parts[1]))
           if (WRITES.test(parts[2])) { f.writes = true; f.written.add(cap(parts[1])); f.ops.add(parts[2].replace(/Many$/, '').replace('upsert', 'update')) }
@@ -338,10 +338,11 @@ export function appFacts(snap: Snap) {
   const routes = new Map<string, Route>()
   const deps_ = Object.assign({}, ...[...snap].filter(([p]) => /(^|\/)package\.json$/.test(p) && !p.includes('node_modules/')).map(([, t]) => deps(t))) as Record<string, string>
   for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
-  // React Router: the component each <Route> shows is a page at that address.
+  // React Router: the component each <Route> shows is a page at that address. It runs in the browser.
+  const browserPages = new Set<string>()
   for (const [p, f] of files) for (const pg of f.pages) {
     const q = target(p, pg.comp)
-    if (q && !routes.has(q)) { routes.set(q, { kind: 'page', url: pg.path }); if (pg.guard) files.get(q)!.auth = true }
+    if (q && !routes.has(q)) { routes.set(q, { kind: 'page', url: pg.path }); browserPages.add(q); if (pg.guard) files.get(q)!.auth = true }
   }
   // Express-style servers: each address becomes its own unit "file#/api/x", with the facts of its handlers.
   const mounts = new Map<string, { path: string; guard: boolean; from: string }>()
@@ -368,7 +369,7 @@ export function appFacts(snap: Snap) {
       unit.fns.set(h.method, hf.printed)
       unit.printed += `\n${h.method} ${hf.printed}`
       // Logged in if every handler that changes something checks (or, with none, every handler does).
-      const writes = h.method !== 'GET', guard = pre!.guard || h.guard || hf.auth || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
+      const writes = h.method !== 'GET', guard = pre!.guard || h.guard || hf.auth || hf.sbAuth || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
       const u = unit as FileFacts & { w?: boolean[]; r?: boolean[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
@@ -388,6 +389,8 @@ export function appFacts(snap: Snap) {
     }
   }
   for (const p of files.keys()) if (routes.has(p) && !p.includes('#')) fold(p, files.get(p)!, new Set([p]))
+  // Reading the session in the browser redirects nobody; on a server (edge function, Next.js) it's a real check.
+  for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k)) files.get(k)!.auth = true
   // Whether a page or address checks login is part of what it is: losing the check counts as a change.
   for (const k of routes.keys()) files.get(k)!.printed += `\n[login: ${files.get(k)!.auth}]`
   const schemaPath = [...snap.keys()].find(p => p.endsWith('schema.prisma'))
@@ -619,7 +622,8 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     if (bad.length) ship.push(`Back up your data first: ${m} ${list(bad)}, and that can't be undone.`)
     ship.push(`Make sure ${m} reaches your live database (Lovable does this for you; otherwise run \`supabase db push\`).`)
   }
-  const used = (X: typeof A) => new Set([...X.files.values()].flatMap(f => [...f.tables]))
+  // Tables the app itself uses; edge functions usually use the service key, which skips the rules.
+  const used = (X: typeof A) => new Set([...X.files].filter(([p]) => !/(^|\/)supabase\/functions\//.test(p)).flatMap(([, f]) => [...f.tables]))
   const before_ = findings(A.db, used(A), things).map(x => x.text), rls = findings(B.db, used(B), things).filter(x => !before_.includes(x.text))
   problems.push(...rls)
   const notes = rls.length ? ["Database access rules are read from supabase/migrations. Rules changed in the Supabase dashboard aren't visible to plain."] : []

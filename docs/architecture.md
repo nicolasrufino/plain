@@ -34,7 +34,7 @@ Claude Code hooks.
 | Mounts | `app.use('/api/admin', requireAuth, adminRouter)`, `app.use('/api/x', require('./x'))` |
 | Pages | Next.js `app/**/page.tsx` and `pages/*`; React Router `<Route path element>` and `{ path, element }` |
 | Login checks | calls like `auth()`, guard middleware (`requireAuth`, `verifyToken`), wrappers like `<RequireAuth>` |
-| Database | `prisma.<table>.<call>` and `db.<table>.<call>`: which tables are read, which are written and how |
+| Database | `prisma.<table>.<call>`, `db.<table>.<call>` and `supabase.from('<table>').<call>`: which tables are read, which are written and how |
 | Talks to the server | `fetch('/api/x', { method })`, `axios.post('/x')`, and your own helpers like `api('/x')` |
 | On screen | headings, buttons, boxes (named by their label), forms, links |
 | Outside services | imports (`stripe`, `openai`, `resend`, ...) and calls on their clients |
@@ -52,7 +52,9 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 - **Pages include their components.** A page also does what the components it imports do.
 - **Helpers are resolved.** `api('/bookings')` becomes `/api/bookings` when `api` wraps
   `` fetch(`/api${path}`) ``.
-- **The database** comes from `schema.prisma`; migrations from `prisma/migrations`.
+- **The database** comes from `schema.prisma`, or from replaying `supabase/migrations/*.sql`
+  with the real Postgres parser ([src/supabase.ts](../src/supabase.ts)). The replay also gives
+  who each table's access rules let in.
 - **Env vars** come from the code and from every `.env.example`; packages from every `package.json`.
 
 ## 3. Compare and 4. English

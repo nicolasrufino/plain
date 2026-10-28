@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { report, snapshot } from '../src/plain.ts'
 import { recapCli } from '../src/session.ts'
+import { readDb, findings } from '../src/supabase.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'plain-test-'))
 const write = (files: Record<string, string>) => {
@@ -241,3 +242,37 @@ assert.ok(!/⚠|Temp|"y"|"x"/.test(good), `careful app should have no warnings\n
 const off = card(sbBefore, { ...sbBefore, 'supabase/migrations/20260305000000_off.sql': 'alter table public.orders disable row level security;' })
 assert.ok(off.includes('⚠ Anyone can read and change every row of orders'), off)
 console.log('ok (supabase)')
+
+// Supabase access rules, one scenario each (review 2026-10-28). Expected: the start of each finding, or nothing.
+const rls = (sql: string[], used = ['orders']) => findings(readDb([['0.sql', 'create table public.orders (id uuid primary key, user_id uuid references auth.users, status text);\nalter table public.orders enable row level security;'],
+  ...sql.map((s, i) => [`${i + 1}.sql`, s] as [string, string])]), new Set(used), (t: string) => t.replace(/_/g, ' ')).map(f => `${f.kind}: ${f.text}`)
+const rlsCases: [string, string[], string[]][] = [
+  ['open to everyone', [`create policy "p" on orders for select using (true);`], ['Unsafe: Anyone, even without logging in, can read every one of your orders']],
+  ['logged in = any user (is not null)', [`create policy "p" on orders for select to authenticated using (auth.uid() is not null);`], ['Unsafe: Every logged-in user can read every one of your orders']],
+  ['logged in = any user (jwt role)', [`create policy "p" on orders for select using ((auth.jwt() ->> 'role') = 'authenticated');`], ['Unsafe: Every logged-in user can read every one']],
+  ['insert for any logged-in user', [`create policy "p" on orders for insert to authenticated with check (auth.uid() is not null);`], ["Unsafe: Every logged-in user can add orders in someone else's name"]],
+  ['own rows, (select auth.uid()) form', [`create policy "p" on orders for select using ((select auth.uid()) = user_id);`], []],
+  ['service role only', [`create policy "s" on orders for all to service_role using (true) with check (true);`, `create policy "o" on orders for select using (auth.uid() = user_id);`], []],
+  ['restrictive own-rows wins', [`create policy "own" on orders as restrictive for select to authenticated using (auth.uid() = user_id);`, `create policy "pub" on orders for select using (true);`], []],
+  ['admin check in a subquery', [`create policy "a" on orders for update to authenticated using (exists (select 1 from profiles where profiles.id = auth.uid() and profiles.role = 'admin'));`], []],
+  ['update own, check true', [`create policy "u" on orders for update to authenticated using (auth.uid() = user_id) with check (true);`], ['Check: People can edit their own orders and hand them over']],
+  ['own update can set status', [`create policy "u" on orders for update using (auth.uid() = user_id);`], ['Check: People can edit their own orders, including the status column']],
+  ['if not exists keeps the rules', [`create policy "o" on orders for select using (auth.uid() = user_id);`, `create table if not exists public.orders (id uuid);`], []],
+  ['renamed table', [`alter table orders rename to purchases;`, `create policy "pub" on purchases for select using (true);`], ['Check: Anyone, even without logging in, can read all purchases']],
+  ['view without security_invoker', [`create policy "o" on orders for select using (auth.uid() = user_id);`, `create view public.all_orders as select * from orders;`], ['Unsafe: The view all_orders shows orders to anyone']],
+  ['view with security_invoker', [`create policy "o" on orders for select using (auth.uid() = user_id);`, `create view public.v with (security_invoker = on) as select * from orders;`], []],
+  ['RLS off, but the API is revoked', [`create table public.secrets (id int, token text); revoke all on public.secrets from anon, authenticated;`, `create policy "o" on orders for select using (auth.uid() = user_id);`], []],
+  ['public bucket by update', [`create policy "o" on orders for select using (auth.uid() = user_id);`, `update storage.buckets set public = true where id = 'avatars';`], ['Check: Files in the "avatars" storage bucket']],
+]
+for (const [name, sql, expected] of rlsCases) {
+  const got = rls(sql)
+  assert.equal(got.length, expected.length, `${name}: expected ${expected.length} findings, got\n${got.join('\n')}`)
+  expected.forEach((e, i) => assert.ok(got[i].startsWith(e), `${name}: expected "${e}", got "${got[i]}"`))
+}
+console.log(`ok (${rlsCases.length} access-rule scenarios)`)
+// Reading the session in the browser isn't a login check; on an edge function it is.
+const sess = card({}, { 'src/App.tsx': "import Admin from './Admin'\nexport const r = [{ path: '/admin', element: <Admin /> }]\n",
+  'src/Admin.tsx': "export default function Admin() { supabase.auth.getSession().then(s => setEmail(s)); return <h1>Admin</h1> }\n",
+  'supabase/functions/refund/index.ts': "Deno.serve(async (req) => { const { data } = await supabase.auth.getUser(req.headers.get('Authorization')); await supabase.from('orders').update({}) })\n" })
+assert.ok(sess.includes('⚠ Anyone can open the admin page without logging in.') && sess.includes('updates orders and requires login ✓'), sess)
+console.log('ok (supabase login checks)')
