@@ -215,7 +215,7 @@ for (const e of ['⚠ Anyone can use the create checkout part of your server wit
   '⚠ Anyone can read and change every row of profiles: the table has no access rules', '! Anyone, even without logging in, can add messages',
   '! Files in the "avatars" storage bucket can be opened by anyone', 'shows orders, saves profiles and starts a payment 💰',
   'New server code that saves new orders and charges customers 💰. /functions/v1/create-checkout', 'stores profiles: full name, email and phone. Each one belongs to a user.',
-  'deletes every row of messages', 'run `supabase db push`', "Add STRIPE_SECRET_KEY to your Supabase project's secrets", "aren't visible to plain"])
+  'deletes every row of messages', '(`supabase db push`)', "Add STRIPE_SECRET_KEY to your Supabase project's secrets", "aren't visible to plain"])
   assert.ok(sb.includes(e), `supabase missing: "${e}"\n${sb}`)
 for (const e of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'Products are public', 'calls Supabase', 'Other files', 'Own orders'])
   assert.ok(!sb.includes(e), `supabase should not say "${e}"\n${sb}`)
@@ -294,7 +294,7 @@ console.log('ok (routes that start changing data)')
     'app/api/a/route.ts': 'export async function GET() { return 1 }\n', 'app/api/b/route.ts': 'export async function GET() { return 1 }\n', 'styles.css': '.a { color: red }\n',
     'lib/api.ts': 'export async function api(p: string) { return fetch(p) }\n', 'app/thing/page.tsx': "import { api } from '../../lib/api'\nexport default function T() { return <h1>T</h1> }\n" }
   const after = { ...base, 'app/walkers/[id]/page.tsx': page("'Continue to checkout'", '<p>Members get 10% off.</p>'),
-    'app/api/bookings/route.ts': route("if (!ok) return NextResponse.json({ error: 'That time is taken.' }, { status: 409 }); const c = process.env.EMAIL_TZ || 'UTC'; await fetch('https://api.resend.com/emails', { method: 'POST' }); const st = 'cancelled';"),
+    'app/api/bookings/route.ts': route("if (!ok) return NextResponse.json({ error: 'That time is taken.' }, { status: 409 }); const c = process.env.EMAIL_TZ || 'UTC'; await fetch('https://api.resend.com/emails', { method: 'POST' }); await prisma.booking.update({ data: { status: 'cancelled' } });"),
     'app/api/a/route.ts': 'export async function GET() { return 2 }\n', 'app/api/b/route.ts': 'export async function GET() { return 3 }\n',
     'styles.css': '.a { color: red }\n@media (max-width: 600px) { .a { display: block } }\n',
     'lib/api.ts': 'export class ApiError extends Error {}\nexport async function api(p: string) { const r = await fetch(p); if (!r.ok) throw new ApiError(); return r }\n',
@@ -474,4 +474,32 @@ def checkout(user = Depends(get_current_user)):
     assert.ok(c3.includes(e), `review 5 missing "${e}"\n${c3}`)
   for (const e of ['/admin/admin', 'signup part']) assert.ok(!c3.includes(e), `review 5 should not say "${e}"\n${c3}`)
   console.log('ok (review 5)')
+}
+
+// Round 3 trials (TanStack + Supabase, 2026-10-28)
+{
+  const stripe = { 'package.json': '{"dependencies":{"stripe":"1"}}', 'server/pay.ts': "import Stripe from 'stripe'\nexport const s = new Stripe('')\n" }
+  const refund = (code: string) => card(stripe, { ...stripe, 'app/api/x/route.ts': `export async function POST() { ${code} }\n` }).includes("Cancelling doesn't")
+  assert.ok(refund("await prisma.booking.updateMany({ where: { classId }, data: { status: 'cancelled' } })"), 'cancel all bookings')
+  assert.ok(refund("const ok = ['completed', 'cancelled'].includes(body.status); await prisma.booking.update({ where: { id }, data: { status: body.status } })"), 'validated status from input')
+  assert.ok(!refund("await admin.from('bookings').update({ status: 'cancelled' }).eq('id', id).eq('status', 'pending')"), 'pending only')
+  assert.ok(!refund("return { status: 'cancelled' }"), 'not a write')
+  // security definer functions: callable by anyone unless revoked from anon and authenticated, or checking the caller
+  const fnSql = (body: string, extra = '') => card({}, { 'supabase/migrations/1.sql': `create function public.f(u uuid) returns void language plpgsql security definer as $$ begin ${body} end $$;\n${extra}` })
+  assert.ok(fnSql('insert into holds values (u);').includes("⚠ Anyone with your app's public key can run the database function f, which changes data."))
+  assert.ok(fnSql('perform 1;').includes("! Anyone with your app's public key can run the database function f. It only reads"))
+  assert.ok(fnSql('insert into holds values (u);', 'revoke all on function public.f(uuid) from public;').includes('⚠ Anyone'), 'revoking from public is not enough')
+  assert.ok(!fnSql('insert into holds values (u);', 'revoke execute on function public.f(uuid) from anon, authenticated;').includes('public key'))
+  assert.ok(!fnSql('if auth.uid() is null then raise exception; end if; insert into holds values (auth.uid());').includes('public key'))
+  // vague requests, files you named, curly apostrophes, rewritten database rules, tables only their owners can read
+  const v = report(new Map(), new Map([['app/api/x/route.ts', 'export async function GET() { return 1 }\n'], ['src/server/pricing.ts', 'export const fee = 200\n']]),
+    { ref: 'main', asked: 'booking is weird sometimes, fix it and move pricing into src/server/pricing.ts', agentSaid: 'Typechecking couldn’t run here.' }).replace(/\s+/g, ' ')
+  for (const e of ["You didn't say exactly what was wrong, so the agent guessed.", 'The agent created src/server/pricing.ts, as you asked.', "The agent says it didn't run or test this."])
+    assert.ok(v.includes(e), `round 3 missing "${e}"\n${v}`)
+  const base = 'create function public.cap() returns trigger language plpgsql as $$ begin return new; end $$;\ncreate table public.notes (id uuid primary key, user_id uuid references auth.users, body text);\n'
+  const w = card({ 'supabase/migrations/1.sql': base }, { 'supabase/migrations/1.sql': base, 'supabase/migrations/2.sql':
+    "create or replace function public.cap() returns trigger language plpgsql as $$ begin return null; end $$;\ncreate table public.waits (id uuid primary key, user_id uuid references auth.users);\nalter table public.waits enable row level security;\ncreate policy \"own\" on public.waits for select using (auth.uid() = user_id);\n" })
+  for (const e of ['Each person can only see their own ✓', 'Test what cap does: supabase/migrations/2.sql rewrote that existing database rule', 'before the new code goes live'])
+    assert.ok(w.includes(e), `round 3 missing "${e}"\n${w}`)
+  console.log('ok (round 3 trials)')
 }

@@ -9,7 +9,7 @@ import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { readDb, findings, isMigration, type Db } from './supabase.ts'
+import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, type PyFacts } from './python.ts'
 
 export type Snap = Map<string, string>
@@ -635,7 +635,7 @@ const an = (w: string) => (/^([aeio]|u(?!s|ni))/.test(w) ? 'an ' : 'a ') + w   /
 export const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`
 const DATES: Record<string, string> = { createdAt: 'date created', updatedAt: 'date updated', expiresAt: 'expiry date', deletedAt: 'date deleted' }
 const camel = (c: string) => c.replace(/_([a-z])/g, (_, x) => x.toUpperCase())   // created_at -> createdAt
-const fieldName = (c: string) => { const f = camel(c); return f === 'id' || /Id$/.test(f) ? '' : DATES[f] ?? (/At$/.test(f) ? words(f.slice(0, -2)) + ' date' : words(f.replace(/Cents$/, ''))) }
+const fieldName = (c: string) => { const f = camel(c); return f === 'id' || /Id$/.test(f) ? '' : DATES[f] ?? (/At$/.test(f) ? words(f.slice(0, -2)) + ' date' : words(f.replace(/Cents$/, '')).replace(/^(is|has) /, '')) }   // is_intro_offer: "intro offer"
 const fieldList = (fs: string[]) => list(fs.filter(f => !f.startsWith('→')).map(fieldName).filter(Boolean))
 
 // "/products/[slug]/reviews" -> ["product", "reviews"]: a segment before a [param] is one of many
@@ -764,7 +764,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       for (const t of newOnly(a?.written, b.written)) clauses.push(`${a ? 'now saves' : 'saves'} ${things(t)}`)
       for (const x of newOnly(a?.fetches, b.fetches)) clauses.push((a ? 'now ' : '') + fetchPhrase(x))
       for (const x of newOnly(a?.links, b.links)) clauses.push(`${a ? 'now links' : 'links'} to ${pageName(x)}`)
-      const comps = newOnly(a?.jsx, b.jsx).filter(x => /^[A-Z]/.test(x) && !/^(Link|Image|Script|Head)$/.test(x) && !x.includes('.'))
+      // icons (lucide, heroicons, ...) aren't content: "shows the gift" would be noise
+      const comps = newOnly(a?.jsx, b.jsx).filter(x => /^[A-Z]/.test(x) && !/^(Link|Image|Script|Head)$/.test(x) && !x.includes('.')
+        && !/icons?|lucide|phosphor|tabler|feather/i.test(b.binds.get(x) ?? '') && !/Icon$/.test(x))
       if (a && comps.length) clauses.push(`now shows the ${list(comps.map(nice))}`)
       const price = (f: FileFacts) => f.texts.has('[price]') || [...f.jsx].some(x => /Price|Money|Amount|Currency/.test(x))   // or a <Price/> component
       if (a && price(a) && !price(b)) clauses.push('no longer shows the price')
@@ -852,7 +854,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const l = links(fields)
       const one = l.filter(x => !x.endsWith('[]')).map(x => an(words(x))), many = l.filter(x => x.endsWith('[]')).map(x => things(x.slice(0, -2)))
       const rels = [one.length ? `belongs to ${list(one)}` : '', many.length ? `can have many ${list(many)}` : ''].filter(Boolean)
-      changes.push({ group: 'Database', isNew: true, name: things(m), text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}` })
+      changes.push({ group: 'Database', isNew: true, name: things(m), text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}${ownOnly(B.db, m) ? ' Each person can only see their own ✓' : ''}` })
       continue
     }
     const add = fields.filter(x => !old.includes(x)), del = old.filter(x => !fields.includes(x))
@@ -879,7 +881,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   for (const m of B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m))) {
     const bad = (B.db.destructive.get(m) ?? []).filter(x => !/^deletes the \S+ (column|table)/.test(x))
     if (bad.length) ship.push(`Back up your data first: ${m} ${list(bad)}, and that can't be undone.`)
-    ship.push(`Make sure ${m} reaches your live database (Lovable does this for you; otherwise run \`supabase db push\`).`)
+    ship.push(`Apply ${m} to your live database before the new code goes live (\`supabase db push\`), or the parts that use it will fail.`)
+    for (const fn of B.db.replaced.get(m) ?? []) ship.push(`Test what ${fn} does: ${m} rewrote that existing database rule, which the app already relied on.`)
   }
   // Tables the app itself uses; edge functions usually use the service key, which skips the rules.
   const used = (X: typeof A) => new Set([...X.files].filter(([p]) => !/(^|\/)supabase\/functions\//.test(p)).flatMap(([, f]) => [...f.tables]))
@@ -966,16 +969,37 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const moneyChanged = real.some(p => B.files.get(p)?.money && route(p))
   const said = (x: string | undefined) => x ?? ''
   // A deal for new sign-ups (newsletter, first order, welcome) can be claimed again with another email.
-  if (moneyChanged && /(\d+\s*(%|percent)|\$\s*\d+\s+off|discount|promo|coupon|\bfree (shipping|delivery|trial|month|week|walk|order|item|session|class|lesson)s?\b)/i.test(said(opts.asked)) && /(sign ?up|newsletter|subscribe|\bfirst\b|new (customer|user|account)|welcome|referr)/i.test(said(opts.asked)))
+  if (moneyChanged && /(\d+\s*(%|percent)|\$\s*\d+\s+off|discount|promo|coupon|\bfree\b(\s+\w+){0,2}\s+(shipping|delivery|trial|month|week|walk|order|item|session|class|lesson|booking|visit|consultation)s?\b|\bfirst\s+\w+\s+(is\s+)?free\b)/i.test(said(opts.asked)) && /(sign ?up|newsletter|subscribe|\bfirst\b|new (customer|user|account)|welcome|referr)/i.test(said(opts.asked)))
     problems.push({ kind: 'Check', text: 'You asked for a discount. If it depends on a new account or email address, people can usually get it again by signing up with another email. What stops that? (This is a guess.)' })
-  const nCancel = (t = '') => t.match(/['"`]cancell?ed['"`]/g)?.length ?? 0
+  // Cancelling that can hit paid rows: a 'cancelled' write whose surroundings don't limit it to pending/unpaid ones.
+  // A cancel counts when it isn't limited to pending/unpaid rows: a write that sets 'cancelled', or a validated
+  // list (['completed', 'cancelled']) next to a write of `status` from the request.
+  // ponytail: no control flow; a pending row cancelled right after Stripe charged it (charged, no booking) is missed
+  const stmtAt = (t: string, i: number) => t.slice(t.lastIndexOf(';', i) + 1, (t.indexOf(';', i) + 1 || t.length))
+  const isWrite = (x: string) => /update|\.save\(|\bdata\s*:|\bset\b/i.test(x)
+  const pendingOnly = (x: string) => /pending|unpaid|expired|open/i.test(x) && !/(?<!un)\bpaid\b/i.test(x.replace(/payment_status\s*={1,3}\s*['"`]paid['"`]/g, ''))
+  const statusFromInput = (t: string) => [...t.matchAll(/\bstatus\s*(?=[,}])|\bstatus\s*:\s*(?!['"`])[A-Za-z_]/g)].some(m => { const x = stmtAt(t, m.index!); return isWrite(x) && !pendingOnly(x) })
+  const paidCancels = (t = '') => [...t.matchAll(/['"`]cancell?ed['"`]/g)].filter(m => {
+    const x = stmtAt(t, m.index!)
+    return isWrite(x) ? !pendingOnly(x) : statusFromInput(t)
+  }).length
+  const newSql = B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m)).map(m => after.get(m) ?? '').join('\n')
   const cancels = real.some(p => route(p)?.kind !== 'page' && !/\.[jt]sx$/.test(p.split('#')[0]) && !!B.files.get(p)?.written.size
-    && nCancel(B.files.get(p)!.printed) > nCancel(A.files.get(p)?.printed))
+    && paidCancels(B.files.get(p)!.printed) > paidCancels(A.files.get(p)?.printed)) || paidCancels(newSql) > 0 && /update\s+[\w.]*\s+set/i.test(newSql)
   const refunds = [...B.files.values()].some(f => /refunds?\.create|\brefund\(/.test(f.printed))
   if (cancels && !refunds && [...B.files.values()].some(f => f.services.has('Stripe')))
     problems.push({ kind: 'Check', text: "Cancelling doesn't give money back: nothing in your app refunds a Stripe payment. If someone cancels after paying, they stay charged. (This is a guess.)" })
   // "I couldn't run the tests", "didn't get a chance to test", "tests not run", "untested"; not "I didn't change the tests"
-  const NOT_RUN = /\b(did ?n[o']?t|could ?n[o']?t|was ?n[o']?t able to|were ?n[o']?t able to|unable to|not able to|have ?n[o']?t|has ?n[o']?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\buntested\b/i
+  const NOT_RUN = /\b(did ?n[o'’]?t|could ?n[o'’]?t|was ?n[o'’]?t able to|were ?n[o'’]?t able to|unable to|not able to|have ?n[o'’]?t|has ?n[o'’]?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\buntested\b/i
+  // "fix it", "it's weird", "make it faster" without saying what's wrong: the agent had to guess what to fix
+  const ask = said(opts.asked)
+  if (/\b(fix|broken|weird|buggy|bug|slow|faster|not working|doesn'?t work|glitch\w*|janky)\b/i.test(ask) && ask.split(/\s+/).length < 16 && !/["'`]|\berror\b|\bwhen i\b|\bafter\b/i.test(ask))
+    ship.unshift("You didn't say exactly what was wrong, so the agent guessed. Check that the problem you saw is gone.")
+  // a file you named in your request: say it's there
+  for (const m of ask.matchAll(/[\w./-]+\.(?:ts|tsx|js|jsx|py|sql|css)\b/g)) {
+    const hit = real.find(p => p === m[0] || p.endsWith('/' + m[0].replace(/^\.?\//, '')))
+    if (hit) changes.push({ group: 'Other files', isNew: !before.has(hit), text: `The agent ${before.has(hit) ? 'changed' : 'created'} ${hit}, as you asked.` })
+  }
   if (NOT_RUN.test(said(opts.agentSaid)))
     ship.unshift("The agent says it didn't run or test this. Try it yourself before you ship.")
 

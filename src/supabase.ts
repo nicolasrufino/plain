@@ -9,7 +9,9 @@ try { pg = await import('libpg-query'); await pg.loadModule() } catch { pg = und
 export type Policy = { name: string; cmd: string; roles: string[]; permissive: boolean; qual?: Node; check?: Node }
 export type Table = { cols: string[]; refs: Map<string, string>; rls: boolean; policies: Map<string, Policy>; revoked: Set<string> }
 export type View = { invoker: boolean; reads: string[] }
-export type Db = { tables: Map<string, Table>; views: Map<string, View>; publicBuckets: Set<string>; destructive: Map<string, string[]> }
+export type Db = { tables: Map<string, Table>; views: Map<string, View>; publicBuckets: Set<string>; destructive: Map<string, string[]>
+  functions: Set<string>; replaced: Map<string, string[]>
+  definers: Map<string, { checksUser: boolean; writes: boolean; revoked: Set<string> }> }   // security definer functions: who's asked, who can still call them   // replaced: migration -> existing database functions it rewrote
 
 export const isMigration = (p: string) => /(^|\/)supabase\/migrations\/[^/]+\.sql$/.test(p)
 
@@ -21,7 +23,7 @@ const relnames = (n: Node): string[] => [...JSON.stringify(n ?? null).matchAll(/
 const invoker = (opts: Node[] = []) => opts.some((o: Node) => o.DefElem?.defname === 'security_invoker' && /^(on|true|1)$/i.test(sval(o.DefElem.arg) ?? String(o.DefElem.arg?.Integer?.ival ?? '')))
 
 export function readDb(files: [string, string][]): Db {
-  const db: Db = { tables: new Map(), views: new Map(), publicBuckets: new Set(), destructive: new Map() }
+  const db: Db = { tables: new Map(), views: new Map(), publicBuckets: new Set(), destructive: new Map(), functions: new Set(), replaced: new Map(), definers: new Map() }
   if (!pg) return db
   for (const [path, sql] of [...files].sort(([a], [b]) => a.localeCompare(b))) {
     let stmts: Node[]
@@ -41,6 +43,23 @@ export function readDb(files: [string, string][]): Db {
           if (e.Constraint?.contype === 'CONSTR_FOREIGN') for (const a of e.Constraint.fk_attrs ?? []) t.refs.set(sval(a)!, name(e.Constraint.pktable)!)   // foreign key (a) references ...
         }
         db.tables.set(name(s.relation)!, t)
+      }
+      // create or replace function on one that already exists: a rule the app relies on was rewritten
+      if (kind === 'CreateFunctionStmt') {
+        const fn = sval(s.funcname?.at(-1))
+        if (fn && s.replace && db.functions.has(fn)) db.replaced.set(path, [...(db.replaced.get(path) ?? []), fn])
+        if (fn) db.functions.add(fn)
+        // security definer skips every access rule; trigger functions can't be called from the API
+        const opt = (k: string) => (s.options ?? []).find((o: Node) => o.DefElem?.defname === k)?.DefElem?.arg
+        const body = JSON.stringify(opt('as') ?? '')
+        if (fn && opt('security')?.Boolean?.boolval && !/"sval":"trigger"/.test(JSON.stringify(s.returnType ?? '')))
+          db.definers.set(fn, { checksUser: /auth\.uid|auth\.role|auth\.jwt|is_admin|current_user/.test(body), writes: /\b(insert|update|delete)\b/i.test(body),
+            revoked: db.definers.get(fn)?.revoked ?? new Set() })
+      }
+      // revoke execute on function f from anon, authenticated (revoking from public isn't enough: Supabase grants anon and authenticated directly)
+      if (kind === 'GrantStmt' && s.objtype === 'OBJECT_FUNCTION') for (const o of s.objects ?? []) {
+        const fn = sval(o.ObjectWithArgs?.objname?.at(-1)), d = fn && db.definers.get(fn)
+        if (d) for (const r of roleNames(s.grantees)) s.is_grant ? d.revoked.delete(r) : d.revoked.add(r)
       }
       if (kind === 'ViewStmt' && schemaOk(s.view)) db.views.set(name(s.view)!, { invoker: invoker(s.options), reads: relnames(s.query) })
       if (kind === 'RenameStmt' && schemaOk(s.relation)) {
@@ -132,6 +151,12 @@ const PRIVATE_TABLE = /user|profile|account|order|payment|invoice|subscription|m
 const PRIVATE_COL = /email|phone|address|password|token|secret|stripe|birth|ssn/i
 const MONEY_COL = /^(status|paid|is_paid|payment_status|role|is_admin|admin|credits|balance|plan|tier|verified|is_verified|approved)$/
 
+// Every rule that lets people read the table limits them to their own rows: worth saying out loud.
+export function ownOnly(db: Db, t: string): boolean {
+  const tb = db.tables.get(t), reads = [...tb?.policies.values() ?? []].filter(p => p.permissive && (p.cmd === 'select' || p.cmd === 'all') && !p.roles.every(r => ADMIN_ROLES.test(r)))
+  return !!tb?.rls && reads.length > 0 && reads.every(p => own(p.qual))
+}
+
 export type Finding = { kind: 'Unsafe' | 'Check'; text: string }
 const list_ = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`
 
@@ -187,6 +212,10 @@ export function findings(db: Db, used: Set<string>, things: (t: string) => strin
       ? { kind: 'Unsafe', text: `The view ${v} shows ${list_(priv.map(things))} to anyone, skipping their access rules. Create it with security_invoker = on.` }
       : { kind: 'Check', text: `The view ${v} skips the access rules of the tables it reads (${list_(view.reads.map(things)) || 'its tables'}). Create it with security_invoker = on unless that's on purpose.` })
   }
+  for (const [fn, d] of db.definers) if (!d.checksUser && !(d.revoked.has('anon') && d.revoked.has('authenticated')))
+    out.push(d.writes
+      ? { kind: 'Unsafe', text: `Anyone with your app's public key can run the database function ${fn}, which changes data. It skips your access rules (security definer) and never checks who's calling. Revoke it from anon and authenticated, or check auth.uid() inside.` }
+      : { kind: 'Check', text: `Anyone with your app's public key can run the database function ${fn}. It only reads, but it skips your access rules (security definer) and doesn't check who's calling, so it can reveal data about other people.` })
   for (const b of db.publicBuckets) out.push({ kind: 'Check', text: `Files in the "${b}" storage bucket can be opened by anyone who has the link.` })
   return out
 }
