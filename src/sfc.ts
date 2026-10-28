@@ -55,6 +55,7 @@ const skipBraces = (s: string, j: number): number => {
 }
 // Tags as JSX: keep plain attributes (href, to, type, action, method, aria-label, placeholder, name), drop directives and bindings
 // (v-if, :prop, @click, on:click, bind:value, {...spread}), self-close void elements, `svelte:head` -> `svelte_head`.
+export function rewriteTagsExport(src: string): string { return rewriteTags(src) }
 function rewriteTags(src: string): string {
   let out = '', i = 0
   const name = (t: string) => t.replace(/[:.]/g, '_')
@@ -113,4 +114,39 @@ export function svelteRoute(path: string): { file: 'page' | 'pageServer' | 'page
   const url = '/' + dir.split('/').filter(x => x && !/^\(.*\)$/.test(x)).map(x => x.replace(/^\[\[?(?:\.\.\.)?(\w+)(?:=\w+)?\]?\]$/, '[$1]')).join('/')
   const file = m[2] === 'server' ? 'server' : m[2] === 'layout' ? 'layout' : m[4] === 'svelte' ? 'page' : m[3] ? 'pageServer' : 'pageLoad'
   return { file, url, id }
+}
+
+// Angular templates (templateUrl / inline template) as JSX, the same way: {{ x }} -> {x} (pipes dropped, `| currency` kept as a price),
+// @if / @for / @switch / @defer blocks unwrapped, (click) / [prop] / *ngIf / #ref dropped, [routerLink]="['/orders', o.id]" -> routerLink="/orders/[id]".
+export function ngTemplateToJsx(html: string): string {
+  const exprs: string[] = []
+  let t = html.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\{\{([\s\S]*?)\}\}/g, (_, e: string) => {
+      const [value, ...pipes] = splitPipes(e)
+      exprs.push(pipes.some(p => /^\s*currency\b/.test(p)) ? `formatCurrency(${value.trim()})` : value.trim())
+      return `\u0001${exprs.length - 1}\u0002`
+    })
+    .replace(/\[routerLink\]\s*=\s*"\[\s*'([^']*)'([^\]]*)\]"/g, (_, base: string, rest: string) => `routerLink="${base.replace(/\/$/, '')}${rest.split(',').slice(1).map(x => x.trim()).filter(Boolean).map(x => /^'[^']*'$/.test(x) ? '/' + x.slice(1, -1) : '/[id]').join('')}"`)
+    .replace(/\[routerLink\]\s*=\s*"'([^']*)'"/g, 'routerLink="$1"')
+    .replace(/formControlName=/g, 'name=')
+  // control-flow blocks: `@if (x) {`, `} @else {`, `@for (o of orders; track o.id) {`, `@let x = y;` -- the braces left are theirs
+  t = t.replace(/@(if|else\s+if|else|for|empty|switch|case|default|defer|placeholder|loading|error)\b\s*(\((?:[^()]|\([^()]*\))*\))?\s*\{/g, '')
+    .replace(/@let\s+[^;]*;/g, '').replace(/[{}]/g, '')
+  return rewriteTagsExport(t.replace(/\u0001(\d+)\u0002/g, (_, i: string) => `{${exprs[+i]}}`))
+}
+
+// `a | b:'x'` -> ['a ', " b:'x'"], splitting only on a pipe outside parentheses, brackets and strings (not ||)
+function splitPipes(e: string): string[] {
+  const out: string[] = []
+  let depth = 0, q = '', cur = ''
+  for (let i = 0; i < e.length; i++) {
+    const c = e[i]
+    if (q) { if (c === q && e[i - 1] !== '\\') q = ''; cur += c; continue }
+    if (c === '"' || c === "'" || c === '`') q = c
+    else if ('([{'.includes(c)) depth++
+    else if (')]}'.includes(c)) depth--
+    else if (c === '|' && depth === 0 && e[i + 1] !== '|' && e[i - 1] !== '|') { out.push(cur); cur = ''; continue }
+    cur += c
+  }
+  return [...out, cur]
 }

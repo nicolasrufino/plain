@@ -17,8 +17,8 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | **Python: FastAPI, Flask** (SQLAlchemy, SQLModel) | ✅ Supported |
 | **Python: Django** (`urls.py`, views, Django REST Framework) | ✅ Supported |
 | **Vue / Nuxt, SvelteKit** | ✅ Supported |
-| 5. Angular | 🔜 Next |
-| 6. C#: ASP.NET Core | Planned |
+| **Angular** | ✅ Supported |
+| 6. C#: ASP.NET Core | 🔜 Next |
 | 7. Java: Spring Boot | Planned |
 | 8. Laravel (PHP), Ruby on Rails, Go | Later |
 
@@ -453,14 +453,27 @@ built on it ([NuxtHub][nuxthub-db]).
 - **Env vars:** `import { STRIPE_SECRET_KEY } from '$env/static/private'`, and `env.X` from
   `$env/dynamic/private`.
 
-## Angular (planned)
+## Angular ✅
 
-- **Pages:** `Routes = [{ path, component | loadComponent, canActivate: [authGuard], children }]`.
-  This is close to React Router objects, which plain already reads.
-- **Talks to the server:** `HttpClient.get/post/put/delete(...)`, usually with
-  `environment.apiUrl`.
-- **Limit:** Angular is only the frontend. A route guard hides a page, but it doesn't protect
-  data. The card will say so, and the server needs its own stack support to be checked.
+Angular is only the browser side. plain reads its pages and what they do, and says plainly what
+a route guard can't do.
+
+- **Pages:** the `Routes` array (`app.routes.ts`): `{ path: 'orders/:id', component }`,
+  `loadComponent: () => import('./x').then(m => m.X)`, `children`, and lazy child routes
+  (`loadChildren: () => import('./admin/admin.routes')`, which put that file's routes under the
+  path and behind its guard) ([Angular: routes][ng-routes]).
+- **What a page shows and does:** the component's template (`templateUrl` or `template`)
+  is read like a React page: `{{ x }}` (with `| currency` read as a price), the new `@if` /
+  `@for` blocks, buttons, forms (`formControlName` is the field's name), and links
+  (`routerLink`, `[routerLink]="['/orders', o.id]"`). Its services' `HttpClient` calls
+  (`http.get('/api/orders')`) are what it loads from and sends to the server.
+- **Login:** `canActivate` / `canMatch` / `canActivateChild` with a login guard (`authGuard`,
+  an inline `inject(Auth).isLoggedIn()`) means "You have to log in to open it". `canDeactivate`
+  doesn't count: it guards leaving a page, not entering it.
+- **What a guard can't do:** "Never rely on client-side guards as the sole source of access
+  control" ([Angular: route guards][ng-guards]). A guard hides the page; the data is safe only if
+  the server checks login too. When the server isn't in the same project (common for Angular),
+  the card says so, because plain can't check it.
 
 ## C#: ASP.NET Core (planned)
 
@@ -578,3 +591,5 @@ Research done 2026-10. Vendor reports are marked.
 [kit-load]: https://svelte.dev/docs/kit/load#Implications-for-authentication
 [sv-drizzle]: https://svelte.dev/docs/cli/drizzle
 [nuxthub-db]: https://hub.nuxt.com/docs/features/database
+[ng-routes]: https://angular.dev/guide/routing/define-routes
+[ng-guards]: https://angular.dev/guide/routing/route-guards

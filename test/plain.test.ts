@@ -1104,3 +1104,45 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   assert.ok(!card(st, { ...st, 'app/api/seen/route.ts': "export async function POST() { await prisma.order.updateMany({ where: { status: { not: 'CANCELLED' } }, data: { seen: true } }) }\n" }).includes("doesn't give money back"), 'review 15: not cancelled')
   console.log('ok (review 15)')
 }
+
+// Angular: Routes (guards, lazy components, lazy child routes), templates (@if/@for, pipes, routerLink, formControlName), and a frontend-only project.
+{
+  const base = { 'package.json': '{"dependencies":{"@angular/core":"^19.0.0","@angular/router":"^19.0.0"}}',
+    'src/app/auth.guard.ts': "export const authGuard: CanActivateFn = () => inject(AuthService).isLoggedIn() ? true : inject(Router).createUrlTree(['/login'])\n",
+    'src/app/home/home.component.ts': "import { Component } from '@angular/core'\n@Component({ selector: 'app-home', template: `<h1>Welcome</h1>` })\nexport class HomeComponent {}\n",
+    'src/app/app.routes.ts': "import { Routes } from '@angular/router'\nimport { HomeComponent } from './home/home.component'\nexport const routes: Routes = [\n  { path: '', component: HomeComponent },\n]\n" }
+  const c = card(base, { ...base,
+    'src/app/app.routes.ts': "import { Routes } from '@angular/router'\nimport { HomeComponent } from './home/home.component'\nimport { authGuard } from './auth.guard'\nexport const routes: Routes = [\n  { path: '', component: HomeComponent },\n  { path: 'orders/:id', loadComponent: () => import('./orders/order-detail.component').then(m => m.OrderDetailComponent) },\n  { path: 'admin', canActivate: [authGuard], loadChildren: () => import('./admin/admin.routes').then(m => m.ADMIN_ROUTES) },\n  { path: 'help', canDeactivate: [unsavedGuard], component: HomeComponent },\n  { path: '**', redirectTo: '' },\n]\n",
+    'src/app/admin/admin.routes.ts': "import { Routes } from '@angular/router'\nimport { AdminOrdersComponent } from './admin-orders.component'\nexport const ADMIN_ROUTES: Routes = [{ path: 'orders', component: AdminOrdersComponent }]\n",
+    'src/app/admin/admin-orders.component.ts': "import { Component, inject } from '@angular/core'\nimport { OrderService } from '../order.service'\n@Component({ selector: 'app-admin-orders', templateUrl: './admin-orders.component.html' })\nexport class AdminOrdersComponent {\n  private orders = inject(OrderService)\n}\n",
+    'src/app/admin/admin-orders.component.html': "<h1>All orders</h1>\n@if (orders().length === 0) {\n  <p>No orders yet.</p>\n} @else {\n  @for (o of orders(); track o.id) {\n    <li>{{ o.name }} paid {{ o.total | currency:'USD' }}<button (click)=\"refund(o.id)\" [disabled]=\"busy\">Refund</button><a [routerLink]=\"['/orders', o.id]\">Open</a></li>\n  }\n}\n",
+    'src/app/order.service.ts': "import { Injectable, inject } from '@angular/core'\nimport { HttpClient } from '@angular/common/http'\n@Injectable({ providedIn: 'root' })\nexport class OrderService {\n  private http = inject(HttpClient)\n  list() { return this.http.get<Order[]>('/api/orders') }\n  refund(id: number) { return this.http.post(`/api/orders/${id}/refund`, {}) }\n}\n",
+    'src/app/orders/order-detail.component.ts': "import { Component } from '@angular/core'\n@Component({ selector: 'app-order', template: `<h1>Order</h1><form [formGroup]=\"form\" (ngSubmit)=\"save()\"><input formControlName=\"note\"><button type=\"submit\">Save note</button></form>` })\nexport class OrderDetailComponent {}\n" })
+  for (const e of ['The admin orders page is new, titled "All orders". It has a "Refund" button, loads data from your server, sends data to your server and links to each order page. You have to log in to open it ✓ /admin/orders',
+    'Each order page is new, titled "Order". It has a box for "note" and a "Save note" button. /orders/[id]', "A page's login check only hides the page. Its data comes from /api/orders on a server that isn't in this project"])
+    assert.ok(c.includes(e), `angular missing "${e}"\n${c}`)
+  for (const e of ['admin-orders.component.html', '/help']) assert.ok(!c.includes(e) || e === '/help' && !/help[^.]*log in/.test(c), `angular should not say "${e}"\n${c}`)
+  console.log('ok (angular)')
+}
+
+// Review 16 (2026-10-28): Angular NgModules, guards plain can and can't place, template details.
+{
+  const base = { 'package.json': '{"dependencies":{"@angular/core":"^17.0.0"}}' }
+  const comp = (name: string, tpl: string) => `import { Component } from '@angular/core'\n@Component({ selector: 'x', template: \`${tpl}\` })\nexport class ${name} {}\n`
+  const app = (routes: string, extra: Record<string, string> = {}) => ({ ...base, 'src/app/app-routing.module.ts': `import { RouterModule, Routes } from '@angular/router'\nconst routes: Routes = [\n${routes}\n]\n@NgModule({ imports: [RouterModule.forRoot(routes)] })\nexport class AppRoutingModule {}\n`, ...extra })
+  const lazy = { 'src/app/admin/admin.module.ts': "import { AdminRoutingModule } from './admin-routing.module'\n@NgModule({ imports: [AdminRoutingModule] })\nexport class AdminModule {}\n",
+    'src/app/admin/admin-routing.module.ts': "import { DashboardComponent } from './dashboard.component'\nconst routes: Routes = [{ path: '', component: DashboardComponent }]\n@NgModule({ imports: [RouterModule.forChild(routes)] })\nexport class AdminRoutingModule {}\n",
+    'src/app/admin/dashboard.component.ts': comp('DashboardComponent', '<h1>Admin dashboard</h1><button>Delete all users</button>') }
+  const c1 = card(base, app("  { path: 'admin', canActivate: [AuthGuard], loadChildren: () => import('./admin/admin.module').then(m => m.AdminModule) },", lazy))
+  assert.ok(c1.includes('You have to log in to open it ✓ /admin'), `review 16: ngmodule lazy\n${c1}`)
+  const page = (guard: string, path = 'admin') => app(`  { path: '${path}', ${guard} component: AdminComponent },`, { 'src/app/admin.component.ts': comp('AdminComponent', '<h1>Admin</h1><button>Refund</button>'), 'src/app/app-routing.module.ts': '' })
+  const fix = (g: string, path?: string) => { const f = page(g, path); f['src/app/app-routing.module.ts'] = `import { AdminComponent } from './admin.component'\nconst routes: Routes = [{ path: '${path ?? 'admin'}', ${g} component: AdminComponent }]\n@NgModule({ imports: [RouterModule.forRoot(routes)] })\nexport class AppRoutingModule {}\n`; return f }
+  assert.ok(!card(base, fix("canMatch: [() => inject(FeatureFlags).isEnabled('reports')],")).includes('log in'), 'review 16: feature flag')
+  assert.ok(!card(base, fix('canActivate: [NoAuthGuard],', 'login')).includes('log in'), 'review 16: guest guard')
+  const msal = card(base, fix('canActivate: [MsalGuard],'))
+  assert.ok(!msal.includes('Anyone can open'), `review 16: unknown guard\n${msal}`)
+  // templates: a pipe inside parentheses, a routerLink array with a named segment, {{ }} inside an attribute
+  const t = card(base, app("  { path: '', component: HomeComponent },", { 'src/app/app-routing.module.ts': "import { HomeComponent } from './home.component'\nconst routes: Routes = [{ path: '', component: HomeComponent }]\n", 'src/app/home.component.ts': comp('HomeComponent', `<h1>Hi {{ (user$ | async)?.name }}</h1><a [routerLink]="['/orders', o.id, 'edit']">Edit</a><input placeholder="Search {{ category }}"><button>Buy now</button>`) }))
+  assert.ok(t.includes('"Buy now" button') && t.includes('the order edit page') && t.includes('box for "Search"'), `review 16: template\n${t}`)
+  console.log('ok (review 16)')
+}

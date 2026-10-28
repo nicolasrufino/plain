@@ -11,7 +11,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
-import { sfcToTsx, nuxtRoute, svelteRoute } from './sfc.ts'
+import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
 
 export type Snap = Map<string, string>
 
@@ -66,7 +66,7 @@ export type FileFacts = {
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
   handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
   mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
-  pages: { path: string; comp: string; guard: boolean }[]                     // React Router <Route> / { path, element }
+  pages: { path: string; comp: string; guard: boolean | 'unknown' }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
   wrappers: Map<string, string>                                               // fetch helpers and their address prefix: api() -> '/api'
 }
@@ -137,6 +137,16 @@ const fnLike = (n?: ts.Node) => !!n && (ts.isArrowFunction(n) || ts.isFunctionEx
 const hasDefault = (n: ts.Node) => ts.isBinaryExpression(n.parent) && n.parent.left === n && /^(\|\||\?\?)$/.test(n.parent.operatorToken.getText())
   && !/^(''|""|``|null|undefined)$/.test(n.parent.right.getText().trim())
 
+// An Angular component: its class, and its template (templateUrl: './orders.html', or template: `...`) as JSX. Template that doesn't
+// convert cleanly: the class's facts only.
+function ngFacts(path: string, text: string, snap: Snap): FileFacts {
+  const url = text.match(/templateUrl\s*:\s*['"`]([^'"`]+)['"`]/)?.[1], inline = text.match(/\btemplate\s*:\s*`([\s\S]*?)`/)?.[1]
+  const html = url ? snap.get(join(path, '..', url).replace(/^\.\//, '')) : inline
+  if (html === undefined) return fileFacts(path, text)
+  const tsx = `${text}\nexport function __Template() { return (<>${ngTemplateToJsx(html)}</>) }\n`
+  const errors = (ts.createSourceFile(path + 'x', tsx, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX) as ts.SourceFile & { parseDiagnostics?: unknown[] }).parseDiagnostics?.length ?? 0
+  return errors ? fileFacts(path, text) : fileFacts(path + 'x', tsx)
+}
 // A .vue / .svelte file: its script and its template as TSX. If the template didn't come out as clean TSX, keep only the script's facts:
 // fewer facts, never wrong ones (a stray quote could otherwise put code on the card as "visible text").
 function sfcFacts(path: string, text: string): FileFacts {
@@ -441,9 +451,9 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     const route = routeLike(n, sf)
     if (route) {
       const chain = [route]; for (let p = n.parent; p; p = p.parent) { const r = routeLike(p, sf); if (r) chain.unshift(r) }
-      const path = chain.reduce((acc, r) => r.path === undefined ? acc : r.path.startsWith('/') ? r.path : `${acc.replace(/\/$/, '')}/${r.path}`, '')
+      const path = chain.reduce((acc, r) => r.path === undefined ? acc : r.path.startsWith('/') ? r.path : `${acc.replace(/\/$/, '')}/${r.path}`, '').replace(/(.)\/$/, '$1')
       if (route.comp && (route.path !== undefined || route.index) && !path.includes('*'))
-        f.pages.push({ path: path || '/', comp: route.comp, guard: chain.some(r => r.guard) })
+        f.pages.push({ path: path || '/', comp: route.comp, guard: chain.some(r => r.guard === true) || (chain.some(r => r.guard === 'unknown') ? 'unknown' : false) })
     }
     if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) f.jsx.add(n.tagName.getText(sf))
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
@@ -462,7 +472,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const v = str(n.initializer), name = n.name.getText(sf)
       // <a href>; Vue's <NuxtLink to> / <RouterLink to> (React Router's <Link to> stays out: those cards never listed it)
       const tag = ts.isJsxAttributes(n.parent) && (ts.isJsxOpeningElement(n.parent.parent) || ts.isJsxSelfClosingElement(n.parent.parent)) ? n.parent.parent.tagName.getText(sf) : ''
-      if (v && (name === 'href' || name === 'to' && /^(NuxtLink|RouterLink|nuxt-link|router-link)$/.test(tag)) && v.startsWith('/')) f.links.add(v.replace(/[?#].*$/, '') || '/')   // /#tutors is the home page; /login?returnTo=... is the login page
+      if (v && (name === 'href' || name === 'routerLink' || name === 'to' && /^(NuxtLink|RouterLink|nuxt-link|router-link)$/.test(tag)) && v.startsWith('/')) f.links.add(v.replace(/[?#].*$/, '') || '/')   // /#tutors is the home page; /login?returnTo=... is the login page
       // a SvelteKit <form method="POST" action="?/create">: sends to its own page's form actions (the page's address, filled in later)
       if (name === 'method' && v?.toUpperCase() === 'POST' && ts.isJsxAttributes(n.parent) && ts.isJsxOpeningElement(n.parent.parent) && n.parent.parent.tagName.getText(sf) === 'form') {
         const action = n.parent.properties.find(q => ts.isJsxAttribute(q) && q.name.getText(sf) === 'action') as ts.JsxAttribute | undefined, a = action?.initializer && str(action.initializer)
@@ -481,6 +491,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         boxes.push({ id: at('id'), type, v: at('aria-label') ?? (label || undefined), aria: !!at('aria-label') })
         // after <label htmlFor> is known; a name attribute is code (bookingId), said in words (booking)
         if (!boxes.at(-1)!.v) boxes.at(-1)!.v = at('placeholder') ?? (at('name') && words(at('name')!.replace(/\[\]$/, '')).replace(/ id$/, ''))
+        if (boxes.at(-1)!.v) boxes.at(-1)!.v = boxes.at(-1)!.v!.replace(/\s*\[(id|…)\]/g, '').trim() || undefined   // "Search {{ category }}" -> "Search"
       }
     }
     if (ts.isJsxElement(n) && n.openingElement.tagName.getText(sf) === 'label') {
@@ -520,7 +531,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
 }
 
 // <Route path="x" element={<Page />}> or { path: 'x', element: <Page /> }: its path, the page component, and any login wrapper.
-function routeLike(n: ts.Node, sf: ts.SourceFile): { path?: string; index: boolean; comp?: string; guard: boolean } | null {
+function routeLike(n: ts.Node, sf: ts.SourceFile): { path?: string; index: boolean; comp?: string; guard: boolean | 'unknown' } | null {
   const tags = (e?: ts.Node) => { const out: string[] = []; const v = (x: ts.Node) => { if (ts.isJsxOpeningElement(x) || ts.isJsxSelfClosingElement(x)) out.push(x.tagName.getText(sf)); ts.forEachChild(x, v) }; if (e) v(e); return out }
   let path: string | undefined, index = false, el: ts.Node | undefined
   if (ts.isJsxElement(n)) n = n.openingElement
@@ -535,8 +546,23 @@ function routeLike(n: ts.Node, sf: ts.SourceFile): { path?: string; index: boole
   } else if (ts.isObjectLiteralExpression(n)) {
     const prop = (k: string) => n.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(sf) === k) as ts.PropertyAssignment | undefined
     const p = prop('path')?.initializer, elp = prop('element') ?? prop('Component') ?? prop('component')
-    if (p ? !ts.isStringLiteral(p) || !(elp || prop('children')) : !elp || !(prop('index') || prop('children'))) return null   // layout and index routes have no path
+    // Angular: loadComponent: () => import('./admin/admin').then(m => m.Admin) is the page; loadChildren: () => import('./admin/admin.routes') its routes
+    const lazy = (k: string) => { const t = prop(k)?.initializer.getText(sf); const m = t?.match(/import\(\s*['"`]([^'"`]+)['"`]\s*\)(?:\s*\.then\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*\2\.(\w+))?/); return m ? `${m[1]}#${m[3] ?? ''}` : undefined }
+    const lc = lazy('loadComponent'), lch = lazy('loadChildren')
+    // canActivate / canMatch / canActivateChild: [authGuard] or an inline () => inject(Auth).isLoggedIn() (canDeactivate guards leaving, not entering)
+    // named guards by their name (authGuard, AdminGuard, MsalGuard; not NoAuthGuard / guestGuard, which keep logged-in people out);
+    // an inline guard by what it calls (isLoggedIn(), currentUser, hasRole): a feature flag or onboarding check isn't a login
+    const ng = ['canActivate', 'canMatch', 'canActivateChild', 'canLoad'].map(k => prop(k)?.initializer.getText(sf) ?? '').join(' ')
+    const named = [...ng.matchAll(/(?<![\w.])([A-Za-z_]\w*)\s*(?=[,\]\(])/g)].map(m => m[1]).filter(x => !/^(inject|map|of|true|false)$/.test(x))
+    const GUEST = /no[-_]?auth|guest|anon|public|loggedOut|notLogged|redirect\w*Logged|unauth/i
+    const ngLogin = named.some(x => /auth|login|logged|signed|admin|role|session|user|protect|private|msal|okta|keycloak|oidc/i.test(x) && !GUEST.test(x))
+      || /=>/.test(ng) && /is(Logged|Authenticated|SignedIn|Admin)|loggedIn|currentUser|hasRole|getToken|accessToken/i.test(ng)
+    // a guard plain can't place: not "anyone can open", not "log in ✓" either
+    const ngGuard: boolean | 'unknown' = ngLogin ? true : ng.trim() && named.length && !named.every(x => GUEST.test(x)) && !/feature|flag|onboard|unsaved|pending/i.test(ng) ? 'unknown' : false
+    if (p ? !ts.isStringLiteral(p) || !(elp || lc || lch || prop('children')) : !elp || !(prop('index') || prop('children'))) return null   // layout and index routes have no path
     path = p && ts.isStringLiteral(p) ? p.text : undefined; index = !!prop('index'); el = elp?.initializer
+    if (lc || lch) return { path: path?.replace(/:(\w+)\??/g, '[$1]'), index, comp: lc ? `@load:${lc}` : `@children:${lch}`, guard: ngGuard }
+    if (ngGuard) return { path: path?.replace(/:(\w+)\??/g, '[$1]'), index, comp: el?.getText(sf), guard: ngGuard }
   } else return null
   const names = el && (ts.isJsxExpression(el) || ts.isJsxElement(el) || ts.isJsxSelfClosingElement(el)) ? tags(el) : el ? [el.getText(sf).replace(/[{}\s]/g, '')] : []
   const comp = names.filter(t => /^[A-Z]/.test(t) && !PAGE_GUARD.test(t) && !/^(Navigate|Suspense|Outlet|Fragment)$/.test(t)).at(-1)
@@ -620,7 +646,7 @@ const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.
 export function appFacts(snap: Snap) {
   const files = new Map<string, FileFacts>()
   for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/')) {
-    try { const f = p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
+    try { const f = p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
   }
   // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
   const resolve = (from: string, spec: string): string | undefined => {
@@ -813,9 +839,22 @@ export function appFacts(snap: Snap) {
   }
   const middleware = new Map([...files.values()].flatMap(f => [...f.middleware]))
   // React Router: the component each <Route> shows is a page at that address. It runs in the browser.
+  // Angular: loadChildren: () => import('./admin/admin.routes') puts that file's routes under this path (and behind its guard)
+  const childMounts = new Map<string, { path: string; guard: boolean; from: string }>()
+  for (const [p, f] of files) for (const pg of f.pages) if (pg.comp.startsWith('@children:')) {
+    const q = resolve(p, pg.comp.slice(10).split('#')[0]); if (!q) continue
+    // an NgModule (admin.module.ts) keeps its routes in the routing module it imports (admin-routing.module.ts)
+    const withRoutes = files.get(q)!.pages.length ? [q] : files.get(q)!.imports.map(i => resolve(q, i)).filter((x): x is string => !!x && !!files.get(x)?.pages.length)
+    for (const x of withRoutes) childMounts.set(x, { path: pg.path, guard: pg.guard === true, from: p })
+  }
+  const mountOf = (p: string, seen = new Set<string>()): { path: string; guard: boolean } => { const m = childMounts.get(p); if (!m || seen.has(p)) return { path: '', guard: false }
+    seen.add(p); const up = mountOf(m.from, seen); return { path: (up.path === '/' ? '' : up.path) + (m.path === '/' ? '' : m.path), guard: up.guard || m.guard } }
   for (const [p, f] of files) for (const pg of f.pages) {
-    const q = target(p, pg.comp)
-    if (q && !routes.has(q)) { routes.set(q, { kind: 'page', url: pg.path }); browserPages.add(q); if (pg.guard) files.get(q)!.auth = true }
+    if (pg.comp.startsWith('@children:')) continue
+    const q = pg.comp.startsWith('@load:') ? resolve(p, pg.comp.slice(6).split('#')[0]) : target(p, pg.comp)
+    const m = mountOf(p), url = (m.path.replace(/\/$/, '') + (pg.path === '/' && m.path ? '' : pg.path)) || '/'
+    if (q && !routes.has(q)) { routes.set(q, { kind: 'page', url }); browserPages.add(q); if (pg.guard === true || m.guard) files.get(q)!.auth = true
+      else if (pg.guard === 'unknown') (files.get(q) as FileFacts & { guardUnknown?: boolean }).guardUnknown = true }
   }
   // Express-style servers: each address becomes its own unit "file#/api/x", with the facts of its handlers.
   const mounts = new Map<string, { path: string; guard: boolean; from: string }>()
@@ -1216,7 +1255,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const changesData = (f?: FileFacts) => !!f && (f.written.size > 0 || METHODS.slice(1).some(m => f.fns.has(m)))
     if (!b.auth && (!a || a.auth || !changesData(a) && changesData(b)) && !isPublic(r.url)) {
       const writes = changesData(b), before_ = problems.length
-      if (r.kind === 'page' && /admin|dashboard|account/.test(r.url))
+      if (r.kind === 'page' && /admin|dashboard|account/.test(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown)
         problems.push({ kind: 'Unsafe', text: `Anyone can open ${name} without logging in.` })
       else if (r.kind === 'endpoint' && /(^|\/)admin(\/|$)/.test(r.url) && (writes || b.tables.size))   // admin data, even just to read
         problems.push({ kind: 'Unsafe', text: `Anyone can use ${name} without logging in.` })
@@ -1251,7 +1290,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Check', text: `You asked to "${verb}", but nothing new lets you change anything: ${list(newViewOnly.map(placeName))} only ${newViewOnly.length > 1 ? 'show' : 'shows'} information. If you wanted buttons to act on things (like refunding or cancelling orders), ask for that. (This is a guess.)` })
 
   // files that aren't code
-  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p))
+  // (an Angular component's template is part of that component's page)
+  const templates = new Set([...after, ...before].flatMap(([q, t]) => [...t.matchAll(/templateUrl\s*:\s*['"`]([^'"`]+)['"`]/g)].map(m => join(q, '..', m[1]))))
+  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !templates.has(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p))
   {
     const media = (t = '') => new Set(t.match(/@media[^{]*max-width[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g) ?? [])
     const phones = /\.(css|scss)$/.test(p) && [...media(after.get(p))].some(m => !media(before.get(p)).has(m))
@@ -1333,6 +1374,14 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const before_ = findings(A.db, used(A), things).map(x => x.text), rls = findings(B.db, used(B), things).filter(x => !before_.includes(x.text))
   problems.push(...rls)
   const notes = rls.length ? ["Database access rules are read from supabase/migrations. Rules changed in the Supabase dashboard aren't visible to plain."] : []
+  // A page that asks for login but gets its data from a server that isn't in this project (an Angular or React app on its own):
+  // its guard only hides the page; the data is safe only if that server checks login too, and plain can't see it.
+  const outsideCalls = real.filter(p => route(p)?.kind === 'page' && B.files.get(p)?.auth).flatMap(p => [...B.files.get(p)!.fetches].map(x => x.slice(x.indexOf(' ') + 1))).filter(u => u.startsWith('/') && !endpoint(u))
+  // (a server plain can't read yet, in this repo: NestJS, .NET, Java, Go, PHP, Ruby)
+  const unread = '@nestjs/core' in B.deps || [...after.keys()].some(p => /\.(cs|java|kt|go|php|rb)$/.test(p))
+  const where = [...new Set(outsideCalls.map(u => u.split('/').slice(0, 3).join('/').replace(/\/\[…\]$/, '')))].slice(0, 3)
+  if (outsideCalls.length && ![...B.routes.values()].some(r => r.kind === 'endpoint'))
+    notes.push(`A page's login check only hides the page. Its data comes from ${list(where)} on ${unread ? "a server plain can't read yet" : "a server that isn't in this project"}, so plain can't check that the server asks for login too. Make sure it does.`)
 
   // Python: the mistakes AI makes most (Bandit / Semgrep rules), when they're new in this change
   const RISK: Record<string, Problem> = {
