@@ -11,10 +11,14 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | React with React Router (Vite, Create React App) | ✅ Supported |
 | Prisma (database) | ✅ Supported |
 | Stripe, OpenAI, Anthropic, Resend, Supabase, Twilio (outside services) | ✅ Recognized |
-| **Supabase** (tables, Row Level Security, edge functions) | 🔜 Next |
-| TanStack Start | 🔜 After Supabase |
-| Python: FastAPI, Flask, Django | Planned |
-| Ruby on Rails, Laravel, Go | Later |
+| 1. **Supabase** (tables, Row Level Security, edge functions) | 🔜 Next |
+| 2. TanStack Start | 🔜 After Supabase |
+| 3. Python: FastAPI, Flask, Django | Planned |
+| 4. Vue / Nuxt, SvelteKit | Planned |
+| 5. Angular | Planned |
+| 6. C#: ASP.NET Core | Planned |
+| 7. Java: Spring Boot | Planned |
+| 8. Laravel (PHP), Ruby on Rails, Go | Later |
 
 ## Why this order
 
@@ -33,9 +37,40 @@ those people actually ship, not what's popular with developers.
 - **TanStack Start is next.** It's been Lovable's default for new projects since May 2026
   ([Lovable blog][lovable-tss]). It's TypeScript, so it reuses everything plain already has.
 - **Python is after that.** It's the most used language with AI tools among developers
-  (39%, [Stack Overflow 2026][so]), but no AI app builder generates it by default.
-- **Rails, Laravel and Go come later.** They're less common for this audience. Their
-  migrations are plain SQL, so they'll reuse Supabase's SQL reading.
+  (39%, [Stack Overflow 2026][so]). Its three big frameworks add up to 42% of developers
+  (FastAPI 14.8%, Flask 14.4%, Django 12.6%, [SO 2025][so25]). But no AI app builder generates
+  Python by default.
+- **Vue / Nuxt and SvelteKit next.** They're cheap, because they're TypeScript with file-based
+  routes like Next.js. Bolt builds "any JavaScript framework" ([Bolt][bolt-tech]). Their user
+  base is smaller: Vue 17.6%, Svelte 7.2%, Nuxt 4.0% ([SO 2025][so25]).
+- **Angular after them.** It's widely used (18.2%) and cheap to read with the TypeScript
+  compiler. But it's only the frontend, so plain can show pages and calls to the server, not
+  whether the data is protected.
+- **C# and Java after that.** Both have many developers: ASP.NET Core 19.7%, Spring Boot
+  14.7% ([SO 2025][so25]), and 16% / 15% use them with AI ([SO 2026][so]). But no AI app builder
+  generates them, so vibe coders only reach them through general agents like Claude Code.
+  - Java is still worth it: AI-written Java failed security tests **72%** of the time, the
+    worst of any language ([Veracode 2025][veracode]).
+  - C# goes first because its app-wide login setting is easy to read reliably.
+- **Laravel, Rails and Go come last.** They're less common for this audience (Laravel 8.9%,
+  Rails 5.9%), and Bolt can't build PHP. Their migrations are plain SQL, so they'll reuse
+  Supabase's SQL reading.
+
+### Most used languages
+
+| Language | Stack Overflow 2026 | Used with AI (SO 2026) | GitHub 2025 | TIOBE Oct 2026 | plain |
+|---|---|---|---|---|---|
+| JavaScript / TypeScript | 1 (62%) / 6 (44%) | 2 / 4 | 3 / **1** | 6 / 38 | ✅ |
+| SQL | 2 (58%) | 5 | – | 9 | 🔜 Supabase migrations |
+| Python | 4 (58%) | **1 (39%)** | 2 | **1** | Planned (3) |
+| Java | 7 (28%) | 8 | 4 | 4 | Planned (7) |
+| C# | 8 (27%) | 7 | 5 | 5 | Planned (6) |
+| PHP | – | – | 6 | 12 | Later (8) |
+| Go | – | – | 10 | 11 | Later (8) |
+
+Sources: [SO 2026][so-tech], [GitHub Octoverse 2025][octo], [TIOBE][tiobe]. These cover
+professional developers, not vibe coders, so we weigh what the AI app builders generate more
+heavily.
 
 Weak spots in this evidence: Bolt's default framework and Replit Agent's default stack aren't
 officially documented. The surveys cover professional developers, not vibe coders.
@@ -171,7 +206,63 @@ Security (RLS)** policies, written in SQL in `supabase/migrations/*.sql`.
   - It gives up on a whole file at the first error, while tree-sitter keeps going.
   - tree-sitter-python is about 0.5 MB and gives every user the same result.
 
-## Rails, Laravel, Go (later)
+## Vue / Nuxt and SvelteKit (planned)
+
+- **Nuxt:**
+  - Pages come from `pages/`.
+  - Server code lives in `server/api/*.ts` (`defineEventHandler`). A file named
+    `orders.post.ts` only accepts POST.
+  - `server/middleware` runs on every request, so a login check there covers everything.
+- **SvelteKit:**
+  - `+page.svelte` is a page.
+  - `+page.server.ts` holds the data loading and form `actions`.
+  - `+server.ts` exports `GET` and `POST`.
+  - `hooks.server.ts` can check login for every request.
+- **Close to what plain already does:** both work like Next.js file routes plus TypeScript.
+  `.vue` and `.svelte` files need their `<script>` part pulled out first, using the official
+  `@vue/compiler-sfc` and `svelte/compiler`.
+
+## Angular (planned)
+
+- **Pages:** `Routes = [{ path, component | loadComponent, canActivate: [authGuard], children }]`.
+  This is close to React Router objects, which plain already reads.
+- **Talks to the server:** `HttpClient.get/post/put/delete(...)`, usually with
+  `environment.apiUrl`.
+- **Limit:** Angular is only the frontend. A route guard hides a page, but it doesn't protect
+  data. The card will say so, and the server needs its own stack support to be checked.
+
+## C#: ASP.NET Core (planned)
+
+- **Addresses:** controllers (`[Route("api/[controller]")]` + `[HttpGet("{id}")]`), and
+  minimal APIs (`app.MapGet("/x", ...)`, `app.MapGroup("/api")`).
+- **Login checks:** `[Authorize]` / `[AllowAnonymous]` on a class or method, and
+  `.RequireAuthorization()` on a route or group.
+  - **App-wide:** a `FallbackPolicy` that requires login makes every address protected unless
+    it says otherwise ([Microsoft docs][aspnet]). In that case plain reports the
+    `[AllowAnonymous]` exceptions instead.
+- **Database:** Entity Framework `DbSet<T>`, `Add` / `Remove` / `SaveChanges`. Migrations live
+  in `Migrations/*.cs`; `DropTable` or `DropColumn` inside `Up()` deletes data.
+- **To flag:** CORS open to every site (`AllowAnyOrigin()`), and secrets written into
+  `appsettings.json`.
+- **Parser:** tree-sitter-c-sharp is about 4–5 MB, the biggest of all. Load it only when the
+  repo has `.cs` files.
+
+## Java: Spring Boot (planned)
+
+- **Addresses:** `@RequestMapping("/api/orders")` on the class + `@GetMapping("/{id}")`,
+  `@PostMapping` on methods.
+- **Login checks:** mostly in one place, the `SecurityFilterChain`:
+  `requestMatchers("/admin/**").hasRole("ADMIN")`, `.permitAll()`,
+  `anyRequest().authenticated()`. The first matching rule wins, so plain has to read them in
+  order ([Spring docs][spring-authz]). Per-method checks use `@PreAuthorize` / `@Secured`.
+  With Spring Security installed and no rules, everything requires login by default.
+- **Database:** JPA `@Entity`, repositories `save` / `delete`. Migrations are Flyway
+  `db/migration/V2__*.sql` (plain SQL, shared with Supabase) or Liquibase `dropTable` /
+  `dropColumn`.
+- **To flag:** `csrf` turned off, `anyRequest().permitAll()`, CORS `*`.
+- **Parser:** tree-sitter-java, about 0.4 MB.
+
+## Laravel, Rails, Go (later)
 
 They share the same shape: a routes file or registrations, middleware for login, an ORM, and
 migrations. The things to get right:
@@ -216,6 +307,15 @@ Research done 2026-10. Vendor reports are marked.
 - Supabase function config: https://supabase.com/docs/guides/functions/function-configuration
 - Go routing: https://go.dev/blog/routing-enhancements
 - Laravel routing: https://laravel.com/docs/11.x/routing
+- Bolt supported technologies: https://support.bolt.new/building/supported-technologies
+- Stack Overflow 2025 (web frameworks): https://survey.stackoverflow.co/2025/technology
+- Stack Overflow 2026 (languages): https://survey.stackoverflow.co/2026/technology
+- GitHub Octoverse 2025: https://github.blog/news-insights/octoverse/octoverse-a-new-developer-joins-github-every-second-as-ai-leads-typescript-to-1/
+- TIOBE index: https://www.tiobe.com/tiobe-index/
+- ASP.NET Core authorization (fallback policy): https://learn.microsoft.com/en-us/aspnet/core/security/authorization/secure-data
+- Spring Security request authorization: https://docs.spring.io/spring-security/reference/servlet/authorization/authorize-http-requests.html
+- Nuxt server directory: https://nuxt.com/docs/4.x/directory-structure/server
+- SvelteKit routing: https://svelte.dev/docs/kit/routing
 
 [lovable-faq]: https://docs.lovable.dev/introduction/faq
 [lovable-tss]: https://lovable.dev/blog/building-apps-using-tanstack-start
@@ -228,3 +328,10 @@ Research done 2026-10. Vendor reports are marked.
 [advisors]: https://supabase.com/docs/guides/database/database-advisors
 [so]: https://stackoverflow.blog/2026/10/06/the-results-of-the-2026-developer-survey-are-here/
 [veracode]: https://www.veracode.com/resources/genai-code-security-report/
+[so25]: https://survey.stackoverflow.co/2025/technology
+[so-tech]: https://survey.stackoverflow.co/2026/technology
+[octo]: https://github.blog/news-insights/octoverse/octoverse-a-new-developer-joins-github-every-second-as-ai-leads-typescript-to-1/
+[tiobe]: https://www.tiobe.com/tiobe-index/
+[bolt-tech]: https://support.bolt.new/building/supported-technologies
+[aspnet]: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/secure-data
+[spring-authz]: https://docs.spring.io/spring-security/reference/servlet/authorization/authorize-http-requests.html

@@ -69,8 +69,10 @@ staged files. The session log lives in `.git/plain-session.jsonl`.
 | **Prisma** | your database tables, and changes that delete data |
 | **Stripe**, OpenAI, Resend and other services | when your app starts using them, and the code that charges money |
 
-**Coming next:** Supabase (and its Row Level Security, where most Lovable and Bolt data leaks
-happen), then TanStack Start and Python. [Why this order, and what each one needs](docs/languages.md).
+**Coming next, in order:** Supabase (and its Row Level Security, where most Lovable and Bolt
+data leaks happen), TanStack Start, Python (FastAPI, Flask, Django), Vue/Nuxt and SvelteKit,
+Angular, C# (ASP.NET Core), Java (Spring Boot), then Laravel, Rails and Go.
+[Why this order, and what each one needs](docs/languages.md).
 
 On other projects plain won't break, but it won't have much to say yet.
 
@@ -108,7 +110,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 
 - Fewer false alarms, more money/login/data risks caught ([backlog](docs/trials.md))
 - A GitHub Action that posts the summary on every PR
-- More stacks: Supabase, TanStack Start, Python, then Rails, Laravel and Go ([order and why](docs/languages.md))
+- More stacks: Supabase, TanStack Start, Python, Vue/Nuxt, SvelteKit, Angular, C#, Java, then Laravel, Rails and Go ([order and why](docs/languages.md))
 - Zoom into a function and read it line by line in English ([prototype](prototype/))
 
 ## Development
