@@ -67,10 +67,11 @@ staged files. The session log lives in `.git/plain-session.jsonl`.
 | **Node servers** (Express, Fastify, Hono) | every route and the address it's mounted at, login middleware |
 | **React** with React Router (Vite, Create React App) | pages, login wrappers, what each page asks the server for |
 | **Prisma** | your database tables, and changes that delete data |
+| **TanStack Start** (Lovable's default) | pages from `src/routes`, login checks on layouts, server actions and server routes |
 | **Supabase** (Lovable, Bolt) | your tables, and **who your access rules (Row Level Security) let in**: tables anyone can read or change, rules that only check "is logged in", users who can mark their own order paid |
 | **Stripe**, OpenAI, Resend and other services | when your app starts using them, and the code that charges money |
 
-**Coming next, in order:** TanStack Start, Python (FastAPI, Flask, Django), Vue/Nuxt and SvelteKit,
+**Coming next, in order:** Python (FastAPI, Flask, Django), Vue/Nuxt and SvelteKit,
 Angular, C# (ASP.NET Core), Java (Spring Boot), then Laravel, Rails and Go.
 [Why this order, and what each one needs](docs/languages.md).
 
@@ -111,7 +112,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 
 - Fewer false alarms, more money/login/data risks caught ([backlog](docs/trials.md))
 - A GitHub Action that posts the summary on every PR
-- More stacks: TanStack Start, Python, Vue/Nuxt, SvelteKit, Angular, C#, Java, then Laravel, Rails and Go ([order and why](docs/languages.md))
+- More stacks: Python, Vue/Nuxt, SvelteKit, Angular, C#, Java, then Laravel, Rails and Go ([order and why](docs/languages.md))
 - Zoom into a function and read it line by line in English ([prototype](prototype/))
 
 ## Development

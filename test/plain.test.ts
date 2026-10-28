@@ -361,8 +361,31 @@ console.log('ok (routes that start changing data)')
     'New server code that saves new bookings, charges customers 💰 and requires login ✓. (server action) bookClass', 'lists classes and works without logging in'])
     assert.ok(c.includes(e), `tanstack missing: "${e}"\n${c}`)
   for (const e of ['stripe webhook part', 'Card', 'root']) assert.ok(!c.includes(e), `tanstack should not say "${e}"\n${c}`)
-  // An app-wide auth middleware covers every server action.
+  // App-wide middleware can't block logged-out people (signing in would break), so it isn't a login check.
   const g = card(tsBefore, { ...tsAfter, 'src/start.ts': 'export const startInstance = createStart(() => ({ functionMiddleware: [authMiddleware] }))\n' })
-  assert.ok(!g.includes('"save class" action on your server without'), g)
+  assert.ok(g.includes('⚠ Anyone can use the "save class" action on your server without logging in.'), g)
   console.log('ok (tanstack start)')
+}
+
+// Review 4 (2026-10-28): TanStack login checks without false reassurance.
+{
+  const pkg = { 'package.json': '{"dependencies":{"@tanstack/react-start":"1"}}' }
+  const page = (t: string, extra = '') => `export const Route = createFileRoute('/x')({ ${extra} component: P })\nfunction P() { return <h1>${t}</h1> }\n`
+  const guard = "beforeLoad: ({ context }) => { if (!context.user) throw redirect({ to: '/login' }) },"
+  // an index page's guard doesn't cover its siblings; a layout's does; a page's own guard counts; loading the user isn't a guard
+  const c1 = card(pkg, { ...pkg, 'src/routes/admin/index.tsx': page('Admin', guard), 'src/routes/admin/users.tsx': page('Users'),
+    'src/routes/shop.tsx': page('Shop', guard), 'src/routes/shop/index.tsx': page('Shop home'), 'src/routes/shop/orders.tsx': page('Orders'),
+    'src/routes/dashboard.tsx': page('Dash', 'beforeLoad: async () => ({ user: await getUser() }),'), 'src/routes/posts.lazy.tsx': page('Posts') })
+  for (const e of ['⚠ Anyone can open the admin users page without logging in.', '⚠ Anyone can open the dashboard page without logging in.', '/posts '])
+    assert.ok(c1.includes(e), `review 4 missing "${e}"\n${c1}`)
+  for (const e of ['shop orders page without', '/posts/lazy']) assert.ok(!c1.includes(e), `review 4 should not say "${e}"\n${c1}`)
+  assert.equal(c1.match(/ \/shop /g)?.length, 1, `/shop listed once\n${c1}`)
+  // a page that is also a server route; a module-level client; an aliased action; a middleware that can't stop anyone
+  const c2 = card(pkg, { ...pkg,
+    'src/routes/orders.tsx': "export const Route = createFileRoute('/orders')({ server: { handlers: { POST: async () => { await prisma.order.delete({}) } } }, component: O })\nfunction O() { return <h1>Orders</h1> }\n",
+    'src/server/x.ts': "const admin = getSupabaseAdminClient()\nconst authMiddleware = createMiddleware().server(async ({ next }) => next({ context: { user: await getUser() } }))\nexport const wipeAll = createServerFn({ method: 'POST' }).middleware([authMiddleware]).handler(async () => { await admin.from('items').delete() })\n",
+    'src/routes/admin.tsx': "import { wipeAll as wipe } from '../server/x'\nexport const Route = createFileRoute('/admin')({ component: A })\nfunction A() { return <button onClick={() => wipe()}>Wipe</button> }\n" })
+  for (const e of ['⚠ Anyone can use the orders part of your server without logging in.', '⚠ Anyone can use the "wipe all" action on your server without logging in.', 'deletes items'])
+    assert.ok(c2.includes(e), `review 4 missing "${e}"\n${c2}`)
+  console.log('ok (review 4)')
 }

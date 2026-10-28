@@ -55,11 +55,11 @@ type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
   tables: Set<string>; ops: Set<string>; writes: boolean; sbAuth: boolean; env: Set<string>; auth: boolean; money: boolean   // sbAuth: supabase.auth.getUser(), a real check only on a server
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
-  texts: Set<string>; refuses: Set<string>; envReq: Set<string>; exports: Set<string>
-  serverFns: Map<string, string>; serverRoute: boolean; pageGuard: boolean; globalGuard: '' | 'function' | 'request'   // TanStack Start   // words on screen ("[price]" for a formatted price); "no" messages (4xx); env vars without a fallback
+  texts: Set<string>; refuses: Set<string>; envReq: Set<string>; exports: Set<string>   // words on screen ("[price]" for a formatted price); "no" messages (4xx); env vars without a fallback
+  serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
-  handlers: { server: string; method: string; path: string; guard: boolean; handler?: string; facts: FileFacts }[]  // Express-style routes
+  handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts }[]  // Express-style routes and server actions
   mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean }[]  // app.use('/api/x', [guards], router | require('./x'))
   pages: { path: string; comp: string; guard: boolean }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
@@ -81,8 +81,10 @@ const empty = (printed = ''): FileFacts => ({
   outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(), headings: [], forms: 0,
   binds: new Map(), locals: new Map(), handlers: [], mounts: [], pages: [], calls: [], wrappers: new Map(),
   texts: new Set(), refuses: new Set(), envReq: new Set(), exports: new Set(),
-  serverFns: new Map(), serverRoute: false, pageGuard: false, globalGuard: '',
+  serverFns: new Map(), serverRoute: false, serverGuard: false, pageGuard: false, middleware: new Map(),
 })
+// Code that can turn someone away: throw, redirect, a 401/403, "unauthorized"
+const STOPS = /\bthrow\b|redirect\s*\(|\b40[13]\b|unauthori[sz]ed|forbidden/i
 const fnLike = (n?: ts.Node) => !!n && (ts.isArrowFunction(n) || ts.isFunctionExpression(n))
 // `process.env.PORT || 3001` has a real default; `|| ''` or `?? undefined` only quiets TypeScript, the value is still needed
 const hasDefault = (n: ts.Node) => ts.isBinaryExpression(n.parent) && n.parent.left === n && /^(\|\||\?\?)$/.test(n.parent.operatorToken.getText())
@@ -125,11 +127,19 @@ export function fileFacts(path: string, text: string): FileFacts {
 }
 
 // Facts from one subtree: a whole file, one function, or one route handler.
+const CLIENT_MAKER = /^(await\s+)?(createClient|createServerClient|createBrowserClient|\w*[Ss]upabase\w*)\s*(<[^>]*>)?\(/
+const clientsOf = new WeakMap<ts.SourceFile, Set<string>>()   // one set per file: a client made at the top is used inside handlers
 function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
-  const servers = new Set<string>(), guarded = new Set<string>(), sbClients = new Set<string>()
+  const servers = new Set<string>(), guarded = new Set<string>()
+  let sbClients = clientsOf.get(sf)
+  if (!sbClients) {
+    clientsOf.set(sf, sbClients = new Set())
+    for (const st of sf.statements) if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations)
+      if (ts.isIdentifier(d.name) && d.initializer && CLIENT_MAKER.test(d.initializer.getText(sf))) sbClients.add(d.name.text)
+  }
   const isGuard = (a: ts.Node) => !fnLike(a) && GUARD.test(a.getText(sf)) && !NOT_GUARD.test(a.getText(sf))
   const addHandler = (server: string, method: string, path: string, mw: readonly ts.Expression[], h: ts.Expression) =>
-    f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard),
+    f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard), mw: mw.map(m => m.getText(sf)),
       handler: ts.isIdentifier(h) ? h.text : undefined, facts: fnLike(h) ? collect(sf, h, empty(printer.printNode(ts.EmitHint.Unspecified, h, sf))) : empty(h.getText(sf)) })
   const labelFor = new Map<string, string>(), boxes: { id?: string; type: string; v?: string; aria: boolean }[] = []
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
@@ -157,11 +167,11 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         methods(val)
       }
       if (key === 'middleware' && ts.isArrayLiteralExpression(val) && ts.isObjectLiteralExpression(n.parent) && ts.isPropertyAssignment(n.parent.parent) && n.parent.parent.name.getText(sf) === 'server'
-        && val.elements.some(isGuard)) f.auth = true
+        && val.elements.some(isGuard)) f.serverGuard = true
       // beforeLoad: () => { if (!context.user) throw redirect({ to: '/login' }) }: hides the page, doesn't protect its data
       if (key === 'beforeLoad' && /redirect\s*\(|\bthrow\b/.test(val.getText(sf)) && /user|auth|session|login|sign ?in|claims/i.test(val.getText(sf))) f.pageGuard = true
       // createStart(() => ({ functionMiddleware: [authMiddleware] })): every server action (or request) checks login
-      if (/^(functionMiddleware|requestMiddleware)$/.test(key) && ts.isArrayLiteralExpression(val) && val.elements.some(isGuard)) f.globalGuard = key === 'requestMiddleware' ? 'request' : 'function'
+      // (app-wide functionMiddleware / requestMiddleware can't block logged-out people, or signing in would break: not a check)
     }
     // legacy: createServerFileRoute('/api/x').methods({ GET, POST })
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'methods' && /^createServerFileRoute\b/.test(n.expression.expression.getText(sf))
@@ -182,7 +192,9 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         const host = callee.text === 'fetch' && HOSTS[arg?.match(/^https?:\/\/([^/]+)/)?.[1] ?? '']
         if (host) { f.services.add(host); f.outside.add(`${host}: ${EMAIL.has(host) ? 'emails.send' : 'request'}`) }
         else if (callee.text === 'navigate' && arg?.startsWith('/')) f.links.add(arg)
-        else if (/env/i.test(callee.text) && arg && /^[A-Z][A-Z0-9_]+$/.test(arg)) { f.env.add(arg); if (n.arguments.length === 1) f.envReq.add(arg) }   // requireEnv('X'); env('X', 'default') has one
+        else if (/^(require|get|read|must)?_?env(ironment)?(_?var(iable)?)?$/i.test(callee.text) && arg && /^[A-Z][A-Z0-9_]*(_|KEY|SECRET|URL|TOKEN)[A-Z0-9_]*$/.test(arg) && arg !== 'NODE_ENV') {
+          f.env.add(arg); if (n.arguments.length === 1) f.envReq.add(arg)   // requireEnv('STRIPE_KEY'); env('X', 'default') has a default
+        }
         else if (arg?.startsWith('/') && callee.text !== 'require') f.calls.push({ name: callee.text, path: arg.split('?')[0], method, prop: false })
         if (callee.text === 'require' && arg) { f.imports.push(arg); if (SERVICES[arg]) f.services.add(SERVICES[arg]) }
       } else if (ts.isPropertyAccessExpression(callee)) {
@@ -271,9 +283,11 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     }
     if (ts.isVariableDeclaration(n) && n.initializer) {
       const init = n.initializer.getText(sf)
+      // const authMiddleware = createMiddleware().server(...): a login check only if it can stop someone
+      if (ts.isIdentifier(n.name) && /^createMiddleware\b/.test(init)) f.middleware.set(n.name.text, STOPS.test(init))
       if (ts.isIdentifier(n.name) && SERVER.test(init)) servers.add(n.name.text)
       // const admin = getSupabaseAdminClient(): a database client, whatever it's called
-      if (ts.isIdentifier(n.name) && /^(await\s+)?(createClient|createServerClient|createBrowserClient|\w*[Ss]upabase\w*)\s*(<[^>]*>)?\(/.test(init)) sbClients.add(n.name.text)
+      if (ts.isIdentifier(n.name) && CLIENT_MAKER.test(init)) sbClients.add(n.name.text)
       const base = init.match(/^axios\.create\([^)]*baseURL:\s*['"`](\/[^'"`]*)/)?.[1]
       if (ts.isIdentifier(n.name) && base) f.wrappers.set(n.name.text, base.replace(/\/$/, ''))
       const mod = init.match(/(?:require|import)\(\s*['"]([^'"]+)['"]/)?.[1]   // require('x'), lazy(() => import('x'))
@@ -297,7 +311,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const c = n.importClause
       if (c?.name) { f.used.add(c.name.text); f.binds.set(c.name.text, mod) }
       if (c?.namedBindings && ts.isNamedImports(c.namedBindings))
-        for (const el of c.namedBindings.elements) { f.used.add((el.propertyName ?? el.name).text); f.binds.set(el.name.text, mod) }
+        for (const el of c.namedBindings.elements) { f.used.add((el.propertyName ?? el.name).text); f.binds.set(el.name.text, mod); if (el.propertyName) f.binds.set(el.propertyName.text, mod) }
     }
     if (ts.isJsxAttribute(n) && n.initializer) {
       const v = str(n.initializer), name = n.name.getText(sf)
@@ -392,15 +406,15 @@ function returnsLiteralOnly(fn: ts.Node): boolean {
 export type Route = { kind: 'page' | 'endpoint'; url: string }
 // TanStack Router file routes: src/routes/classes.$classId.tsx -> /classes/[classId]; _authed/ and (group)/ add nothing;
 // posts_.$id.edit.tsx -> /posts/[id]/edit; files under -folders are ignored; [.] is a literal dot.
-export function tanstackRoute(path: string): { url: string; ids: string[]; layout: boolean } | null {
-  const m = path.match(/^(?:src\/|app\/)?routes\/(.+)\.[jt]sx?$/)
+export function tanstackRoute(path: string): { url: string; ids: string[]; layout: boolean; index: boolean } | null {
+  const m = path.match(/^(?:src\/|app\/)?routes\/(.+?)(?:\.lazy)?\.[jt]sx?$/)
   if (!m || m[1].split('/').some(x => x.startsWith('-')) || /(^|\/)__root$|routeTree\.gen$/.test(m[1])) return null
   const toks = m[1].replace(/\[\.\]/g, '\u0000').split(/[/.]/).map(t => t.replace(/\u0000/g, '.'))
-  const kept = toks.filter((t, i) => !(i === toks.length - 1 && (t === 'index' || t === 'route')))
+  const index = toks.at(-1) === 'index', kept = toks.filter((t, i) => !(i === toks.length - 1 && (t === 'index' || t === 'route')))
   const segs = kept.filter(t => !t.startsWith('_') && !/^\(.*\)$/.test(t)).map(t => t.replace(/_$/, ''))
     .map(t => t === '$' ? '[rest]' : t.startsWith('$') ? `[${t.slice(1)}]` : t)
   // ids of the layouts above it, to find a login check on a parent (_authed.tsx, admin/route.tsx)
-  return { url: '/' + segs.join('/'), ids: kept.map((_, i) => kept.slice(0, i + 1).join('/')), layout: !!kept.at(-1)?.startsWith('_') }   // _authed.tsx wraps pages, isn't one
+  return { url: '/' + segs.join('/'), ids: kept.map((_, i) => kept.slice(0, i + 1).join('/')), layout: !!kept.at(-1)?.startsWith('_'), index }   // _authed.tsx wraps pages, isn't one
 }
 // Next.js routes come from file paths: app/x/page.tsx, app/api/x/route.ts, and (with pagesDir) pages/x.tsx, pages/api/x.ts.
 export function route(path: string, pagesDir = false): Route | null {
@@ -458,20 +472,34 @@ export function appFacts(snap: Snap) {
   const browserPages = new Set<string>()
   if (Object.keys(deps_).some(d => /^@tanstack\/(react-start|start|react-router|solid-start)$/.test(d))) {
     const tr = new Map([...files.keys()].flatMap(p => { const t = tanstackRoute(p); return t ? [[p, t] as const] : [] }))
-    const byId = new Map([...tr].map(([p, t]) => [t.ids.at(-1)!, p]))
+    // Layouts are the non-index files; admin/index.tsx is a page next to admin.tsx, not above it.
+    const byId = new Map([...tr].filter(([, t]) => !t.index).map(([p, t]) => [t.ids.at(-1)!, p]))
+    const rootGuard = [...files].some(([p, f]) => /(^|\/)routes\/__root\.[jt]sx?$/.test(p) && f.pageGuard)
     for (const [p, t] of tr) {
-      if (t.layout) continue
-      const f = files.get(p)!, server = f.serverRoute && !f.jsx.size
-      routes.set(p, { kind: server ? 'endpoint' : 'page', url: t.url })
-      if (!server) { browserPages.add(p); if (t.ids.some(id => files.get(byId.get(id) ?? '')?.pageGuard)) f.auth = true }
+      const f = files.get(p)!
+      // _authed.tsx, or admin.tsx when admin/index.tsx exists: a layout around pages, not a page
+      if (t.layout || !t.index && [...tr.values()].some(o => o.index && o.ids.at(-1) === t.ids.at(-1))) { if (!files.get(p)!.serverRoute) routes.delete(p); continue }
+      const above = t.index ? t.ids : t.ids.slice(0, -1)
+      if (!f.serverRoute || f.jsx.size) {
+        routes.set(p, { kind: 'page', url: t.url }); browserPages.add(p)
+        f.auth = f.pageGuard || rootGuard || above.some(id => !!files.get(byId.get(id) ?? '')?.pageGuard)   // calls like getUser() alone don't stop anyone
+      }
+      // The server part of a route file: an address of its own, even when the file is also a page
+      if (f.serverRoute) {
+        const unit = f.jsx.size ? { ...empty(f.printed), tables: f.tables, written: f.written, ops: f.ops, money: f.money, outside: f.outside, env: f.env, envReq: f.envReq,
+          fns: new Map([...f.fns].filter(([k]) => METHODS.includes(k))), refuses: f.refuses } : f
+        unit.auth = f.serverGuard || (f.auth || f.sbAuth) && STOPS.test(f.printed)
+        const key = f.jsx.size ? `${p}#server` : p
+        files.set(key, unit); routes.set(key, { kind: 'endpoint', url: t.url })
+      }
     }
   }
   // TanStack server actions: calling one (createBooking({ data }), useServerFn(createBooking)) talks to the server.
   for (const [p, f] of files) for (const x of f.used) {
     const q = f.serverFns.has(x) ? p : target(p, x), m = q && files.get(q)?.serverFns.get(x)
-    if (m) f.fetches.add(`${m} (server action) ${x}`)
+    if (m) f.fetches.add(`${m} (server action) ${x} in ${q}`)
   }
-  const globalGuard = (kind: string) => [...files.values()].some(f => f.globalGuard === kind || f.globalGuard === 'request')
+  const middleware = new Map([...files.values()].flatMap(f => [...f.middleware]))
   // React Router: the component each <Route> shows is a page at that address. It runs in the browser.
   for (const [p, f] of files) for (const pg of f.pages) {
     const q = target(p, pg.comp)
@@ -494,7 +522,8 @@ export function appFacts(snap: Snap) {
   for (const [p, f] of [...files]) {
     const pre = f.handlers.length ? prefix(p) : null
     for (const h of f.handlers) {
-      const url = (pre!.path.replace(/\/$/, '') + (h.path === '/' ? '' : h.path)).replace(/:(\w+)\??/g, '[$1]') || '/'
+      const url = h.path.startsWith('(server action) ') ? `${h.path} in ${p}`
+        : (pre!.path.replace(/\/$/, '') + (h.path === '/' ? '' : h.path)).replace(/:(\w+)\??/g, '[$1]') || '/'
       const key = `${p}#${url}`, unit = files.get(key) ?? empty()
       const hf = h.handler ? f.locals.get(h.handler) ?? (target(p, h.handler) && files.get(target(p, h.handler)!)?.locals.get(h.handler)) ?? h.facts : h.facts
       for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'fetches', 'refuses'] as const) for (const x of hf[k]) unit[k].add(x)
@@ -502,7 +531,9 @@ export function appFacts(snap: Snap) {
       unit.fns.set(h.method, hf.printed)
       unit.printed += `\n${h.method} ${hf.printed}`
       // Logged in if every handler that changes something checks (or, with none, every handler does).
-      const writes = h.method !== 'GET', guard = pre!.guard || h.guard || hf.auth || hf.sbAuth || globalGuard(url.startsWith('(server action)') ? 'function' : 'request') || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
+      // A named middleware counts unless this repo defines it and it can't stop anyone; reading the user counts only if the code acts on it.
+      const mwGuard = h.guard && !(h.mw.length && h.mw.every(m => middleware.get(m) === false))
+      const writes = h.method !== 'GET', guard = pre!.guard || mwGuard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
       const u = unit as FileFacts & { w?: boolean[]; r?: boolean[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
@@ -523,7 +554,6 @@ export function appFacts(snap: Snap) {
     }
   }
   for (const p of files.keys()) if (routes.has(p) && !p.includes('#')) fold(p, files.get(p)!, new Set([p]), routes.get(p)!.kind === 'page')
-  for (const [k, r] of routes) if (r.kind === 'endpoint' && !k.includes('#') && globalGuard('request')) files.get(k)!.auth = true
   // Reading the session in the browser redirects nobody; on a server (edge function, Next.js) it's a real check.
   for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k)) files.get(k)!.auth = true
   // Whether a page or address checks login is part of what it is: losing the check counts as a change.
@@ -555,7 +585,7 @@ const fieldList = (fs: string[]) => list(fs.filter(f => !f.startsWith('→')).ma
 
 // "/products/[slug]/reviews" -> ["product", "reviews"]: a segment before a [param] is one of many
 export const named = (url: string): string[] => {
-  if (url.startsWith('(server action) ')) return [words(url.slice(16))]
+  if (url.startsWith('(server action) ')) return [words(url.slice(16).split(' in ')[0])]
   const segs = url.replace(/^\/functions\/v1\//, '/').split('/').filter(s => s && s !== 'api')
   return segs.flatMap((s, i) => s.startsWith('[') ? [] : [segs[i + 1]?.startsWith('[') ? singular(words(s)) : words(s)])
 }
