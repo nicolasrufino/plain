@@ -6,3 +6,4 @@ Vendored files
 - tree-sitter-c-sharp.wasm: from the npm package tree-sitter-c-sharp@0.23.5 (MIT, see tree-sitter-c-sharp.LICENSE).
   Vendored for the same reason. Loaded through src/treesitter.ts, which sets up web-tree-sitter once for every language
   (a second Parser.init() resets the runtime and breaks parsers made before it).
+- tree-sitter-java.wasm: from the npm package tree-sitter-java@0.23.5 (MIT, see tree-sitter-java.LICENSE). Same setup.

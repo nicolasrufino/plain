@@ -19,8 +19,8 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | **Vue / Nuxt, SvelteKit** | ✅ Supported |
 | **Angular** | ✅ Supported |
 | **C#: ASP.NET Core** | ✅ Supported |
-| 7. Java: Spring Boot | 🔜 Next |
-| 8. Laravel (PHP), Ruby on Rails, Go | Later |
+| **Java: Spring Boot** | ✅ Supported |
+| 8. Laravel (PHP), Ruby on Rails, Go | 🔜 Next |
 
 ## Why this order
 
@@ -508,20 +508,43 @@ a route guard can't do.
 - **Parser:** tree-sitter-c-sharp (MIT, 5.3 MB, in `vendor/`), about 40 ms to load.
 - **Not yet:** conventional routes (`{controller}/{action}`), Razor Pages and Blazor pages.
 
-## Java: Spring Boot (planned)
+## Java: Spring Boot ✅
 
-- **Addresses:** `@RequestMapping("/api/orders")` on the class + `@GetMapping("/{id}")`,
-  `@PostMapping` on methods.
-- **Login checks:** mostly in one place, the `SecurityFilterChain`:
-  `requestMatchers("/admin/**").hasRole("ADMIN")`, `.permitAll()`,
-  `anyRequest().authenticated()`. The first matching rule wins, so plain has to read them in
-  order ([Spring docs][spring-authz]). Per-method checks use `@PreAuthorize` / `@Secured`.
-  With Spring Security installed and no rules, everything requires login by default.
-- **Database:** JPA `@Entity`, repositories `save` / `delete`. Migrations are Flyway
-  `db/migration/V2__*.sql` (plain SQL, shared with Supabase) or Liquibase `dropTable` /
-  `dropColumn`.
-- **To flag:** `csrf` turned off, `anyRequest().permitAll()`, CORS `*`.
-- **Parser:** tree-sitter-java, about 0.4 MB.
+- **Addresses:** `@RestController` / `@Controller` classes, `@RequestMapping("/api/orders")` on the
+  class, `@GetMapping("/{id}")` (and the other verbs, or `@RequestMapping(method = ...)`) on methods,
+  plus `server.servlet.context-path`. `{id}` becomes `[id]`.
+- **Who an address lets in, the way Spring decides it** ([Spring Security: authorize HTTP
+  requests][spring-authz]):
+  - The `SecurityFilterChain`'s `authorizeHttpRequests` rules, **in order, first match wins**:
+    `permitAll()` is open; `authenticated()`, `hasRole(...)`, `hasAuthority(...)` need login;
+    `denyAll()` lets nobody in. `HttpMethod`-specific rules and Ant patterns (`/api/**`,
+    `/orders/*/cancel`) are read as Spring reads them. The older `authorizeRequests()` /
+    `antMatchers` work too.
+  - With `spring-boot-starter-security` and no rules of your own, every address needs login;
+    without it, none does.
+  - `@PreAuthorize` / `@Secured` / `@RolesAllowed` add a check, but only when their kind is
+    turned on: `@EnableMethodSecurity` turns on `@PreAuthorize`; `@Secured` and `@RolesAllowed`
+    need `securedEnabled` / `jsr250Enabled`. Without that, Spring ignores them, and so does plain.
+    `@PostAuthorize` runs after the method, so it doesn't stop a delete.
+  - An address no rule matches: Spring Security 6's `authorizeHttpRequests` turns it away (read as
+    login), the older `authorizeRequests` lets it through. A rule plain can't read (a custom
+    matcher, `hasIpAddress`) ends the reading: after it, plain claims neither.
+  - Several chains: the first (by `@Order`) whose `securityMatcher` fits the address decides; an
+    address no chain fits has no security at all. A chain of your own with no request rules
+    checks nothing (Spring Boot's default "everything needs login" steps aside for it).
+  - Spring Data REST turns every repository into an API (list, create, update, delete) on its own.
+- **What an address does:** controllers usually hand off to `@Service` classes; plain follows
+  those calls (`orderService.cancel(id)` -> `OrderService.cancel`) to the Spring Data repository
+  calls (`orders.save(o)`, `deleteById`), and the repository (`JpaRepository<Order, Long>`) names
+  the table. `@Entity` fields are the columns.
+- **Before you ship:** a Flyway migration (`db/migration/V2__x.sql`) runs by itself the next time
+  the app starts: plain says so, and "back up first" when it drops something. `@Value("${...}")`
+  settings point to env vars through `application.properties`.
+- **To flag:** `spring.jpa.hibernate.ddl-auto=create` (every start wipes the tables), a real key or
+  password in `application.properties` / `.yml`, and CORS open to every site.
+- **Money and email:** Stripe Java (`Session.create`, `Webhook.constructEvent`), `JavaMailSender`.
+- **Parser:** tree-sitter-java (MIT, 0.4 MB, in `vendor/`).
+- **Not yet:** Kotlin, WebFlux.
 
 ## Laravel, Rails, Go (later)
 

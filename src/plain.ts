@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
 import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
+import { javaFacts, type JavaFacts, type Family } from './java.ts'
 import { csFacts, mergeAuth, join as csJoin, under, csPath, type CsFacts, type CsClass, type CsRoute, type ExtCall, type Auth } from './csharp.ts'
 
 export type Snap = Map<string, string>
@@ -50,7 +51,7 @@ const HOSTS: Record<string, string> = {
 const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
-const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs)$/
+const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java)$/
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
 
@@ -65,7 +66,7 @@ export type FileFacts = {
   authIfs: { g: string; at: number; fn: number }[]; skipIfs: { c: string; at: number; fn: number }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
-  handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
+  handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean; unknown?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
   mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
   pages: { path: string; comp: string; guard: boolean | 'unknown' }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
@@ -649,7 +650,7 @@ export function appFacts(snap: Snap) {
   for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/')) {
     // (EF migrations and their snapshots are read as migrations, not as code)
     if (/(^|\/)Migrations\/[^/]+\.cs$/.test(p)) continue
-    try { const f = p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
+    try { const f = p.endsWith('.java') ? javaFacts(p, t, empty) : p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
   }
   // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
   const resolve = (from: string, spec: string): string | undefined => {
@@ -683,6 +684,9 @@ export function appFacts(snap: Snap) {
   const routes = new Map<string, Route>()
   const deps_ = Object.assign({}, ...[...snap].filter(([p]) => /(^|\/)package\.json$/.test(p) && !p.includes('node_modules/')).map(([, t]) => deps(t)),
     ...[...snap].filter(([p]) => /(^|\/)(requirements[\w-]*\.txt|pyproject\.toml)$/.test(p)).map(([p, t]) => pyDeps(t, p)),
+    // Java: pom.xml <artifactId> (with <version>), build.gradle implementation 'group:artifact:version'
+    ...[...snap].filter(([p]) => /(^|\/)pom\.xml$/.test(p)).map(([, t]) => Object.fromEntries([...t.replace(/<parent>[\s\S]*?<\/parent>|<plugins>[\s\S]*?<\/plugins>/g, '').matchAll(/<dependency>[\s\S]*?<artifactId>([^<]+)<\/artifactId>(?:[\s\S]*?<version>([^<]+)<\/version>)?[\s\S]*?<\/dependency>/g)].map(m => [m[1], m[2] ?? '*']))),
+    ...[...snap].filter(([p]) => /(^|\/)build\.gradle(\.kts)?$/.test(p)).map(([, t]) => Object.fromEntries([...t.matchAll(/(?:implementation|api|runtimeOnly|compileOnly)\s*\(?\s*['"]([\w.-]+):([\w.-]+)(?::([\w.-]+))?['"]/g)].map(m => [m[2], m[3] ?? '*']))),
     // .NET: <PackageReference Include="Stripe.net" Version="47.0.0" />
     ...[...snap].filter(([p]) => p.endsWith('.csproj')).map(([, t]) => Object.fromEntries([...t.matchAll(/<PackageReference\s+Include="([^"]+)"(?:\s+Version="([^"]*)")?/g)].map(m => [m[1], m[2] ?? '*'])))) as Record<string, string>
   for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
@@ -713,6 +717,7 @@ export function appFacts(snap: Snap) {
     }
   }
   const csModels = new Map<string, string[]>()   // Entity Framework entities (filled in below)
+  const javaModels = new Map<string, string[]>()   // JPA @Entity classes
   const svelteUrls = new Map<string, string>()   // SvelteKit pages: their <form method="POST"> sends to this address
   // Where a hook's or middleware's login check applies: each checking `if` covers what its path tests allow, and an earlier
   // `if (<path test>) return ...` lets those addresses through unchecked. Tests: startsWith, ===, !==, ['/a', '/b'].includes(path),
@@ -896,6 +901,81 @@ export function appFacts(snap: Snap) {
     for (const [, t] of sets) { const d = defs.get(t)?.sort((a, b) => rank(b) - rank(a)); if (d?.length) csModels.set(t, d[0].props) }
     for (const f of files.values()) remap(f)
   }
+  // Spring Boot: each endpoint's login, as Spring decides it (see src/java.ts): the first security chain whose securityMatcher fits
+  // (in @Order), the first rule in it that matches; method checks on top when their kind is switched on. Test code (src/test) is left out.
+  const javaFiles = [...files].filter(([p]) => p.endsWith('.java') && !/(^|\/)src\/test\//.test(p)).map(([p, f]) => [p, (f as JavaFacts).java] as const)
+  if (javaFiles.length) {
+    // Spring Security on the classpath: the starter, OAuth2 starters, spring-security-web/config, or a Gradle catalog alias
+    const security = Object.keys(deps_).some(d => /^spring-boot-starter-(security|oauth2-[\w-]+)$|^spring-security-(web|config)$/.test(d))
+      || [...snap].some(([p, t]) => /(^|\/)build\.gradle(\.kts)?$/.test(p) && /implementation\s*\(?\s*libs\.[\w.]*security/.test(t))
+    const chains = javaFiles.flatMap(([, j]) => j.chains).sort((a, b) => a.order - b.order)
+    const enabled = new Set(javaFiles.flatMap(([, j]) => j.enabled))
+    const props = [...snap].filter(([p]) => /(^|\/)src\/main\/resources\/application(-prod)?\.(properties|ya?ml)$/.test(p)).sort(([a], [b]) => a.length - b.length).map(([, t]) => t).join('\n')
+    const prop = (k: string) => props.match(new RegExp(`^\\s*${k.replace(/\./g, '\\.')}\\s*[=:]\\s*(.+)$`, 'm'))?.[1]?.trim() ?? yamlProp(props, k)
+    const context = (prop('server.servlet.context-path') ?? '').replace(/^["']|["']$/g, '').replace(/\/$/, '')
+    const repos = new Map(javaFiles.flatMap(([, j]) => [...j.repos]))
+    const repoWrites = new Map(javaFiles.flatMap(([, j]) => [...j.repoWrites]))
+    const methods = new Map(javaFiles.flatMap(([, j]) => [...j.methods]))
+    const impls = new Map(javaFiles.flatMap(([, j]) => [...j.implements]))
+    // a controller's facts include what it calls (services, its own helpers), a few levels down; and the method checks met on the way
+    // (@PreAuthorize on the service method it calls stops the request too); repository placeholders become their entities
+    const lookup = (t: string, m: string) => methods.get(`${t}.${m}`) ?? [...methods].find(([k]) => k.endsWith(`.${m}`) && (impls.get(k.split('.')[0]) ?? []).includes(t))?.[1]
+    const fold = (g: FileFacts & { checks?: Family[] }, into: FileFacts & { checks?: Family[] }, seen: Set<string>) => {
+      for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'refuses'] as const) for (const y of g[k]) into[k].add(y)
+      into.money ||= g.money; into.writes ||= g.writes; into.checks = [...into.checks ?? [], ...g.checks ?? []]
+      for (const u of g.used) if (u.startsWith('jcall:') && !seen.has(u)) {
+        seen.add(u); const [t, m] = u.slice(6).split('.')
+        const w = repoWrites.get(`${t}.${m}`)   // @Modifying @Query repository method
+        if (w && repos.has(t)) { into.written.add(`@repo:${t}`); into.tables.add(`@repo:${t}`); into.writes = true; into.ops.add(w) }
+        const h = lookup(t, m); if (h) fold(h, into, seen)
+      }
+    }
+    const entityOf = (f: FileFacts) => { for (const k of ['tables', 'written'] as const) for (const t of [...f[k]]) if (t.startsWith('@repo:')) { f[k].delete(t); const e = repos.get(t.slice(6)); if (e) f[k].add(e) } return f }
+    // an Ant-style pattern: /api/**, /api/*/x, /orders/{id}
+    const matches = (pattern: string, url: string) => {
+      const re = pattern.split('/').map(seg => seg === '**' ? '\u0000' : seg.replace(/[.+?^$()|[\]\\]/g, '\\$&').replace(/\{[^}]+\}|\*/g, '[^/]+')).join('/')
+      return new RegExp('^' + re.replace(/\/\u0000$/, '(/.*)?').replace(/\u0000/g, '.*') + '/?$').test(url.replace(/\[[^\]]+\]/g, 'x'))
+    }
+    // 'open' | 'login' | 'deny' | undefined (plain can't tell)
+    const decide = (method: string, path: string) => {
+      if (!chains.length) return security ? 'login' : 'open'
+      const c = chains.find(x => !x.matchers.length || x.matchers.some(m => matches(m, path)))
+      if (!c || !c.rules) return 'open'   // no chain fits, or a chain with no request rules: nothing checks login
+      const r = c.rules.find(x => (!x.methods.length || x.methods.includes(method)) && x.patterns.some(pt => matches(pt, path)))
+      return r ? r.decision : !c.complete ? undefined : c.legacy ? 'open' : 'deny'
+    }
+    const route = (p: string, r: { method: string; path: string }, facts: FileFacts & { checks?: Family[] }) => {
+      const method = r.method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : r.method, decision = decide(method, r.path)
+      const guard = decision === 'login' || decision === 'deny' || (facts.checks ?? []).some(c => enabled.has(c))
+      files.get(p)!.handlers.push({ server: '', method, path: context + r.path, guard, mw: [], facts: entityOf(facts), unknown: !guard && decision === undefined })
+    }
+    for (const [p, j] of javaFiles) for (const r of j.routes) {
+      const into: FileFacts & { checks?: Family[] } = Object.assign(empty(), { checks: [...r.checks] }), h = methods.get(`${r.cls}.${r.name}`)
+      // @PreAuthorize on the interface method this controller implements (an OpenAPI-generated API, say)
+      for (const i of impls.get(r.cls) ?? []) into.checks!.push(...methods.get(`${i}.${r.name}`)?.checks ?? [])
+      if (h) fold({ ...h, checks: [] }, into, new Set()); into.printed = h?.printed ?? ''
+      route(p, r, into)
+    }
+    // Spring Data REST: with the dependency, every repository is an API of its own (list, read, create, update, delete), unless exported = false
+    if (Object.keys(deps_).some(d => /^spring-boot-starter-data-rest$|^spring-data-rest-webmvc$/.test(d))) {
+      const base = (prop('spring.data.rest.base-path') ?? '').replace(/^["']|["']$/g, '').replace(/\/$/, '')
+      for (const [p, j] of javaFiles) for (const [repo, path] of j.restRepos) {
+        const e = repos.get(repo); if (!e) continue
+        const url = `${base}/${path || pluralize(e.charAt(0).toLowerCase() + e.slice(1))}`
+        for (const [method, sub, op] of [['GET', '', ''], ['POST', '', 'create'], ['GET', '/[id]', ''], ['PUT', '/[id]', 'update'], ['PATCH', '/[id]', 'update'], ['DELETE', '/[id]', 'delete']] as const) {
+          const facts = empty(`spring data rest ${repo}`); facts.tables.add(e); if (op) { facts.written.add(e); facts.writes = true; facts.ops.add(op) }
+          route(p, { method, path: url + sub }, facts)
+        }
+      }
+    }
+    for (const [, j] of javaFiles) for (const [e, fs] of j.entities) javaModels.set(e, fs)
+    // @Value("${stripe.secret-key}"): set in application.properties as ${STRIPE_SECRET_KEY} (that env var), or by its relaxed env name
+    for (const f of files.values()) for (const k of ['env', 'envReq'] as const) for (const x of [...f[k]]) if (x.startsWith('@prop:')) {
+      f[k].delete(x); const name = x.slice(6), v = prop(name)
+      const ref = v?.match(/^\$\{(\w+)(:[^}]*)?\}$/)
+      if (ref) { if (k === 'env' || !ref[2]) f[k].add(ref[1]) } else if (v === undefined) f[k].add(name.replace(/[.-]/g, (c) => c === '.' ? '_' : '').toUpperCase())
+    }
+  }
   // form actions outside SvelteKit aren't routes
   for (const f of files.values()) f.handlers = f.handlers.filter(h => h.server !== '@actions')
   // TanStack server actions: calling one (createBooking({ data }), useServerFn(createBooking)) talks to the server.
@@ -1074,9 +1154,13 @@ export function appFacts(snap: Snap) {
       // A named middleware counts unless this repo defines it and it can't stop anyone; reading the user counts only if the code acts on it.
       const mwGuard = h.guard && !(h.mw.length && h.mw.every(m => middleware.get(m) === false))
       const writes = h.method !== 'GET', guard = pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
-      const u = unit as FileFacts & { w?: boolean[]; r?: boolean[] }
+      const u = unit as FileFacts & { w?: boolean[]; r?: boolean[]; wu?: string[]; ru?: string[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
+      // Spring: plain can't tell whether this address is open, when the handlers that decide it are unknown and none is plainly open
+      ;(writes ? (u.wu ??= []) : (u.ru ??= [])).push(guard ? 'login' : h.unknown ? 'unknown' : 'open')
+      const deciding = u.w?.length ? u.wu! : u.ru!
+      ;(unit as FileFacts & { guardUnknown?: boolean }).guardUnknown = deciding.includes('unknown') && !deciding.includes('open')
       files.set(key, unit); routes.set(key, { kind: 'endpoint', url })
     }
   }
@@ -1117,10 +1201,13 @@ export function appFacts(snap: Snap) {
       all.set(name, fields); dzModels.add(name)
     }
   for (const [m, fs] of csModels) all.set(m, fs)
+  for (const [m, fs] of javaModels) all.set(m, fs)
   const pyModels = new Set<string>()
   for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()),
+    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()),
+    // Flyway: src/main/resources/db/migration/V2__add_coupons.sql
+    flyway: [...snap.keys()].filter(p => /(^|\/)db\/migration\/V[\d_.]+__[\w-]+\.sql$/.test(p)),
     efMigrations: [...snap.keys()].filter(p => /(^|\/)Migrations\/\d+_\w+\.cs$/.test(p) && !/\.Designer\.cs$/.test(p)),
     // drizzle-kit generate writes drizzle/0001_x.sql (or the `out` folder next to meta/_journal.json)
     dzMigrations: [...snap.keys()].filter(p => /\.sql$/.test(p) && !isMigration(p) && !/prisma\/migrations\//.test(p) && (/(^|\/)drizzle\//.test(p) || snap.has(p.replace(/[^/]+$/, 'meta/_journal.json')))),
@@ -1321,7 +1408,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       problems.push({ kind: 'Unsafe', text: `${cap(name)}'s data can be read without logging in. Its layout asks for login, but the page loads its own data without waiting for that check. Check locals.user in the page's load (or call \`await parent()\` first), or check in hooks.server.ts.` })
     // New, lost its login check, or started changing data without one
     const changesData = (f?: FileFacts) => !!f && (f.written.size > 0 || METHODS.slice(1).some(m => f.fns.has(m)))
-    if (!b.auth && (!a || a.auth || !changesData(a) && changesData(b)) && !isPublic(r.url)) {
+    if (!b.auth && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown && (!a || a.auth || !changesData(a) && changesData(b)) && !isPublic(r.url)) {
       const writes = changesData(b), before_ = problems.length
       if (r.kind === 'page' && /admin|dashboard|account/.test(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown)
         problems.push({ kind: 'Unsafe', text: `Anyone can open ${name} without logging in.` })
@@ -1402,7 +1489,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   for (const m of newMigrations) if (/\bDROP\b/i.test(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
   if (newMigrations.length) ship.push(`Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database before the new code goes live (\`npx prisma migrate deploy\`), or the parts that use it will fail.`)
   // A new "no duplicates" rule (a unique index) on a table that already has rows fails to apply if the live data has duplicates
-  for (const m of [...newMigrations, ...B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m)), ...B.dzMigrations.filter(m => !A.dzMigrations.includes(m))]) {
+  for (const m of [...newMigrations, ...B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m)), ...B.dzMigrations.filter(m => !A.dzMigrations.includes(m)), ...B.flyway.filter(m => !A.flyway.includes(m))]) {
     // (only on columns that already had data: a new column starts empty; a partial index's condition must be about old columns too)
     // (CREATE UNIQUE INDEX [CONCURRENTLY] name ON [schema.]table [USING btree] (cols) [WHERE ...]; ALTER TABLE t ADD CONSTRAINT name UNIQUE (cols))
     const oldSql = [...before].filter(([p]) => /\.sql$/.test(p)).map(([, t]) => t).join('\n')
@@ -1446,6 +1533,21 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     if (secret(t) && !secret(was)) problems.push({ kind: 'Unsafe', text: `A secret key or password is written in ${p}. Anyone who can see the code can use it. Move it to an environment variable (or \`dotnet user-secrets\` while developing).` })
   }
   for (const p of real) if ((B.files.get(p) as CsFacts | undefined)?.cs?.risks.has('cors') && !(A.files.get(p) as CsFacts | undefined)?.cs?.risks.has('cors'))
+    problems.push({ kind: 'Check', text: `Any website can call your server from a visitor's browser (CORS allows all sites). Fine for a public API, not for one that uses logins. (in ${p})` })
+  // Flyway (Spring Boot): a new V2__x.sql runs by itself the next time the app starts; if it fails, the app doesn't start
+  const newFlyway = B.flyway.filter(m => !A.flyway.includes(m))
+  for (const m of newFlyway) if (/\bDROP\b/i.test(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+  if (newFlyway.length && Object.keys(B.deps).some(d => /^flyway-/.test(d))) ship.push(`${list(newFlyway.map(m => m.split('/').pop()!))} will change your live database by itself the next time the app starts (Flyway). Back up first; if it fails, the app won't start.`)
+  // JPA: ddl-auto=create / create-drop rebuilds every table, empty, each time the app starts (fine in tests, a wipe on a live site)
+  for (const p of real.filter(p => /(^|\/)src\/main\/resources\/application\.(properties|ya?ml)$/.test(p))) {
+    const wipes = (t = '') => /ddl-auto\s*[=:]\s*["']?create(-drop)?\b/.test(t)
+    if (wipes(after.get(p)) && !wipes(before.get(p))) problems.push({ kind: 'Unsafe', text: `${p} sets ddl-auto to "create": every time the app starts, it deletes all your tables' data and starts empty. Use "validate" or "none" (with Flyway) on your live site.` })
+    const secret = (x = '') => x.match(/(sk_live_\w{8,}|sk_test_\w{8,}|whsec_\w{8,}|re_\w{16,}|SG\.[\w-]{16,}\.[\w-]{16,})/)?.[0]
+      ?? x.match(/(sk-proj-[\w-]{16,}|sk-ant-[\w-]{16,})/)?.[0]
+      ?? x.match(/^\s*[\w.-]*(password|secret|api[-_]?key|token|private[-_]?key)[\w-]*\s*[=:]\s*(?!\$\{|["']?\s*$|["']?<|["']?(changeme|password|secret|root|postgres|sa)\b)([^\s#]{6,})/im)?.[3]
+    if (secret(after.get(p)) && !secret(before.get(p))) problems.push({ kind: 'Unsafe', text: `A secret key or password is written in ${p}. Anyone who can see the code can use it. Put \${ENV_VAR} there and set the variable on your host.` })
+  }
+  for (const p of real) if ((B.files.get(p) as JavaFacts | undefined)?.java?.risks.has('cors') && !(A.files.get(p) as JavaFacts | undefined)?.java?.risks.has('cors'))
     problems.push({ kind: 'Check', text: `Any website can call your server from a visitor's browser (CORS allows all sites). Fine for a public API, not for one that uses logins. (in ${p})` })
   // Drizzle: a changed schema needs a migration (or `drizzle-kit push` for apps that don't keep migration files)
   const newDz = B.dzMigrations.filter(m => !A.dzMigrations.includes(m))
@@ -1540,7 +1642,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // env, packages, services
   const usedBefore = new Set([...A.files.values()].flatMap(f => [...f.env]))
   // .NET: a setting with a value in a committed appsettings.json (Jwt:Issuer -> Jwt__Issuer) needs nothing on the host
-  const dotnet = [...after.keys()].some(p => p.endsWith('.csproj'))
+  const dotnet = [...after.keys()].some(p => /\.csproj$|(^|\/)(pom\.xml|build\.gradle(\.kts)?)$/.test(p))   // .NET and Spring don't read .env files
   const csKeys = new Set<string>()
   const flatJson = (o: unknown, pre: string) => { if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) typeof v === 'object' ? flatJson(v, `${pre}${k}__`) : v !== '' && v !== null && csKeys.add(`${pre}${k}`) }
   for (const [p, t] of after) if (/(^|\/)appsettings\.json$/.test(p)) try { flatJson(JSON.parse(t.replace(/^\uFEFF/, '').replace(/\/\/[^\n]*/g, '')), '') } catch { /* not JSON */ }
@@ -1554,7 +1656,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
     if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k) || csKeys.has(k)) continue
     ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
-      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj)$/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
+      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
   }
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)
@@ -1755,4 +1857,16 @@ export function render(r: {
   for (const n of r.notes ?? []) out.push('', ...wrap(n, dim(''), '').map(dim))
   if (r.noise) out.push('', dim(`(Hidden: ${plural(r.noise, 'file')} with only formatting changes, or lockfiles.)`))
   return out.join('\n')
+}
+
+// a dotted key in application.yml: stripe.secret-key -> stripe:\n  secret-key: value (any indentation; ponytail: no lists, no flow style)
+function yamlProp(yml: string, key: string): string | undefined {
+  const parts = key.split('.'), stack: { ind: number; key: string }[] = []
+  for (const line of yml.split('\n')) {
+    const m = line.match(/^(\s*)([\w-]+)\s*:\s*(.*)$/); if (!m) continue
+    const ind = m[1].length
+    while (stack.length && stack.at(-1)!.ind >= ind) stack.pop()
+    stack.push({ ind, key: m[2] })
+    if (stack.map(x => x.key).join('.') === parts.join('.') && m[3]) return m[3].replace(/\s+#.*$/, '').replace(/^["']|["']$/g, '') || undefined
+  }
 }

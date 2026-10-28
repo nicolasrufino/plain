@@ -54,7 +54,9 @@ export function csFacts(path: string, text: string, empty: (printed?: string) =>
   const tree = parser.parse(text)
   if (!tree) return undefined
   const root = tree.rootNode
-  const code = text.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '')
+  // comments found by the parser, not by text: "/orders/**" in a string isn't the start of one
+  let code = text
+  for (const c of ['comment'].flatMap(k => all(root, k)).sort((a, b) => b.startIndex - a.startIndex)) code = code.slice(0, c.startIndex) + code.slice(c.endIndex)
   const f: CsFacts = Object.assign(collect(root, empty(code.replace(/\s+/g, ' '))), { cs: { routes: [], ext: new Map(), extCalls: [], classes: new Map(), methods: new Map(),
     // FallbackPolicy = ...RequireAuthenticatedUser(), SetFallbackPolicy(...RequireAuthenticatedUser()), FallbackPolicy = options.DefaultPolicy (login by default)
     fallback: /FallbackPolicy\s*=\s*[^;]*RequireAuthenticatedUser\s*\(|SetFallbackPolicy\s*\([^;]*RequireAuthenticatedUser\s*\(|FallbackPolicy\s*=\s*\w+\.DefaultPolicy\b/.test(code),
@@ -177,10 +179,12 @@ export function csFacts(path: string, text: string, empty: (printed?: string) =>
   function collect(node: N, g: FileFacts): FileFacts {
     const vars = new Map<string, string>()   // var order = await _db.Orders.FindAsync(id) -> order: Orders
     const userVars = new Set<string>()       // var userId = User.FindFirstValue(ClaimTypes.NameIdentifier): who's logged in
+    const stripe = new Map<string, string>()  // var service = new SessionService() -> service: SessionService (Stripe.net)
     for (const d of all(node, 'variable_declarator')) {
       const v = d.namedChildren.at(-1)?.text ?? '', id = d.namedChildren[0]!.text
       const m = v.match(/\b(\w+)\.(\w+)\s*\.\s*(Find|First|Single|Where|Include|AsTracking)\w*/); if (m && DB.test(m[1])) vars.set(id, m[2])
       if (/\bUser\.(FindFirst|Identity|Claims|GetUserId)|ClaimTypes\.|GetUserId\(/.test(v)) userVars.add(id)
+      const st = v.match(/^new\s+(?:[\w.]+\.)?(SessionService|PaymentIntentService|ChargeService|RefundService|SubscriptionService)\b/)?.[1]; if (st) stripe.set(id, st)
     }
     for (const call of all(node, 'invocation_expression')) {
       const fn = fnText(call).replace(/\.Set<(\w+)>\(\)/, '.$1'), parts = fn.split('.'), last = parts.at(-1)!, a0 = args(call)[0]   // _context.Set<Order>().Add -> _context.Order.Add
@@ -196,8 +200,12 @@ export function csFacts(path: string, text: string, empty: (printed?: string) =>
         for (const as of all(node, 'assignment_expression')) { const l = as.childForFieldName('left')?.text.split('.')[0] ?? ''; const t = vars.get(l); if (t) { g.tables.add(t); g.written.add(t); g.writes = true; g.ops.add('update') } }
       }
       // Stripe.net: new SessionService().CreateAsync(options); EventUtility.ConstructEvent(...); new RefundService().CreateAsync(...)
-      if (/^Create(Async)?$/.test(last) && /SessionService/.test(node.text)) { g.money = true; g.services.add('Stripe'); g.outside.add('Stripe: checkout.sessions.create') }
-      if (/^Create(Async)?$/.test(last) && /PaymentIntentService|ChargeService/.test(node.text)) g.money = true
+      // which Stripe service this Create is on: new SessionService().CreateAsync(...), or a variable holding one
+      const recv = call.childForFieldName('function')?.childForFieldName('expression')?.text.replace(/\s/g, '') ?? ''
+      const svc = recv.match(/^new(?:[\w.]+\.)?(\w+Service)\(/)?.[1] ?? stripe.get(recv)
+      if (/^Create(Async)?$/.test(last) && svc === 'SessionService') { g.money = true; g.services.add('Stripe'); g.outside.add('Stripe: checkout.sessions.create') }
+      if (/^Create(Async)?$/.test(last) && /^(PaymentIntentService|ChargeService|SubscriptionService)$/.test(svc ?? '')) { g.money = true; g.services.add('Stripe') }
+      if (/^Create(Async)?$/.test(last) && svc === 'RefundService') { g.services.add('Stripe'); g.outside.add('Stripe: refunds.create') }
       if (/ConstructEvent$/.test(fn)) { g.services.add('Stripe'); g.outside.add('Stripe: webhooks.constructEvent') }
       if (/^SendEmailAsync$|^EmailSendAsync$/.test(last) || /^Send(Async)?$/.test(last) && /SmtpClient|MailKit/.test(node.text)) { g.services.add('email'); g.outside.add('email: send') }
       // config: Configuration["Stripe:SecretKey"] is read from the env var Stripe__SecretKey; GetConnectionString("Default") from ConnectionStrings__Default

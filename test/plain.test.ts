@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { report, snapshot, tanstackRoute, appFacts } from '../src/plain.ts'
+import { report, snapshot, tanstackRoute, appFacts, type FileFacts } from '../src/plain.ts'
 import { recapCli } from '../src/session.ts'
 import { readDb, findings } from '../src/supabase.ts'
 
@@ -1201,4 +1201,69 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   assert.ok(!card(proj, { ...proj, 'A/appsettings.json': '{ "ConnectionStrings": { "Default": "Server=localhost;Database=a;User Id=sa;Password=devpass;" } }\n' }).includes('secret'), 'review 17: localhost')
   assert.ok(card(proj, { ...proj, 'A/appsettings.Development.json': '{ "Stripe": { "SecretKey": "sk_live_51Habcdefghijklmnop" } }\n' }).includes('A secret key or password is written'), 'review 17: dev live key')
   console.log('ok (review 17)')
+}
+
+// Java (Spring Boot): controllers, Spring Security rules in order, services, Spring Data repositories, Flyway, settings.
+{
+  const pom = (sec: boolean) => `<project><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency><dependency><groupId>org.flywaydb</groupId><artifactId>flyway-core</artifactId></dependency>${sec ? '<dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-security</artifactId></dependency>' : ''}</dependencies></project>\n`
+  const J = 'src/main/java/com/shop/'
+  const base = { 'pom.xml': pom(true),
+    [`${J}Order.java`]: '@Entity\npublic class Order { @Id Long id; private String status; @ManyToOne private User user; }\n',
+    [`${J}OrderRepository.java`]: 'public interface OrderRepository extends JpaRepository<Order, Long> {}\n',
+    [`${J}OrderService.java`]: '@Service\npublic class OrderService {\n  private final OrderRepository orders;\n  public void cancel(Long id) { Order o = orders.findById(id).orElseThrow(); o.setStatus("CANCELLED"); orders.save(o); }\n  public void purge() { orders.deleteAll(); }\n}\n',
+    'src/main/resources/application.properties': 'server.servlet.context-path=/api\nstripe.secret-key=${STRIPE_SECRET_KEY}\n' }
+  const ctrl = `@RestController\n@RequestMapping("/orders")\npublic class OrderController {\n  private final OrderService orderService;\n  @GetMapping public List<Order> list() { return null; }\n  @PostMapping("/{id}/cancel") public void cancel(@PathVariable Long id) { orderService.cancel(id); }\n  @PreAuthorize("hasRole('ADMIN')")\n  @DeleteMapping public void purge() { orderService.purge(); }\n  @Value("\${stripe.secret-key}") private String key;\n}\n`
+  const sec = (rules: string) => ({ [`${J}SecurityConfig.java`]: `@Configuration\n@EnableMethodSecurity\npublic class SecurityConfig {\n  @Bean SecurityFilterChain chain(HttpSecurity http) throws Exception {\n    http.authorizeHttpRequests(auth -> auth\n${rules}\n    ).csrf(c -> c.disable());\n    return http.build();\n  }\n}\n` })
+  // rules in order, first match wins: GET is open, the cancel is open by an earlier permitAll, the rest needs login
+  const c1 = card(base, { ...base, [`${J}OrderController.java`]: ctrl, ...sec('      .requestMatchers(HttpMethod.GET, "/orders/**").permitAll()\n      .requestMatchers("/orders/*/cancel").permitAll()\n      .anyRequest().authenticated()') })
+  // (GET /orders is open and DELETE /orders needs login: one address, its changes need login)
+  for (const e of ['lists orders, deletes orders and requires login ✓. /api/orders', '⚠ Anyone can use the order cancel part of your server without logging in.', 'Add STRIPE_SECRET_KEY'])
+    assert.ok(c1.includes(e), `java missing "${e}"\n${c1}`)
+  // the starter with no rules of its own: everything needs login; without the starter, nothing does (method security alone isn't on)
+  const c2 = card(base, { ...base, [`${J}OrderController.java`]: ctrl })
+  assert.ok(c2.includes('updates orders and requires login ✓. /api/orders/[id]/cancel') && !c2.includes('⚠'), `java starter\n${c2}`)
+  const open = { ...base, 'pom.xml': pom(false) }
+  const c3 = card(open, { ...open, [`${J}OrderController.java`]: ctrl })
+  assert.ok(c3.includes('⚠ Anyone can use the order cancel part'), `java no security\n${c3}`)
+  // no rule matches: no claim either way; Flyway runs by itself; a committed key; ddl-auto=create
+  const c4 = card(base, { ...base, [`${J}OrderController.java`]: ctrl, ...sec('      .requestMatchers("/public/**").permitAll()'),
+    'src/main/resources/db/migration/V2__drop_notes.sql': 'ALTER TABLE orders DROP COLUMN notes;\n',
+    'src/main/resources/application.properties': 'server.servlet.context-path=/api\nstripe.secret-key=sk_live_51Habcdefghijklmnop\nspring.jpa.hibernate.ddl-auto=create\n' })
+  for (const e of ['V2__drop_notes.sql will change your live database by itself the next time the app starts (Flyway)', 'Back up your data first', 'A secret key or password is written in src/main/resources/application.properties', 'sets ddl-auto to "create"'])
+    assert.ok(c4.includes(e), `java missing "${e}"\n${c4}`)
+  assert.ok(!c4.includes('Anyone can use the order cancel'), `java unmatched\n${c4}`)
+  console.log('ok (java)')
+}
+
+// Review 18 (2026-10-28): Spring Security the way Spring decides it.
+{
+  const J = 'src/main/java/com/shop/'
+  const pom = (deps: string) => `<project><dependencies>${deps.split(',').map(a => `<dependency><artifactId>${a}</artifactId></dependency>`).join('')}</dependencies></project>\n`
+  const app = { [`${J}Order.java`]: '@Entity\npublic class Order { @Id Long id; private String status; }\n', [`${J}OrderRepository.java`]: 'public interface OrderRepository extends JpaRepository<Order, Long> {}\n',
+    [`${J}OrderController.java`]: '@RestController\n@RequestMapping("/api/orders")\npublic class OrderController {\n  private final OrderRepository orders;\n  @DeleteMapping("/{id}") public void delete(@PathVariable Long id) { orders.deleteById(id); }\n  @PostMapping("/{id}/refund") public void refund(@PathVariable Long id) { orders.save(new Order()); }\n}\n' }
+  const r = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries({ ...app, ...files })))
+    return [...a.routes].map(([k, x]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : (a.files.get(k) as FileFacts & { guardUnknown?: boolean }).guardUnknown ? '?' : 'open'}`).sort().join(' | ') }
+  const chain = (body: string, ann = '') => ({ [`${J}Sec.java`]: `@Configuration\n${ann}public class Sec {\n  @Bean SecurityFilterChain c(HttpSecurity http) throws Exception {\n${body}\n    return http.build();\n  }\n}\n` })
+  const sec = pom('spring-boot-starter-web,spring-boot-starter-security')
+  const cases: [string, Record<string, string>, string][] = [
+    ['a permit rule written with new AntPathRequestMatcher', { 'pom.xml': sec, ...chain('    http.authorizeHttpRequests(a -> a.requestMatchers(new AntPathRequestMatcher("/api/orders/*/refund")).permitAll().anyRequest().authenticated());') }, '/api/orders/[id] login | /api/orders/[id]/refund open'],
+    ['anonymous() is open', { 'pom.xml': sec, ...chain('    http.authorizeHttpRequests(a -> a.requestMatchers("/api/orders/*/refund").anonymous().anyRequest().authenticated());') }, '/api/orders/[id] login | /api/orders/[id]/refund open'],
+    ['a chain of your own with no request rules checks nothing', { 'pom.xml': sec, ...chain('    http.csrf(c -> c.disable()).httpBasic(Customizer.withDefaults());') }, '/api/orders/[id] open | /api/orders/[id]/refund open'],
+    ['securityMatcher: outside every chain is open', { 'pom.xml': sec, ...chain('    http.securityMatcher("/api/orders/*").authorizeHttpRequests(a -> a.anyRequest().authenticated());') }, '/api/orders/[id] login | /api/orders/[id]/refund open'],
+    ['Spring Security 6 denies what no rule matches', { 'pom.xml': sec, ...chain('    http.authorizeHttpRequests(a -> a.requestMatchers("/public/**").permitAll());') }, '/api/orders/[id] login | /api/orders/[id]/refund login'],
+    ['authorizeRequests lets it through', { 'pom.xml': sec, ...chain('    http.authorizeRequests().antMatchers("/admin/**").hasRole("ADMIN");') }, '/api/orders/[id] open | /api/orders/[id]/refund open'],
+    ['a rule plain cannot read ends the reading', { 'pom.xml': sec, ...chain('    http.authorizeHttpRequests(a -> a.requestMatchers("/api/orders/*").authenticated().requestMatchers(myMatcher()).permitAll().anyRequest().authenticated());') }, '/api/orders/[id] login | /api/orders/[id]/refund ?'],
+    ['OAuth2 resource server is Spring Security', { 'pom.xml': pom('spring-boot-starter-web,spring-boot-starter-oauth2-resource-server') }, '/api/orders/[id] login | /api/orders/[id]/refund login'],
+  ]
+  for (const [name, files, want] of cases) assert.equal(r(files), want, `review 18: ${name}`)
+  // @Secured needs securedEnabled; @EnableMethodSecurity turns on @PreAuthorize only
+  const ms = (anno: string, enable: string) => ({ 'pom.xml': pom('spring-boot-starter-web'), [`${J}OrderController.java`]: `@RestController\n@RequestMapping("/api/orders")\npublic class OrderController {\n  private final OrderRepository orders;\n  ${anno}\n  @DeleteMapping("/{id}") public void delete(@PathVariable Long id) { orders.deleteById(id); }\n}\n`, [`${J}Cfg.java`]: `${enable}\n@Configuration\npublic class Cfg {}\n` })
+  assert.equal(r(ms('@Secured("ROLE_ADMIN")', '@EnableMethodSecurity')), '/api/orders/[id] open', 'review 18: secured off')
+  assert.equal(r(ms('@Secured("ROLE_ADMIN")', '@EnableMethodSecurity(securedEnabled = true)')), '/api/orders/[id] login', 'review 18: secured on')
+  assert.equal(r(ms('@PreAuthorize("hasRole(\'ADMIN\')")', '@EnableMethodSecurity')), '/api/orders/[id] login', 'review 18: pre on')
+  assert.equal(r(ms('@PostAuthorize("hasRole(\'ADMIN\')")', '@EnableMethodSecurity')), '/api/orders/[id] open', 'review 18: post runs after')
+  // Spring Data REST makes every repository an open API without security
+  const rest = r({ 'pom.xml': pom('spring-boot-starter-web,spring-boot-starter-data-rest'), [`${J}OrderController.java`]: '' })
+  assert.ok(rest.includes('/orders/[id] open'), `review 18: data rest\n${rest}`)
+  console.log('ok (review 18)')
 }
