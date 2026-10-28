@@ -3,9 +3,18 @@
   "version": "0.0.1",
   "description": "See what your app does differently now, without reading the code.",
   "type": "module",
-  "bin": { "plain": "src/cli.ts" },
-  "scripts": { "test": "node test/plain.test.ts" },
-  "engines": { "node": ">=23.6" },
+  "bin": {
+    "plain": "src/cli.ts"
+  },
+  "scripts": {
+    "test": "node test/plain.test.ts"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
   "license": "MIT",
-  "dependencies": { "typescript": "^5.9.3" }
+  "dependencies": {
+    "libpg-query": "18.2.1",
+    "typescript": "^5.9.3"
+  }
 }

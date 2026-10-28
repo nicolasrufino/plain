@@ -173,3 +173,71 @@ for (const [name, before, after, has, hasNot] of cases) {
   for (const e of hasNot) assert.ok(!c.includes(e), `${name}: should not say "${e}"\n${c}`)
 }
 console.log(`ok (${cases.length} review scenarios)`)
+
+// Supabase (the Lovable / Bolt backend): tables and access rules from supabase/migrations, database calls from the browser, edge functions.
+const sbM1 = `-- shop
+create table public.products (id uuid primary key default gen_random_uuid(), name text not null, price_cents int, created_at timestamptz default now());
+alter table public.products enable row level security;
+create policy "Products are public" on public.products for select using (true);
+create table public.orders (id uuid primary key, user_id uuid references auth.users not null, status text default 'pending', total_cents int, notes text);
+alter table public.orders enable row level security;
+create policy "Own orders" on public.orders for select to authenticated using (auth.uid() = user_id);
+`
+const sbBefore = {
+  'package.json': '{"dependencies":{"@supabase/supabase-js":"2.45.0","react-router-dom":"6"}}',
+  'supabase/migrations/20260101000000_shop.sql': sbM1,
+  'src/integrations/supabase/client.ts': "import { createClient } from '@supabase/supabase-js'\nexport const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY)\n",
+  'src/App.tsx': "import { Routes, Route } from 'react-router-dom'\nimport Shop from './pages/Shop'\nexport default function App() { return <Routes><Route path=\"/\" element={<Shop />} /></Routes> }\n",
+  'src/pages/Shop.tsx': "import { supabase } from '@/integrations/supabase/client'\nexport default function Shop() { supabase.from('products').select('*'); return <h1>Shop</h1> }\n",
+}
+const sbAfter = { ...sbBefore,
+  'supabase/migrations/20260202000000_accounts.sql': `
+create table public.profiles (id uuid primary key references auth.users, full_name text, email text, phone text);
+create policy "Logged in can read orders" on public.orders for select using (auth.role() = 'authenticated');
+create policy "Update own orders" on public.orders for update using (auth.uid() = user_id);
+create table public.messages (id bigint generated always as identity primary key, body text);
+alter table public.messages enable row level security;
+create policy "Anyone can send" on public.messages for insert to anon with check (true);
+create policy "Admins" on public.orders for all using ((auth.jwt() -> 'user_metadata' ->> 'role') = 'admin');
+alter table public.orders drop column notes;
+delete from public.messages;
+insert into storage.buckets (id, name, public) values ('avatars', 'avatars', true);
+`,
+  'supabase/functions/create-checkout/index.ts': "import Stripe from 'npm:stripe@14'\nimport { createClient } from 'jsr:@supabase/supabase-js@2'\nconst stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!)\nDeno.serve(async (req) => { const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!); const s = await stripe.checkout.sessions.create({}); await supabase.from('orders').insert({ status: 'pending' }); return new Response(JSON.stringify(s)) })\n",
+  'src/App.tsx': "import { Routes, Route } from 'react-router-dom'\nimport Shop from './pages/Shop'\nimport Account from './pages/Account'\nexport default function App() { return <Routes><Route path=\"/\" element={<Shop />} /><Route path=\"/account\" element={<Account />} /></Routes> }\n",
+  'src/pages/Account.tsx': "import { supabase } from '@/integrations/supabase/client'\nexport default function Account() { supabase.from('orders').select('*'); const pay = () => supabase.functions.invoke('create-checkout', { body: {} }); const save = () => supabase.from('profiles').update({ full_name: 'x' }); return <><h1>Your account</h1><button onClick={save}>Save</button><button onClick={pay}>Pay</button></> }\n",
+}
+const sb = card(sbBefore, sbAfter)
+for (const e of ['⚠ Anyone can use the create checkout part of your server without logging in.',
+  '⚠ Every logged-in user can read every one of your orders, including other people\'s (rule "Logged in can read orders").',
+  '! People can edit their own orders, including the status column', '⚠ The rule "Admins" on orders trusts user_metadata',
+  '⚠ Anyone can read and change every row of profiles: the table has no access rules', '! Anyone, even without logging in, can add messages',
+  '! Files in the "avatars" storage bucket can be opened by anyone', 'shows orders, saves profiles and starts a payment 💰',
+  'New server code that saves new orders and charges customers 💰. /functions/v1/create-checkout', 'stores profiles: full name, email and phone. Each one belongs to a user.',
+  'deletes every row of messages', 'run `supabase db push`', "Add STRIPE_SECRET_KEY to your Supabase project's secrets", "aren't visible to plain"])
+  assert.ok(sb.includes(e), `supabase missing: "${e}"\n${sb}`)
+for (const e of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'Products are public', 'calls Supabase', 'Other files', 'Own orders'])
+  assert.ok(!sb.includes(e), `supabase should not say "${e}"\n${sb}`)
+
+// A careful Supabase app gets no warnings: own-row rules, a public catalog, an old open rule isn't repeated, a dropped rule is gone,
+// and policy-looking text inside a function body or a comment isn't a rule.
+const good = card(sbBefore, { ...sbBefore,
+  'supabase/migrations/20260303000000_reviews.sql': `
+-- create policy "x" on public.reviews using (true);
+create table public.reviews (id uuid primary key, user_id uuid references auth.users not null, product_id uuid references public.products, stars int, body text);
+alter table public.reviews enable row level security;
+create policy "Read reviews" on public.reviews for select using (true);
+create policy "Write own" on public.reviews for insert to authenticated with check (auth.uid() = user_id);
+create policy "Temp" on public.reviews for delete using (true);
+drop policy "Temp" on public.reviews;
+create function public.f() returns void language plpgsql as $$ begin execute 'create policy y on public.reviews for update using (true)'; end $$;
+`,
+  'supabase/migrations/20260304000000_broken.sql': 'this is not sql (',
+})
+assert.ok(good.includes('✓ Nothing looks broken') && good.includes('! Anyone, even without logging in, can read all reviews'), good)
+assert.ok(!/⚠|Temp|"y"|"x"/.test(good), `careful app should have no warnings\n${good}`)
+
+// Turning RLS off later is caught, even though the table was created long before.
+const off = card(sbBefore, { ...sbBefore, 'supabase/migrations/20260305000000_off.sql': 'alter table public.orders disable row level security;' })
+assert.ok(off.includes('⚠ Anyone can read and change every row of orders'), off)
+console.log('ok (supabase)')

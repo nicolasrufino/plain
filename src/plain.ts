@@ -4,11 +4,12 @@
 //   plain [ref] [--asked "what you asked for"]   ref defaults to HEAD (uncommitted work)
 //   plain --hook                                  Claude Code Stop hook: reads the last prompt
 //
-// ponytail: Next.js (app/ and pages/), Express-style servers, React Router, Prisma, Stripe. Each framework is one more fact extractor.
+// ponytail: Next.js (app/ and pages/), Express-style servers, React Router, Prisma, Supabase, Stripe. Each framework is one more fact extractor.
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { readDb, findings, isMigration, type Db } from './supabase.ts'
 
 export type Snap = Map<string, string>
 
@@ -28,14 +29,17 @@ export function snapshot(cwd: string, ref: string | null): Snap {
 
 // ---------- facts from one file ----------
 
-const AUTH = new Set(['auth', 'getServerSession', 'getUser', 'currentUser', 'requireAdmin', 'requireUser'])
+const AUTH = new Set(['auth', 'getServerSession', 'getUser', 'getSession', 'currentUser', 'requireAdmin', 'requireUser'])
+// npm:stripe@14, https://esm.sh/stripe@14?target=deno, jsr:@supabase/supabase-js@2 (Deno, edge functions) -> the package name
+const pkgName = (m: string) => m.replace(/^(npm:|jsr:|https:\/\/esm\.sh\/)/, '').replace(/\?.*$/, '').replace(/(.)@[^/]*$/, '$1')
+const SB_OPS: Record<string, string> = { insert: 'create', update: 'update', upsert: 'update', delete: 'delete' }
 const WRITES = /^(create|createMany|update|updateMany|upsert|delete|deleteMany)$/
 const SERVICES: Record<string, string> = {
   stripe: 'Stripe', openai: 'OpenAI', '@anthropic-ai/sdk': 'Anthropic', resend: 'Resend',
   '@supabase/supabase-js': 'Supabase', nodemailer: 'email', twilio: 'Twilio', '@vercel/blob': 'Vercel Blob',
 }
 // ponytail: client variable names by convention; follow imports if apps name them differently
-const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend', supabase: 'Supabase' }
+const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
 const CODE = /\.[cm]?[jt]sx?$/
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
@@ -143,12 +147,22 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
           visit(callee.expression)   // the earlier .get(h) in the chain
           return
         } else if (HTTP.test(last) && arg?.startsWith('/') && !servers.has(obj)) f.calls.push({ name: obj, path: arg.split('?')[0], method: last.toUpperCase(), prop: true })   // axios.get('/api/x')
-        if (/^(prisma|db)$/.test(parts[0]) && parts.length === 3 && !parts[1].startsWith('$')) {
+        // Supabase: supabase.from('orders').update(...), and edge functions called with supabase.functions.invoke('name')
+        const from = ts.isCallExpression(callee.expression) && ts.isPropertyAccessExpression(callee.expression.expression) && callee.expression.expression.name.text === 'from'
+          ? { table: str(callee.expression.arguments[0]), on: callee.expression.expression.expression.getText(sf) } : undefined
+        if (from?.table && /supabase|client|^sb$/i.test(from.on) && !/storage$/.test(from.on) && /^(select|insert|update|upsert|delete)$/.test(last)) {
+          f.tables.add(from.table)
+          if (SB_OPS[last]) { f.writes = true; f.written.add(from.table); f.ops.add(SB_OPS[last]) }
+        }
+        if (last === 'invoke' && /functions$/.test(obj) && arg) f.fetches.add(`POST /functions/v1/${arg}`)
+        if (obj === 'Deno.env' && last === 'get' && arg) f.env.add(arg)
+        if (AUTH.has(last) && /auth$/.test(obj)) f.auth = true   // supabase.auth.getUser()
+        if (/^(prisma|db)$/.test(parts[0]) && parts.length === 3 && !parts[1].startsWith('$') && !parts[1].includes('(')) {
           f.tables.add(cap(parts[1]))
           if (WRITES.test(parts[2])) { f.writes = true; f.written.add(cap(parts[1])); f.ops.add(parts[2].replace(/Many$/, '').replace('upsert', 'update')) }
         }
         if (parts[0] === 'stripe' && parts.at(-1) === 'create') f.money = true
-        if (CLIENTS[parts[0]] && parts.length > 1) f.outside.add(`${CLIENTS[parts[0]]}: ${parts.slice(1).join('.')}`)
+        if (CLIENTS[parts[0]] && parts.length > 1 && !parts.some(x => x.includes('('))) f.outside.add(`${CLIENTS[parts[0]]}: ${parts.slice(1).join('.')}`)
         if (parts.at(-1) === 'push' && /router/.test(parts[0]) && str(n.arguments[0])?.startsWith('/')) f.links.add(str(n.arguments[0])!)
       }
     }
@@ -175,7 +189,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
       const mod = n.moduleSpecifier.text
       f.imports.push(mod)
-      if (SERVICES[mod]) f.services.add(SERVICES[mod])
+      if (SERVICES[pkgName(mod)]) f.services.add(SERVICES[pkgName(mod)])
       const c = n.importClause
       if (c?.name) { f.used.add(c.name.text); f.binds.set(c.name.text, mod) }
       if (c?.namedBindings && ts.isNamedImports(c.namedBindings))
@@ -277,6 +291,8 @@ export function route(path: string, pagesDir = false): Route | null {
   const m = path.match(/^(?:src\/)?app\/(.*?)\/?(page|route)\.[jt]sx?$/)
   const clean = (p: string) => '/' + p.split('/').filter(s => s && s !== 'index' && !/^\(.*\)$/.test(s)).join('/')
   if (m) return { kind: m[2] === 'page' ? 'page' : 'endpoint', url: clean(m[1]) }
+  const fn = path.match(/(?:^|\/)supabase\/functions\/(?!_)([^/]+)\/index\.[jt]s$/)   // Supabase edge function
+  if (fn) return { kind: 'endpoint', url: `/functions/v1/${fn[1]}` }
   const pg = pagesDir && path.match(/^(?:src\/)?pages\/(?!_)(.*)\.[jt]sx?$/)
   return pg ? { kind: pg[1].startsWith('api/') ? 'endpoint' : 'page', url: clean(pg[1]) } : null
 }
@@ -375,10 +391,13 @@ export function appFacts(snap: Snap) {
   // Whether a page or address checks login is part of what it is: losing the check counts as a change.
   for (const k of routes.keys()) files.get(k)!.printed += `\n[login: ${files.get(k)!.auth}]`
   const schemaPath = [...snap.keys()].find(p => p.endsWith('schema.prisma'))
+  const db = readDb([...snap].filter(([p]) => isMigration(p)))
+  const all = models(schemaPath && snap.get(schemaPath))
+  for (const [t, tb] of db.tables) all.set(t, [...tb.cols, ...[...tb.refs.values()].map(r => `→${singular(r)}`)])
   return {
-    files, routes, models: models(schemaPath && snap.get(schemaPath)),
+    files, routes, db, models: all,
     envExample: envKeys([...snap].filter(([p]) => /(^|\/)\.env\.example$/.test(p)).map(([, t]) => t).join('\n')), deps: deps_,
-    migrations: [...snap.keys()].filter(p => /prisma\/migrations\/.+\.sql$/.test(p)),
+    migrations: [...snap.keys()].filter(p => /prisma\/migrations\/.+\.sql$/.test(p)), sqlMigrations: [...snap.keys()].filter(isMigration),
   }
 }
 
@@ -392,13 +411,13 @@ export const things = (model: string) => pluralize(words(model))
 const an = (w: string) => (/^([aeio]|u(?!s|ni))/.test(w) ? 'an ' : 'a ') + w   // a user, an umbrella
 export const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`
 const DATES: Record<string, string> = { createdAt: 'date created', updatedAt: 'date updated', expiresAt: 'expiry date', deletedAt: 'date deleted' }
-const fieldName = (f: string) =>
-  f === 'id' || /Id$/.test(f) ? '' : DATES[f] ?? (/At$/.test(f) ? words(f.slice(0, -2)) + ' date' : words(f.replace(/Cents$/, '')))
+const camel = (c: string) => c.replace(/_([a-z])/g, (_, x) => x.toUpperCase())   // created_at -> createdAt
+const fieldName = (c: string) => { const f = camel(c); return f === 'id' || /Id$/.test(f) ? '' : DATES[f] ?? (/At$/.test(f) ? words(f.slice(0, -2)) + ' date' : words(f.replace(/Cents$/, ''))) }
 const fieldList = (fs: string[]) => list(fs.filter(f => !f.startsWith('→')).map(fieldName).filter(Boolean))
 
 // "/products/[slug]/reviews" -> ["product", "reviews"]: a segment before a [param] is one of many
 export const named = (url: string) => {
-  const segs = url.split('/').filter(s => s && s !== 'api')
+  const segs = url.replace(/^\/functions\/v1\//, '/').split('/').filter(s => s && s !== 'api')
   return segs.flatMap((s, i) => s.startsWith('[') ? [] : [segs[i + 1]?.startsWith('[') ? singular(words(s)) : words(s)])
 }
 export function pageName(url: string) {
@@ -481,6 +500,7 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     const [method, path] = x.split(' '), e = endpoint(path), r = e && route(e[0])!
     const t = e && mainTable(e[1], r!.url), noun = t ? things(t) : 'data'
     const sends = method === '?' ? !!e?.[1].fns.has('POST') && !e[1].fns.has('GET') : method !== 'GET'
+    if (e?.[1].money) return 'starts a payment 💰'
     return method === 'PUT' || method === 'PATCH' ? `updates ${noun} on your server` : method === 'DELETE' ? `deletes ${noun} on your server`
       : sends ? `sends ${noun} to your server` : `loads ${noun} from your server`
   }
@@ -511,6 +531,7 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
       const ui = uiList(newOnly(a?.ui, b.ui))
       if (ui.length) clauses.push(`${a ? 'now has' : 'has'} ${list(ui)}`)
       for (const t of newOnly(a?.tables, b.tables).filter(t => !b.written.has(t))) clauses.push(`${a ? 'now shows' : 'shows'} ${things(t)}`)
+      for (const t of newOnly(a?.written, b.written)) clauses.push(`${a ? 'now saves' : 'saves'} ${things(t)}`)
       for (const x of newOnly(a?.fetches, b.fetches)) clauses.push((a ? 'now ' : '') + fetchPhrase(x))
       for (const x of newOnly(a?.links, b.links)) clauses.push(`${a ? 'now links' : 'links'} to ${pageName(x)}`)
       const comps = newOnly(a?.jsx, b.jsx).filter(x => /^[A-Z]/.test(x) && !/^(Link|Image|Script|Head)$/.test(x) && !x.includes('.'))
@@ -521,7 +542,7 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
       if (!a) {
         const can: string[] = [], creates = b.ops.has('create') || (b.writes && !b.ops.size)
         if (b.fns.has('GET')) can.push(`lists ${noun}`)
-        if (b.fns.has('POST')) can.push(creates ? (can.length ? 'saves new ones' : `saves new ${noun}`)
+        if (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m))) can.push(creates ? (can.length ? 'saves new ones' : `saves new ${noun}`)
           : b.ops.has('update') ? `updates ${noun}` : b.ops.has('delete') ? `deletes ${noun}` : t ? `looks up ${noun}` : 'accepts requests')
         if (b.fns.has('PUT') || b.fns.has('PATCH')) can.push(`updates ${noun}`)
         if (b.fns.has('DELETE')) can.push(`deletes ${noun}`)
@@ -563,7 +584,7 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     problems.push({ kind: 'Check', text: `You asked to "${verb}", but nothing new lets you change anything: ${list(newViewOnly.map(placeName))} only ${newViewOnly.length > 1 ? 'show' : 'shows'} information. If you wanted buttons to act on things (like refunding or cancelling orders), ask for that. (This is a guess.)` })
 
   // files that aren't code
-  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore)$|prisma\/migrations\//.test(p))
+  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore)$|prisma\/migrations\/|supabase\/migrations\//.test(p))
     changes.push({ group: 'Other files', isNew: !before.has(p), text: `The agent ${!before.has(p) ? 'added' : !after.has(p) ? 'deleted' : 'changed'} ${p}${/\.md$/i.test(p) ? ', a notes file (not code)' : ''}.` })
 
   // database
@@ -592,6 +613,16 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
   if (changed.some(p => p.endsWith('schema.prisma')) && !newMigrations.length)
     ship.push("Update your database: run `npx prisma migrate dev`. The database's structure changed, but no migration was created.")
   for (const m of newMigrations) if (/\bDROP\b/i.test(after.get(m) ?? '')) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+  // Supabase: new migrations, what they destroy (removed tables and columns are already listed above), and who the rules let in.
+  for (const m of B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m))) {
+    const bad = (B.db.destructive.get(m) ?? []).filter(x => !/^deletes the \S+ (column|table)/.test(x))
+    if (bad.length) ship.push(`Back up your data first: ${m} ${list(bad)}, and that can't be undone.`)
+    ship.push(`Make sure ${m} reaches your live database (Lovable does this for you; otherwise run \`supabase db push\`).`)
+  }
+  const used = (X: typeof A) => new Set([...X.files.values()].flatMap(f => [...f.tables]))
+  const before_ = findings(A.db, used(A), things).map(x => x.text), rls = findings(B.db, used(B), things).filter(x => !before_.includes(x.text))
+  problems.push(...rls)
+  const notes = rls.length ? ["Database access rules are read from supabase/migrations. Rules changed in the Supabase dashboard aren't visible to plain."] : []
 
   // broken, unasked, unfinished
   const allBefore = new Map<string, string>(), allAfter = new Set<string>()
@@ -629,7 +660,11 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     const pub = /^(VITE|NEXT_PUBLIC|REACT_APP|EXPO_PUBLIC|PUBLIC)_/.test(k) && !/PUBLISHABLE|ANON/.test(k)
     if (pub && /SECRET|SERVICE_ROLE|PRIVATE|PASSWORD/.test(k)) problems.push({ kind: 'Unsafe', text: `${k} is a secret, but its name makes it part of the code every visitor's browser downloads, so anyone can read it. Move it to server-only code and give it a name without the ${k.split('_')[0]}_ prefix.` })
     else if (pub && /API_KEY|TOKEN/.test(k)) problems.push({ kind: 'Check', text: `${k} is sent to every visitor's browser (because of its ${k.split('_')[0]}_ prefix). That's fine for keys meant to be public, but not for secret ones.` })
-    ship.push(`Add ${k} to your hosting settings (like Vercel).${B.envExample.has(k) ? '' : ' It\'s also missing from .env.example.'}`)
+    // Edge functions read their secrets from Supabase, which provides SUPABASE_URL and its keys by itself.
+    const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
+    if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k)) continue
+    ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
+      : `Add ${k} to your hosting settings (like Vercel).${B.envExample.has(k) ? '' : ' It\'s also missing from .env.example.'}`)
   }
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)
@@ -639,12 +674,12 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
   for (const s of new Set([...B.files.values()].flatMap(f => [...f.services]))) if (!svcBefore.has(s))
     changes.push({ group: 'Outside services', isNew: true, text: `Your app now uses ${s}.` })
 
-  return { ...opts, files: real.filter(p => !p.includes('#')).length, noise: noise.length, changes, problems, unfinished, ship, A, B, schemaChanged: changed.some(p => p.endsWith('schema.prisma')) }
+  return { ...opts, files: real.filter(p => !p.includes('#')).length, noise: noise.length, changes, problems, unfinished, ship, notes, A, B, schemaChanged: changed.some(p => p.endsWith('schema.prisma')) }
 }
 
 export function render(r: {
   ref: string; asked?: string; color?: boolean; files: number; noise: number
-  changes: Change[]; problems: Problem[]; unfinished: string[]; ship: string[]
+  changes: Change[]; problems: Problem[]; unfinished: string[]; ship: string[]; notes?: string[]
 }): string {
   const c = (code: string) => (t: string) => r.color ? `\x1b[${code}m${t}\x1b[0m` : t
   const bold = c('1'), dim = c('2'), red = c('31'), yellow = c('33'), green = c('32')
@@ -695,6 +730,7 @@ export function render(r: {
     out.push('', bold('BEFORE YOU SHIP'))
     r.ship.forEach((s, i) => out.push(...wrap(s, `  ${i + 1}. `, '     ')))
   }
+  for (const n of r.notes ?? []) out.push('', ...wrap(n, dim(''), '').map(dim))
   if (r.noise) out.push('', dim(`(Hidden: ${plural(r.noise, 'file')} with only formatting changes, or lockfiles.)`))
   return out.join('\n')
 }
