@@ -1322,3 +1322,253 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   assert.ok(s6.includes('Back up your data first'), `round 6: // in a string\n${s6}`)
   console.log('ok (round 6 trials)')
 }
+
+// Laravel (2026-10-28): routes, login from middleware and handler code, Eloquent, migrations, config, Stripe, email
+{
+  const ctl = (name: string, body: string, head = '') => `<?php\nnamespace App\\Http\\Controllers;\nuse App\\Models\\Order;\n${head}class ${name} extends Controller {\n${body}\n}\n`
+  const L: Record<string, string> = {
+    'composer.json': '{"require":{"laravel/framework":"^12.0"}}', 'artisan': '',
+    '.env.example': 'APP_KEY=\nSTRIPE_SECRET=\n',
+    'bootstrap/app.php': "<?php\nreturn Application::configure(basePath: dirname(__DIR__))\n  ->withRouting(web: __DIR__.'/../routes/web.php', health: '/up')\n  ->withMiddleware(function (Middleware $middleware): void { })->create();\n",
+    'routes/web.php': "<?php\nuse Illuminate\\Support\\Facades\\Route;\nRoute::get('/', fn () => view('welcome'));\n",
+    'app/Http/Controllers/Controller.php': '<?php\nnamespace App\\Http\\Controllers;\nabstract class Controller {}\n',
+    'app/Models/Order.php': '<?php\nnamespace App\\Models;\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Order extends Model { protected $fillable = ["status"]; }\n',
+    'config/services.php': "<?php\nreturn ['stripe' => ['secret' => env('STRIPE_SECRET'), 'currency' => env('STRIPE_CURRENCY', 'usd')]];\n",
+    'database/migrations/2026_01_01_000000_create_orders_table.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::create('orders', function (Blueprint $table) { $table->id(); $table->foreignId('user_id')->constrained(); $table->string('status'); $table->timestamps(); }); } };\n",
+  }
+  const web = (routes: string) => ({ 'routes/web.php': L['routes/web.php'] + routes })
+  const orders = ctl('OrderController', "  public function index() { return Order::all(); }\n  public function store(Request $request) { return Order::create($request->validated()); }\n  public function cancel(Order $order) { $order->update(['status' => 'cancelled']); }")
+  const lv = (extra: Record<string, string>) => card(L, { ...L, 'app/Http/Controllers/OrderController.php': orders, ...extra })
+  const has = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(c.includes(x), `laravel: missing "${x}"\n${c}`) }
+  const not = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(!c.includes(x), `laravel: unexpected "${x}"\n${c}`) }
+
+  // login from middleware: a group, the route's own, guest (the opposite), withoutMiddleware (exact names only)
+  let c = lv(web("Route::middleware(['auth', 'verified'])->group(function () {\n  Route::post('/orders', [OrderController::class, 'store']);\n});\nRoute::get('/menu', [OrderController::class, 'index']);\n"))
+  has(c, 'New server code that saves new orders and requires login ✓', 'New server code that lists orders and works without logging in')
+  c = lv(web("Route::middleware('guest')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n"))
+  has(c, 'the orders part of your server without logging in')
+  // (since Laravel 13.39, withoutMiddleware('auth') removes 'auth:sanctum' too: read that way on every version, toward a warning)
+  c = lv(web("Route::middleware('auth:sanctum')->group(function () { Route::post('/orders', [OrderController::class, 'store'])->withoutMiddleware('auth'); });\n"))
+  has(c, 'the orders part of your server without logging in')
+  c = lv(web("Route::middleware('auth')->group(function () { Route::post('/orders', [OrderController::class, 'store'])->withoutMiddleware('auth'); });\n"))
+  has(c, 'the orders part of your server without logging in')
+  // resources: the addresses they make (only / except), the last definition of an address wins
+  c = lv(web("Route::resource('orders', OrderController::class)->only(['index', 'store'])->middleware('auth');\n"))
+  has(c, '/orders'); not(c, '/orders/[order]', '/orders/create')
+  c = lv(web("Route::post('/orders', [OrderController::class, 'store'])->middleware('auth');\nRoute::post('/orders', [OrderController::class, 'store']);\n"))
+  has(c, 'the orders part of your server without logging in')
+  // routes/api.php only loads when bootstrap/app.php registers it, and then under /api
+  const api = { 'routes/api.php': "<?php\nRoute::post('/orders', [OrderController::class, 'store'])->middleware('auth:sanctum');\n" }
+  not(lv(api), '/api/orders')
+  has(lv({ ...api, 'bootstrap/app.php': L['bootstrap/app.php'].replace("web: __DIR__", "api: __DIR__.'/../routes/api.php', web: __DIR__") }), '/api/orders', 'requires login ✓')
+  // included route files keep the group around the include
+  has(lv(web("Route::middleware('auth')->group(function () { require __DIR__.'/orders.php'; });\n") as Record<string, string> && { ...web("Route::middleware('auth')->group(function () { require __DIR__.'/orders.php'; });\n"), 'routes/orders.php': "<?php\nRoute::post('/orders', [OrderController::class, 'store']);\n" }), 'saves new orders and requires login ✓')
+  // controller middleware: HasMiddleware (with only), #[Middleware]; a 10-style constructor on 11's bare base crashes
+  c = lv({ ...web("Route::post('/orders', [OrderController::class, 'store']);\nRoute::get('/menu', [OrderController::class, 'index']);\n"),
+    'app/Http/Controllers/OrderController.php': orders.replace('extends Controller {', "extends Controller implements HasMiddleware {\n  public static function middleware(): array { return [new Middleware('auth', only: ['store'])]; }") })
+  has(c, 'saves new orders and requires login ✓', 'lists orders and works without logging in')
+  // #[Middleware] is Laravel 13's (Illuminate\Routing\Attributes\Controllers\Middleware): on 12 it does nothing; another class of that name neither
+  const attr = (use: string) => ({ ...web("Route::post('/orders', [OrderController::class, 'store']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace('use App\\Models\\Order;', `use App\\Models\\Order;\nuse ${use};`).replace('class OrderController', "#[Middleware('auth')]\nclass OrderController") })
+  const v13 = { 'composer.json': '{"require":{"laravel/framework":"^13.0"}}' }
+  has(card({ ...L, ...v13 }, { ...L, ...v13, ...attr('Illuminate\\Routing\\Attributes\\Controllers\\Middleware') }), 'saves new orders and requires login ✓')
+  has(lv(attr('Illuminate\\Routing\\Attributes\\Controllers\\Middleware')), 'the orders part of your server without logging in')
+  has(card({ ...L, ...v13 }, { ...L, ...v13, ...attr('Illuminate\\Routing\\Controllers\\Middleware') }), 'the orders part of your server without logging in')
+  c = lv({ ...web("Route::post('/orders', [OrderController::class, 'store']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace('extends Controller {', "extends Controller {\n  public function __construct() { $this->middleware('auth'); }") })
+  has(c, "OrderController calls $this->middleware() in its constructor"); not(c, 'requires login ✓')
+  // an app middleware: login when its handle() turns guests away; one plain can't read claims nothing
+  const admin = (body: string) => ({ ...web("Route::middleware('admin')->group(function () { Route::post('/orders', [OrderController::class, 'store']); Route::get('/menu', [OrderController::class, 'index']); });\n"),
+    'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->alias(['admin' => \\App\\Http\\Middleware\\EnsureAdmin::class]); }"),
+    'app/Http/Middleware/EnsureAdmin.php': `<?php\nclass EnsureAdmin { public function handle(Request $request, Closure $next) { ${body} return $next($request); } }\n` })
+  has(lv(admin('if (! $request->user()?->is_admin) abort(403);')), 'saves new orders and requires login ✓', 'lists orders and requires login ✓')
+  c = lv(admin('Log::info("hi");'))
+  has(c, 'the orders part of your server without logging in')
+  c = lv({ ...web("Route::middleware('team')->group(function () { Route::post('/orders', [OrderController::class, 'store']); Route::get('/menu', [OrderController::class, 'index']); });\n") })
+  not(c, 'requires login ✓', 'without logging in')
+  // in the handler: Gate::authorize / abort_unless(auth()->check()); a FormRequest's authorize() (return true checks nothing);
+  // a policy that lets guests in makes gate checks say nothing
+  const fr = (auth: string) => ({ ...web("Route::post('/orders', [OrderController::class, 'store']);\n"),
+    'app/Http/Controllers/OrderController.php': orders.replace('store(Request $request)', 'store(StoreOrderRequest $request)'),
+    'app/Http/Requests/StoreOrderRequest.php': `<?php\nclass StoreOrderRequest extends FormRequest { public function authorize(): bool { ${auth} } public function rules(): array { return []; } }\n` })
+  has(lv(fr('return $this->user() !== null;')), 'requires login ✓')
+  has(lv(fr('return true;')), 'the orders part of your server without logging in')
+  const gate = { ...web("Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace("$order->update", "Gate::authorize('update', $order); $order->update") }
+  has(lv(gate), 'requires login ✓')
+  not(lv({ ...gate, 'app/Policies/OrderPolicy.php': '<?php\nclass OrderPolicy { public function update(?User $user, Order $order): bool { return true; } }\n' }), 'requires login ✓')
+  // Eloquent writes, Stripe, config -> env, env() outside config, email through a notification that mails
+  c = lv({ ...web("Route::post('/orders/{order}/pay', [OrderController::class, 'pay'])->middleware('auth');\n"),
+    'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function pay(Order $order) { $stripe = new \\Stripe\\StripeClient(config('services.stripe.secret')); $s = $stripe->checkout->sessions->create([]); $order->user->notify(new OrderPaid($order)); return redirect($s->url); }\n  public function index"),
+    'app/Notifications/OrderPaid.php': "<?php\nclass OrderPaid extends Notification { public function via(object $n): array { return ['mail']; } }\n" })
+  has(c, 'charges customers 💰', 'emails people', 'Add STRIPE_SECRET to your hosting settings.'); not(c, '@cfg', 'missing from .env.example')
+  c = lv({ ...web("Route::post('/orders/{order}/pay', [OrderController::class, 'pay'])->middleware('auth');\n"),
+    'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function pay(Order $order) { $order->user->notify(new OrderPaid($order)); $k = env('STRIPE_KEY'); }\n  public function index"),
+    'app/Notifications/OrderPaid.php': "<?php\nclass OrderPaid extends Notification { public function via(object $n): array { return ['database']; } }\n" })
+  not(c, 'emails people'); has(c, 'reads STRIPE_KEY with env() outside the config folder', 'Add STRIPE_KEY to your hosting settings.')
+  // Cashier's charge() is money only with Cashier installed
+  const cash = { ...web("Route::post('/tip', [OrderController::class, 'tip'])->middleware('auth');\n"), 'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function tip(Request $request) { $request->user()->charge(500, $request->pm); }\n  public function index") }
+  not(lv(cash), '💰')
+  has(card({ ...L, 'composer.json': '{"require":{"laravel/framework":"^12.0","laravel/cashier":"^16.0"}}' }, { ...L, 'composer.json': '{"require":{"laravel/framework":"^12.0","laravel/cashier":"^16.0"}}', 'app/Http/Controllers/OrderController.php': orders, ...cash }), '💰')
+  // migrations: the tables they build, what they drop, the step to apply them
+  c = lv({ 'database/migrations/2026_10_28_000000_coupons.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::create('coupons', function (Blueprint $table) { $table->id(); $table->string('code')->unique(); $table->integer('percent_off'); }); Schema::table('orders', function (Blueprint $table) { $table->dropColumn('status'); }); } public function down(): void { Schema::dropIfExists('coupons'); } };\n" })
+  has(c, 'Your database now stores coupons: code and percent off', 'the status on orders will be deleted for good', 'Apply 2026_10_28_000000_coupons to your live database before the new code goes live (`php artisan migrate --force`)')
+  not(lv({ 'database/migrations/2026_10_28_000000_x.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::table('orders', fn (Blueprint $t) => $t->string('note')->nullable()); } public function down(): void { Schema::dropIfExists('orders'); } };\n" }), 'deleted for good')
+  // mass assignment only for a model that accepts every field; CORS for every site with cookies; forgery protection off for a form
+  const all = web("Route::post('/orders', [OrderController::class, 'store'])->middleware('auth');\n")
+  const allCtl = { 'app/Http/Controllers/OrderController.php': orders.replace('$request->validated()', '$request->all()') }
+  not(lv({ ...all, ...allCtl }), 'accepts every field')
+  has(lv({ ...all, ...allCtl, 'app/Models/Order.php': L['app/Models/Order.php'].replace('$fillable = ["status"]', '$guarded = []') }), 'the model accepts every field')
+  has(lv({ 'config/cors.php': "<?php\nreturn ['paths' => ['api/*'], 'allowed_origins' => ['*'], 'supports_credentials' => true];\n" }), 'CORS allows all sites')
+  not(lv({ 'config/cors.php': "<?php\nreturn ['paths' => ['api/*'], 'allowed_origins' => ['*'], 'supports_credentials' => false];\n" }), 'CORS allows all sites')
+  c = lv({ 'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->validateCsrfTokens(except: ['stripe/*', 'orders/*']); }") })
+  has(c, '"orders/*" is excluded from forgery protection'); not(c, '"stripe/*"')
+  // a global or group middleware that asks for login covers every route in it
+  has(lv({ ...web("Route::post('/orders', [OrderController::class, 'store']);\n"), 'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', '{ $middleware->web(append: [\\Illuminate\\Auth\\Middleware\\Authenticate::class]); }') }), 'requires login ✓')
+  // two controllers with the same short name: the route file's import (use ... as Alias) picks the right one
+  c = lv({ ...web("use App\\Http\\Controllers\\Admin\\OrderController as AdminOrders;\nRoute::delete('/admin/orders/{order}', [AdminOrders::class, 'destroy'])->middleware('auth');\n"),
+    'app/Http/Controllers/Admin/OrderController.php': "<?php\nnamespace App\\Http\\Controllers\\Admin;\nuse App\\Http\\Controllers\\Controller;\nuse App\\Models\\Order;\nclass OrderController extends Controller { public function destroy(Order $order) { $order->delete(); } }\n" })
+  has(c, 'deletes orders and requires login ✓')
+  // renames keep the data
+  c = lv({ 'database/migrations/2026_10_28_000000_r.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::table('orders', fn (Blueprint $t) => $t->renameColumn('status', 'state')); } };\n" })
+  has(c, 'The status on orders is renamed to state (the data stays)'); not(c, 'deleted for good')
+  c = lv({ 'database/migrations/2026_10_28_000000_r.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::rename('orders', 'purchases'); } };\n" })
+  has(c, 'Orders are renamed to purchases'); not(c, 'deleted for good')
+  // dropped and created again: emptied
+  has(lv({ 'database/migrations/2026_10_28_000000_r.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::dropIfExists('orders'); Schema::create('orders', function (Blueprint $t) { $t->id(); $t->string('status'); }); } };\n" }), 'deletes all orders')
+  // Review 20 (each a case that used to be wrong): who a route lets in
+  {
+    const app = (mw: string) => L['bootstrap/app.php'].replace('{ }', `{ ${mw} }`)
+    const post = web("Route::post('/orders', [OrderController::class, 'store']);\n")
+    const ctlWith = (code: string) => orders.replace('extends Controller {', `extends Controller {\n  ${code}`)
+    const open = 'the orders part of your server without logging in', V13 = { 'composer.json': '{"require":{"laravel/framework":"^13.39"}}' }
+    const lv13 = (extra: Record<string, string>) => card({ ...L, ...V13 }, { ...L, ...V13, 'app/Http/Controllers/OrderController.php': orders, ...extra })
+    const base10 = '<?php\nnamespace App\\Http\\Controllers;\nuse Illuminate\\Foundation\\Auth\\Access\\AuthorizesRequests;\nuse Illuminate\\Routing\\Controller as BaseController;\nclass Controller extends BaseController { use AuthorizesRequests; }\n'
+    // static middleware() counts only with `implements HasMiddleware`; the most-derived one replaces its parent's
+    has(lv({ ...post, 'app/Http/Controllers/OrderController.php': ctlWith("public static function middleware(): array { return ['auth']; }") }), open)
+    has(lv({ ...post, 'app/Http/Controllers/Controller.php': "<?php\nnamespace App\\Http\\Controllers;\nuse Illuminate\\Routing\\Controllers\\HasMiddleware;\nabstract class Controller implements HasMiddleware { public static function middleware(): array { return ['auth']; } }\n",
+      'app/Http/Controllers/OrderController.php': ctlWith("public static function middleware(): array { return []; }") }), open)
+    // a form request's authorize() that doesn't look at the user (a comment, TRUE) checks nobody
+    has(lv({ ...post, 'app/Http/Controllers/OrderController.php': orders.replace('store(Request $request)', 'store(StoreOrderRequest $request)'),
+      'app/Http/Requests/StoreOrderRequest.php': "<?php\nclass StoreOrderRequest extends FormRequest {\n  public function authorize(): bool\n  {\n    // Anyone can place an order\n    return TRUE;\n  }\n}\n" }), open)
+    // app middleware: guests let through, a guest-only one: plain claims nothing; a role check that turns guests away: login
+    const admin = (body: string) => lv({ ...web("Route::middleware('admin')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n"),
+      'bootstrap/app.php': app("$middleware->alias(['admin' => \\App\\Http\\Middleware\\EnsureAdmin::class]);"),
+      'app/Http/Middleware/EnsureAdmin.php': `<?php\nclass EnsureAdmin { public function handle(Request $request, Closure $next) { ${body} } }\n` })
+    for (const body of ["if ($request->user() && ! $request->user()->is_admin) { abort(403); } return $next($request);", "if (! Auth::check()) { return $next($request); } return redirect('/dashboard');"])
+      { const c = admin(body); not(c, 'requires login ✓', 'without logging in') }
+    has(admin("if (auth()->user()?->role !== 'admin') { abort(403); } return $next($request);"), 'requires login ✓')
+    // 10-style constructor options; Laravel 13's class-level #[WithoutMiddleware]; a require runs where it sits
+    has(lv({ ...post, 'app/Http/Controllers/Controller.php': base10, 'app/Http/Controllers/OrderController.php': ctlWith("public function __construct() { $this->middleware('auth', ['except' => ['store']]); }") }), open)
+    has(lv13({ ...web("Route::middleware('auth')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n"),
+      'app/Http/Controllers/OrderController.php': orders.replace('use App\\Models\\Order;', 'use App\\Models\\Order;\nuse Illuminate\\Routing\\Attributes\\Controllers\\WithoutMiddleware;').replace('class OrderController', "#[WithoutMiddleware('auth')]\nclass OrderController") }), open)
+    has(lv({ ...web("require __DIR__.'/orders.php';\nRoute::post('/orders', [OrderController::class, 'store']);\n"), 'routes/orders.php': "<?php\nRoute::middleware('auth')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n" }), open)
+    // policies that let guests in, however the type is written
+    const gate = { ...web("Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace("$order->update", "Gate::authorize('update', $order); $order->update") }
+    for (const t of ['?\\App\\Models\\User $user', 'User|null $user']) not(lv({ ...gate, 'app/Policies/OrderPolicy.php': `<?php\nclass OrderPolicy { public function update(${t}, Order $order): bool { return true; } }\n` }), 'requires login ✓')
+    // checks in the handler that turn guests away; $this->authorize without its trait crashes
+    const h = (code: string) => lv({ ...web("Route::delete('/orders/{order}', [OrderController::class, 'destroy']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace('public function index', `public function destroy(Request $request, Order $order) { ${code} $order->delete(); }\n  public function index`) })
+    has(h("if ($order->user_id !== auth()->id()) { abort(403); }"), 'requires login ✓')
+    has(h("if (! $request->user()?->is_admin) { abort(403); }"), 'requires login ✓')
+    has(lv({ ...web("Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace("$order->update", "$this->authorize('update', $order); $order->update") }), 'OrderController calls $this->authorize()')
+    // env() in tests isn't the app's
+    not(lv({ 'tests/Feature/OrderTest.php': "<?php\nnamespace Tests\\Feature;\nclass OrderTest extends TestCase { public function test_it(): void { $this->assertNotNull(env('STRIPE_SECRET')); } }\n" }), 'env()', 'STRIPE_SECRET')
+    // mass assignment when only the model changes; a key in a config file; an AI client isn't a table; Cashier's guest checkout is money
+    const B13 = { ...L, 'app/Http/Controllers/OrderController.php': orders.replace('$request->validated()', '$request->all()'), ...web("Route::post('/orders', [OrderController::class, 'store'])->middleware('auth');\n") }
+    has(card(B13, { ...B13, 'app/Models/Order.php': L['app/Models/Order.php'].replace('$fillable = ["status"]', '$guarded = []') }), 'the model accepts every field')
+    const fakeKey = ['sk', 'live', 'FAKEFAKEFAKEFAKE1234'].join('_')   // (assembled so code scanners don't take it for a real key)
+    has(lv({ 'config/services.php': `<?php\nreturn ['stripe' => ['secret' => '${fakeKey}']];\n` }), 'A secret key is written in config/services.php')
+    not(lv({ ...web("Route::post('/ask', [OrderController::class, 'ask'])->middleware('auth');\n"), 'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function ask(Request $request) { $client = OpenAI::client('x'); return $client->chat()->create([]); }\n  public function index") }), 'chats')
+    const LC = { ...L, 'composer.json': '{"require":{"laravel/framework":"^12.0","laravel/cashier":"^16.0"}}' }
+    has(card(LC, { ...LC, 'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function buy(Request $request) { return Checkout::guest()->create('price_x', []); }\n  public function index"), ...web("Route::post('/buy', [OrderController::class, 'buy']);\n") }), '💰')
+    // Laravel 10 RouteServiceProvider, also in a folder whose name ends in "app"; CSRF off for the whole site
+    const L10 = { ...L, 'bootstrap/app.php': "<?php\n$app = new Illuminate\\Foundation\\Application(dirname(__DIR__));\nreturn $app;\n",
+      'app/Providers/RouteServiceProvider.php': "<?php\nnamespace App\\Providers;\nclass RouteServiceProvider extends ServiceProvider { public function boot(): void { $this->routes(function () { Route::middleware('web')->group(base_path('routes/web.php')); }); } }\n" }
+    const a10 = { ...L10, 'app/Http/Controllers/OrderController.php': orders, ...post }
+    const pre = (o: Record<string, string>, d: string) => Object.fromEntries(Object.entries(o).map(([k, v]) => [d + k, v]))
+    for (const c of [card(L10, a10), card(pre(L10, 'my-app/'), pre(a10, 'my-app/'))]) { has(c, '/orders'); not(c, '//orders') }
+    has(lv({ 'bootstrap/app.php': app("$middleware->web(remove: [\\Illuminate\\Foundation\\Http\\Middleware\\ValidateCsrfToken::class]);") }), 'Forgery protection is turned off for the whole site')
+    not(card(L, { ...L, 'database/migrations/2026_10_28_000007_d.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::table('orders', function (Blueprint $table) { $table->dropConstrainedForeignId('user_id'); }); } };\n" }), '→')
+  }
+  // Review 20, round 2: checks only count when every request reaches them; Laravel's own aliases stay Laravel's; named guards
+  {
+    const app = (mw: string) => L['bootstrap/app.php'].replace('{ }', `{ ${mw} }`)
+    const mw = (routes: string, body: string, extra: Record<string, string> = {}) => lv({ ...web(routes),
+      'bootstrap/app.php': app("$middleware->alias(['admin' => \\App\\Http\\Middleware\\EnsureAdmin::class]);"),
+      'app/Http/Middleware/EnsureAdmin.php': `<?php\nnamespace App\\Http\\Middleware;\nclass EnsureAdmin { public function handle(Request $request, Closure $next) {\n${body}\n} }\n`, ...extra })
+    const grp = "Route::middleware('admin')->group(function () { Route::post('/orders', [OrderController::class, 'store']); Route::get('/menu', [OrderController::class, 'index']); });\n"
+    const silent = (c: string) => not(c, 'requires login ✓', 'without logging in')
+    // the app's own Authenticate (Laravel 10's Kernel alias, or just a class of that name on 11+) is still a login check
+    const auth10 = "<?php\nnamespace App\\Http\\Middleware;\nuse Illuminate\\Auth\\Middleware\\Authenticate as Middleware;\nclass Authenticate extends Middleware {\n  public function handle($request, Closure $next, ...$guards) {\n    if ($request->hasCookie('token')) { $request->headers->set('Authorization', 'Bearer x'); }\n    return parent::handle($request, $next, ...$guards);\n  }\n}\n"
+    const authGrp = web("Route::middleware('auth')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n")
+    has(lv({ ...authGrp, 'app/Http/Kernel.php': "<?php\nnamespace App\\Http;\nclass Kernel extends HttpKernel { protected $middlewareAliases = ['auth' => \\App\\Http\\Middleware\\Authenticate::class]; }\n", 'app/Http/Middleware/Authenticate.php': auth10 }), 'requires login ✓')
+    has(lv({ ...authGrp, 'app/Http/Middleware/Authenticate.php': auth10 }), 'requires login ✓')
+    // a check some requests skip (waved through first, behind a path test, after an early return, in an elseif): nothing claimed
+    silent(mw(grp, "if (! $request->user()) { return $next($request); }\nif (! $request->user()->is_admin) { abort(403); }\nreturn $next($request);"))
+    silent(mw(grp, "if ($request->is('menu', 'orders')) { return $next($request); }\nif (! auth()->check()) { return redirect()->route('login'); }\nreturn $next($request);"))
+    silent(lv({ ...web("Route::post('/orders', [OrderController::class, 'store']);\nRoute::get('/menu', [OrderController::class, 'index']);\n"), 'bootstrap/app.php': app("$middleware->web(append: [\\App\\Http\\Middleware\\EnsureAdmin::class]);"),
+      'app/Http/Middleware/EnsureAdmin.php': "<?php\nnamespace App\\Http\\Middleware;\nclass EnsureAdmin { public function handle(Request $request, Closure $next) {\n  if ($request->is('admin/*')) {\n    if (! $request->user()?->is_admin) { abort(403); }\n  }\n  return $next($request);\n} }\n" }))
+    const h = (code: string, extra: Record<string, string> = {}) => lv({ ...web("Route::delete('/orders/{order}', [OrderController::class, 'destroy']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace('public function index', `public function destroy(Request $request, Order $order) { ${code} $order->delete(); }\n  public function index`), ...extra })
+    silent(h("if ($order->is_public) { $ok = true; } elseif (! auth()->check()) { abort(403); }"))
+    // owner checks: the visitor's own input can't be the owner; a column that can be empty lets guests through for those rows
+    silent(lv({ ...web("Route::post('/orders', [OrderController::class, 'store']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace('public function store(Request $request) {', "public function store(Request $request) { if ($request->user_id !== auth()->id()) { abort(403); }") }))
+    const nullableUser = { 'database/migrations/2026_01_01_000000_create_orders_table.php': L['database/migrations/2026_01_01_000000_create_orders_table.php'].replace("foreignId('user_id')->constrained()", "foreignId('user_id')->nullable()->constrained()") }
+    has(h("abort_unless(auth()->id() === $order->user_id, 403);"), 'requires login ✓')
+    silent(h("abort_unless(auth()->id() === $order->user_id, 403);", nullableUser))
+    // form requests that let guests through while mentioning the user
+    const fr = (auth: string) => ({ ...web("Route::post('/orders', [OrderController::class, 'store']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace('store(Request $request)', 'store(StoreOrderRequest $request)'),
+      'app/Http/Requests/StoreOrderRequest.php': `<?php\nnamespace App\\Http\\Requests;\nclass StoreOrderRequest extends FormRequest { public function authorize(): bool { ${auth} } }\n` })
+    for (const a of ["return auth()->check() || config('shop.guest_checkout');", "return $this->user()?->is_banned !== true;"]) not(lv(fr(a)), 'requires login ✓')
+    has(lv(fr('return auth()->check() && $this->user()->can("order");')), 'requires login ✓')
+    // recording who did it isn't a check: the open-route warning stays
+    const refund = orders.replace('public function index', "public function refund(Request $request, Order $order) { $order->update(['status' => 'refunded', 'refunded_by' => auth()->id()]); return redirect()->back(); }\n  public function index")
+    has(lv({ ...web("Route::post('/admin/orders/{order}/refund', [OrderController::class, 'refund']);\n"), 'app/Http/Controllers/OrderController.php': refund }), 'Anyone can use the admin order refund part of your server without logging in')
+    // named guards
+    has(mw(grp, "if (! Auth::guard('admin')->check()) { return redirect()->route('admin.login'); }\nreturn $next($request);"), 'requires login ✓')
+    has(mw(grp, "abort_unless(auth('sanctum')->check(), 401);\nreturn $next($request);"), 'requires login ✓')
+  }
+  // Review 20, round 3: the app's Authenticate that skips paths; the user in a variable; escapes read from the code, not its text
+  {
+    const silent = (c: string) => not(c, 'requires login ✓', 'without logging in')
+    const grpAuth = web("Route::middleware('auth')->group(function () { Route::post('/orders', [OrderController::class, 'store']); Route::get('/menu', [OrderController::class, 'index']); });\n")
+    const k10 = "<?php\nnamespace App\\Http;\nclass Kernel extends HttpKernel { protected $middlewareAliases = ['auth' => \\App\\Http\\Middleware\\Authenticate::class, 'guest' => \\App\\Http\\Middleware\\RedirectIfAuthenticated::class]; }\n"
+    const authCls = (members: string) => `<?php\nnamespace App\\Http\\Middleware;\nuse Illuminate\\Auth\\Middleware\\Authenticate as Middleware;\nclass Authenticate extends Middleware {\n  protected $except = ['menu', 'orders'];\n${members}\n}\n`
+    silent(lv({ ...grpAuth, 'app/Http/Kernel.php': k10, 'app/Http/Middleware/Authenticate.php': authCls("  public function handle($request, Closure $next, ...$guards) {\n    if (! $request->is(...$this->except)) {\n      return parent::handle($request, $next, ...$guards);\n    }\n    return $next($request);\n  }") }))
+    silent(lv({ ...grpAuth, 'app/Http/Kernel.php': k10, 'app/Http/Middleware/Authenticate.php': authCls("  protected function authenticate($request, array $guards) {\n    if ($request->is(...$this->except)) { return; }\n    parent::authenticate($request, $guards);\n  }") }))
+    const h = (code: string) => lv({ ...web("Route::delete('/orders/{order}', [OrderController::class, 'destroy']);\n"), 'app/Http/Controllers/OrderController.php': orders.replace('public function index', `public function destroy(Request $request, Order $order) {\n    ${code}\n    $order->delete();\n  }\n  public function index`) })
+    has(h("$user = $request->user();\n    if (! $user) { abort(401); }"), 'requires login ✓')
+    has(h("$user = auth()->user();\n    abort_unless($user?->is_admin, 403);"), 'requires login ✓')
+    has(h("$total = $order->items->sum(function ($i) { return $i->price; });\n    if (! auth()->check()) { abort(401); }"), 'requires login ✓')
+    has(h("Log::info('customer may return the order');\n    if (! auth()->check()) { abort(401); }"), 'requires login ✓')
+    silent(h("if ($order->is_draft) { return response()->json(['ok' => true]); }\n    if (! auth()->check()) { abort(401); }"))
+    silent(h("try {\n      if (! auth()->check()) { abort(401); }\n    } catch (\\Throwable $e) { report($e); }"))
+    // an app's copy of RedirectIfAuthenticated is still guest-only
+    const redirect10 = "<?php\nnamespace App\\Http\\Middleware;\nclass RedirectIfAuthenticated {\n  public function handle(Request $request, Closure $next, string ...$guards): Response {\n    foreach ($guards as $guard) {\n      if (Auth::guard($guard)->check()) { return redirect('/home'); }\n    }\n    return $next($request);\n  }\n}\n"
+    has(lv({ ...web("Route::middleware('guest')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n"), 'app/Http/Kernel.php': k10, 'app/Http/Middleware/RedirectIfAuthenticated.php': redirect10 }), 'the orders part of your server without logging in')
+    // a form request's owner check on a column that can be empty; the visitor's input under another name
+    const nullMig = { 'database/migrations/2026_01_01_000000_create_orders_table.php': L['database/migrations/2026_01_01_000000_create_orders_table.php'].replace("foreignId('user_id')->constrained()", "foreignId('user_id')->nullable()->constrained()") }
+    silent(lv({ ...nullMig, ...web("Route::put('/orders/{order}', [OrderController::class, 'update']);\n"),
+      'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function update(UpdateOrderRequest $request, Order $order) { $order->update($request->validated()); }\n  public function index"),
+      'app/Http/Requests/UpdateOrderRequest.php': "<?php\nnamespace App\\Http\\Requests;\nclass UpdateOrderRequest extends FormRequest { public function authorize(): bool { return $this->order->user_id === auth()->id(); } }\n" }))
+    silent(lv({ ...web("Route::post('/orders', [OrderController::class, 'store']);\n"),
+      'app/Http/Controllers/OrderController.php': orders.replace('public function store(Request $request) {', "public function store(StoreOrderRequest $req) { if ($req->user_id !== auth()->id()) { abort(403); }").replace('Order::create($request->validated())', 'Order::create($req->validated())') }))
+    // a gate in a middleware, when gates let guests in
+    not(lv({ ...web("Route::middleware('menu')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n"),
+      'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->alias(['menu' => \\App\\Http\\Middleware\\MenuGate::class]); }"),
+      'app/Http/Middleware/MenuGate.php': "<?php\nnamespace App\\Http\\Middleware;\nclass MenuGate { public function handle(Request $request, Closure $next) { Gate::authorize('view-menu'); return $next($request); } }\n",
+      'app/Providers/AppServiceProvider.php': "<?php\nnamespace App\\Providers;\nclass AppServiceProvider extends ServiceProvider { public function boot(): void { Gate::define('view-menu', fn (?User $user) => true); } }\n" }), 'requires login ✓')
+  }
+  // Review 20, round 4: a user variable assigned again; a model called *Request; $next run inside a closure
+  {
+    const approve = (sig: string, code: string, extra: Record<string, string> = {}) => lv({ ...extra, ...web("Route::post('/orders/{order}/approve', [OrderController::class, 'approve']);\n"),
+      'app/Http/Controllers/OrderController.php': orders.replace('use App\\Models\\Order;', 'use App\\Models\\Order;\nuse App\\Models\\LeaveRequest;').replace('public function index', `public function approve(${sig}) {\n    ${code}\n    $order->update(['status' => 'approved']);\n  }\n  public function index`) })
+    for (const code of ["$user = $request->user();\n    $user = $user ?? User::where('email', $request->input('email'))->first();\n    if (! $user) { abort(401); }",
+      "$user = $request->user();\n    if ($request->filled('email')) { $user = User::firstWhere('email', $request->email); }\n    if (! $user) { abort(401); }",
+      "$user = auth()->user();\n    $user ??= User::find($request->input('as'));\n    abort_unless($user, 401);"]) not(approve('Request $request, Order $order', code), 'requires login ✓')
+    const leave = { 'database/migrations/2026_01_02_000000_create_leave_requests_table.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::create('leave_requests', function (Blueprint $table) { $table->id(); $table->foreignId('user_id')->constrained(); }); } };\n",
+      'app/Models/LeaveRequest.php': "<?php\nnamespace App\\Models;\nuse Illuminate\\Database\\Eloquent\\Model;\nclass LeaveRequest extends Model { public function user() { return $this->belongsTo(User::class); } }\n" }
+    not(approve('LeaveRequest $leaveRequest, Order $order', "abort_unless($leaveRequest->user()->exists(), 403);", leave), 'requires login ✓')
+    has(approve('LeaveRequest $leaveRequest, Order $order', "if ($leaveRequest->user_id !== auth()->id()) { abort(403); }", leave), 'requires login ✓')
+    not(lv({ ...web("Route::middleware('admin')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n"),
+      'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->alias(['admin' => \\App\\Http\\Middleware\\EnsureAdmin::class]); }"),
+      'app/Http/Middleware/EnsureAdmin.php': "<?php\nnamespace App\\Http\\Middleware;\nclass EnsureAdmin { public function handle(Request $request, Closure $next) {\n  $response = DB::transaction(fn () => $next($request));\n  if (! $request->user()) { abort(403); }\n  return $response;\n} }\n" }), 'requires login ✓')
+  }
+  console.log('ok (laravel)')
+}

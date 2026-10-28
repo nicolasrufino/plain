@@ -13,6 +13,7 @@ import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
 import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
 import { javaFacts, type JavaFacts, type Family } from './java.ts'
+import { phpFacts, modelOf, type PhpFacts, type SchemaOp, type Mw } from './php.ts'
 import { csFacts, mergeAuth, join as csJoin, under, csPath, type CsFacts, type CsClass, type CsRoute, type ExtCall, type Auth } from './csharp.ts'
 
 export type Snap = Map<string, string>
@@ -51,7 +52,7 @@ const HOSTS: Record<string, string> = {
 const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
-const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java)$/
+const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java)$|(?<!\.blade)\.php$/   // (Blade templates aren't read)
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
 
@@ -647,10 +648,10 @@ const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.
 
 export function appFacts(snap: Snap) {
   const files = new Map<string, FileFacts>()
-  for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/')) {
+  for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/') && !/(^|\/)(vendor|storage|bootstrap\/cache)\//.test(p)) {
     // (EF migrations and their snapshots are read as migrations, not as code)
     if (/(^|\/)Migrations\/[^/]+\.cs$/.test(p)) continue
-    try { const f = p.endsWith('.java') ? javaFacts(p, t, empty) : p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
+    try { const f = p.endsWith('.php') ? phpFacts(p, t, empty) : p.endsWith('.java') ? javaFacts(p, t, empty) : p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
   }
   // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
   const resolve = (from: string, spec: string): string | undefined => {
@@ -687,6 +688,8 @@ export function appFacts(snap: Snap) {
     // Java: pom.xml <artifactId> (with <version>), build.gradle implementation 'group:artifact:version'
     ...[...snap].filter(([p]) => /(^|\/)pom\.xml$/.test(p)).map(([, t]) => Object.fromEntries([...t.replace(/<parent>[\s\S]*?<\/parent>|<plugins>[\s\S]*?<\/plugins>/g, '').matchAll(/<dependency>[\s\S]*?<artifactId>([^<]+)<\/artifactId>(?:[\s\S]*?<version>([^<]+)<\/version>)?[\s\S]*?<\/dependency>/g)].map(m => [m[1], m[2] ?? '*']))),
     ...[...snap].filter(([p]) => /(^|\/)build\.gradle(\.kts)?$/.test(p)).map(([, t]) => Object.fromEntries([...t.matchAll(/(?:implementation|api|runtimeOnly|compileOnly)\s*\(?\s*['"]([\w.-]+):([\w.-]+)(?::([\w.-]+))?['"]/g)].map(m => [m[2], m[3] ?? '*']))),
+    // PHP: composer.json require / require-dev
+    ...[...snap].filter(([p]) => /(^|\/)composer\.json$/.test(p) && !/(^|\/)vendor\//.test(p)).map(([, t]) => { try { const j = JSON.parse(t); return Object.fromEntries(Object.entries({ ...j.require, ...j['require-dev'] }).filter(([k]) => k.includes('/'))) } catch { return {} } }),   // (not php, ext-*)
     // .NET: <PackageReference Include="Stripe.net" Version="47.0.0" />
     ...[...snap].filter(([p]) => p.endsWith('.csproj')).map(([, t]) => Object.fromEntries([...t.matchAll(/<PackageReference\s+Include="([^"]+)"(?:\s+Version="([^"]*)")?/g)].map(m => [m[1], m[2] ?? '*'])))) as Record<string, string>
   for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
@@ -718,6 +721,7 @@ export function appFacts(snap: Snap) {
   }
   const csModels = new Map<string, string[]>()   // Entity Framework entities (filled in below)
   const javaModels = new Map<string, string[]>()   // JPA @Entity classes
+  const phpModels = new Map<string, string[]>()    // Laravel: the tables its migrations build
   const svelteUrls = new Map<string, string>()   // SvelteKit pages: their <form method="POST"> sends to this address
   // Where a hook's or middleware's login check applies: each checking `if` covers what its path tests allow, and an earlier
   // `if (<path test>) return ...` lets those addresses through unchecked. Tests: startsWith, ===, !==, ['/a', '/b'].includes(path),
@@ -976,6 +980,153 @@ export function appFacts(snap: Snap) {
       if (ref) { if (k === 'env' || !ref[2]) f[k].add(ref[1]) } else if (v === undefined) f[k].add(name.replace(/[.-]/g, (c) => c === '.' ? '_' : '').toUpperCase())
     }
   }
+  // Laravel: which route files load (routes/web.php; routes/api.php under /api when bootstrap/app.php or a RouteServiceProvider registers
+  // it; the files they include), each route's middleware (its groups', its own, its controller's, minus withoutMiddleware), and login
+  // from those (see src/php.ts). Test code (tests/) is left out.
+  for (const [p, f] of files) if (p.endsWith('.php') && /(^|\/)tests\//.test(p)) { f.env.clear(); f.envReq.clear() }
+  const phpFiles = [...files].filter(([p]) => p.endsWith('.php') && !/(^|\/)tests\//.test(p)).map(([p, f]) => [p, (f as PhpFacts).php] as const)
+  if (phpFiles.length) {
+    const byPath = new Map(phpFiles)
+    const app = phpFiles.find(([, x]) => x.app)?.[1].app
+    const classes = new Map(phpFiles.flatMap(([p, x]) => [...x.classes].map(([k, v]) => [k, { p, ...v }] as const)))
+    const methods = new Map(phpFiles.flatMap(([, x]) => [...x.methods]))
+    const params = new Map(phpFiles.flatMap(([, x]) => [...x.params]))
+    const appMw = new Map(phpFiles.flatMap(([, x]) => [...x.middleware]))
+    const formRequests = new Map(phpFiles.flatMap(([, x]) => [...x.formRequests]))
+    const notifications = new Map(phpFiles.flatMap(([, x]) => [...x.notifications]))
+    const config = new Map(phpFiles.flatMap(([, x]) => [...x.config]))
+    // classes by full name (App\Http\Controllers\Admin\EventController); a name plain couldn't resolve (no namespace, a missing import)
+    // falls back to the one class with that short name
+    const bareName = (c: string) => c.split('\\').at(-1)!
+    const lookup = (c?: string) => !c ? undefined : classes.has(c) ? c : (() => { const m = [...classes.keys()].filter(k => bareName(k) === bareName(c)); return m.length === 1 ? m[0] : undefined })()
+    const chainOf = (c?: string, seen = new Set<string>()): string[] => { const k = lookup(c); return !k || seen.has(k) ? [] : [k, ...chainOf(classes.get(k)!.base, seen.add(k))] }
+    const models = new Set([...classes].filter(([, c]) => c.model).map(([k]) => bareName(k)))
+    // Laravel 13's #[Middleware] attributes: 'yes' when composer only allows 13+, 'no' when only older, else plain can't tell
+    const majors = [...(deps_['laravel/framework'] ?? '').matchAll(/(?:^|[\^~=|>,\s])v?(\d+)/g)].map(m => +m[1])
+    const lv13 = !majors.length || /\*|dev-/.test(deps_['laravel/framework'] ?? '*') ? 'maybe' : majors.every(n => n >= 13) ? 'yes' : majors.every(n => n < 13) && !/>/.test(deps_['laravel/framework']) ? 'no' : 'maybe'
+    // aliases: Laravel's own, then the app's (bootstrap/app.php; 10-style Kernel.php $middlewareAliases / $routeMiddleware)
+    const DEFAULTS = new Map<string, string>([['auth', 'Authenticate'], ['auth.basic', 'AuthenticateWithBasicAuth'], ['verified', 'EnsureEmailIsVerified'], ['can', 'Authorize'],
+      ['guest', 'RedirectIfAuthenticated'], ['signed', 'ValidateSignature'], ['throttle', 'ThrottleRequests'], ['password.confirm', 'RequirePassword'], ['auth.session', 'AuthenticateSession'],
+      ['cache.headers', 'SetCacheHeaders'], ['precognitive', 'HandlePrecognitiveRequests'], ['bindings', 'SubstituteBindings']])
+    const aliases = new Map(app?.aliases ?? [])
+    for (const [p, t] of snap) if (/(^|\/)app\/Http\/Kernel\.php$/.test(p)) for (const m of t.matchAll(/['"]([\w.]+)['"]\s*=>\s*\\?([\w\\]+)::class/g)) aliases.set(m[1], m[2].split('\\').at(-1)!)
+    // a gate or policy that lets guests in (?User, ?\App\Models\User, User|null, mixed, User $user = null): its checks don't mean login
+    const guestPolicies = [...snap].some(([p, t]) => /(^|\/)app\/(Policies|Providers)\/.*\.php$/.test(p) && /\?\\?[\w\\]*User\b|\b\w*User\s*\|\s*null\b|\bnull\s*\|\s*\\?[\w\\]*User\b|\bmixed\s+\$\w+|User\s+\$\w+\s*=\s*null/.test(t))
+    const LOGIN = /^(Authenticate|AuthenticateWithBasicAuth|EnsureEmailIsVerified|RequirePassword|CheckAbilities|CheckForAnyAbility|RoleMiddleware|PermissionMiddleware|RoleOrPermissionMiddleware)$/
+    const NOT_LOGIN = /^(RedirectIfAuthenticated|ValidateSignature|ThrottleRequests\w*|AuthenticateSession|SetCacheHeaders|HandlePrecognitiveRequests|SubstituteBindings|EnsureFrontendRequestsAreStateful|ValidateCsrfToken|VerifyCsrfToken|PreventRequestForgery|EncryptCookies|StartSession|ShareErrorsFromSession|AddQueuedCookiesToResponse|HandleInertiaRequests|AddLinkHeadersForPreloadedAssets|HandleAppearance|HandleCors|TrimStrings|ConvertEmptyStringsToNull|TrustProxies|ValidatePostSize|PreventRequestsDuringMaintenance|web|api)$/
+    // 'auth:sanctum' -> Authenticate:sanctum, what withoutMiddleware compares
+    const resolved = (m: string) => { const [n, ...rest] = m.split(':'); return (aliases.get(n) ?? DEFAULTS.get(n) ?? n) + (rest.length ? ':' + rest.join(':') : '') }
+    const kind = (m: string): 'login' | 'policy' | 'none' | 'unknown' => {
+      const n = m.split(':')[0], c = resolved(m).split(':')[0]
+      // the app's own class (an alias of the app's, or a class named directly; apps write their own RoleMiddleware too): its handle()
+      // decides. Laravel's own aliases ('auth') stay Laravel's, whatever classes of the same name the app has.
+      if (NOT_LOGIN.test(c)) return 'none'   // (an app's copy of RedirectIfAuthenticated is still guest-only)
+      if ((aliases.has(n) || !DEFAULTS.has(n)) && appMw.has(c)) { const v = appMw.get(c)!; return v === 'policy' && guestPolicies ? 'unknown' : v }
+      if (c === 'Authorize') return guestPolicies ? 'unknown' : 'policy'
+      if (LOGIN.test(c)) return 'login'
+      return NOT_LOGIN.test(c) ? 'none' : 'unknown'
+    }
+    const groupMw = (name: string) => [...app?.groups.get(name) ?? []]
+    // route files: from bootstrap/app.php (11+) or a provider's group(base_path(...)) (10), else Laravel's defaults
+    type Ctx = { prefix: string; mw: string[]; without: string[] }
+    const rootOf = (p: string) => p.match(/^((?:[^/]+\/)*?)(?:routes|bootstrap|app)\//)?.[1] ?? ''
+    const base = rootOf(phpFiles.find(([p]) => /(^|\/)(routes|bootstrap)\//.test(p))?.[0] ?? '')
+    const entries: (Ctx & { file: string })[] = []
+    const providerIncludes = phpFiles.filter(([p]) => /(^|\/)(bootstrap\/app|app\/Providers\/\w+)\.php$/.test(p)).flatMap(([, x]) => x.includes)
+    if (app) {
+      if (!app.using) {
+        for (const f of app.api ?? []) entries.push({ file: f, prefix: '/' + app.apiPrefix.replace(/^\/|\/$/g, ''), mw: ['api'], without: [] })
+        for (const f of app.web ?? []) entries.push({ file: f, prefix: '', mw: ['web'], without: [] })
+      }
+      entries.push(...providerIncludes)
+    } else if (providerIncludes.length) entries.push(...providerIncludes)
+    else entries.push({ file: base + 'routes/api.php', prefix: '/api', mw: ['api'], without: [] }, { file: base + 'routes/web.php', prefix: '', mw: ['web'], without: [] })
+    // every route, in the order Laravel registers them (an included file's routes where the require is); the same method and
+    // address defined again replaces the earlier one
+    const found = new Map<string, { p: string; r: import('./php.ts').PhpRoute; method: string; ctx: Ctx }>()
+    const slashes = (u: string) => u.replace(/\/+/g, '/').replace(/(.)\/$/, '$1') || '/'
+    const visit = (file: string, ctx: Ctx, seen: Set<string>) => {
+      const x = byPath.get(file); if (!x || seen.has(file)) return
+      seen = new Set([...seen, file])
+      for (const item of [...x.routes, ...x.includes].sort((a, b) => a.at - b.at)) {
+        if ('file' in item) { visit(item.file, { prefix: ctx.prefix + item.prefix, mw: [...ctx.mw, ...item.mw], without: [...ctx.without, ...item.without] }, seen); continue }
+        for (const method of item.methods) {
+          const key = `${method} ${slashes(ctx.prefix + item.path)}`
+          found.delete(key); found.set(key, { p: file, r: item, method, ctx: { prefix: ctx.prefix, mw: [...ctx.mw, ...item.mw], without: [...ctx.without, ...item.without] } })
+        }
+      }
+    }
+    for (const e of entries) visit(e.file, e, new Set())
+    // the tables, as the migrations build them (in file-name order, as Laravel runs them); a table only altered here (a package's) isn't one
+    const tableClass = new Map([...classes].filter(([, c]) => c.model && c.table).map(([k, c]) => [c.table!, bareName(k)]))
+    const tables = new Map<string, string[]>()
+    for (const [, x] of phpFiles.filter(([p]) => /(^|\/)database\/migrations\//.test(p)).sort(([a], [b]) => a.split('/').pop()!.localeCompare(b.split('/').pop()!)))
+      for (const s of x.schema as SchemaOp[]) {
+        if (s.op === 'drop') tables.delete(s.table)
+        else if (s.op === 'rename' && s.to) { const t = tables.get(s.table); tables.delete(s.table); if (t) tables.set(s.to, t) }
+        else if (s.table && (s.op === 'create' || tables.has(s.table))) { const t = s.op === 'create' ? [] : tables.get(s.table)!
+          tables.set(s.table, [...t.filter(c => !s.drop.includes(c)).map(c => s.renames.find(([a]) => a === c)?.[1] ?? c), ...s.add.filter(c => !t.includes(c))]) }
+      }
+    for (const [t, cols] of tables) phpModels.set(tableClass.get(t) ?? modelOf(t), cols)
+    const nullable = new Set(phpFiles.flatMap(([, x]) => x.schema.flatMap(o => o.nullable ?? [])))   // columns that may be empty (any table)
+    // a table name in the code: an Eloquent model (Order::create), a relation ($user->orders()->create), DB::table('orders'); only
+    // when that model or table exists ($client->chat()->create(...) is an API call)
+    const modelName = (t: string) => { if (t.startsWith('@m:')) return models.has(t.slice(3)) ? t.slice(3) : undefined
+      if (!/^@(rel|tbl):/.test(t)) return t
+      const tb = t.replace(/^@\w+:/, '').replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase(), m = tableClass.get(tb) ?? modelOf(tb)
+      return models.has(m) || t.startsWith('@tbl:') && tables.has(tb) ? m : undefined }
+    const cashier = Object.keys(deps_).some(d => d === 'laravel/cashier')
+    const finish = (g: FileFacts) => {
+      for (const k of ['tables', 'written'] as const) for (const t of [...g[k]]) if (t.startsWith('@')) { g[k].delete(t); const m = modelName(t); if (m) g[k].add(m) }
+      g.writes = g.written.size > 0; if (!g.writes) g.ops.clear()
+      for (const k of ['env', 'envReq'] as const) for (const x of [...g[k]]) if (x.startsWith('@cfg:')) { g[k].delete(x); const c = config.get(x.slice(5)); if (c && (k === 'env' || !c.optional)) g[k].add(c.env) }
+      if (cashier && (g.used.has('cashier:charge') || g.used.has('cashier:checkout'))) { g.money = true; g.services.add('Stripe') }
+      if (cashier && g.used.has('cashier:refund')) { g.services.add('Stripe'); g.outside.add('Stripe: refunds.create') }
+      for (const u of g.used) if (u.startsWith('notify:') && notifications.get(u.slice(7))) { g.services.add('email'); g.outside.add('email: send') }
+      return g
+    }
+    const expand = (mw: string[]): string[] => mw.flatMap(m => m === 'web' || m === 'api' ? [m, ...groupMw(m)] : [m])
+    const applies = (fn: string) => (m: Mw) => (!m.only || m.only.includes(fn)) && !m.except?.includes(fn)
+    for (const [, { p, r, method, ctx }] of found) {
+      const chain = chainOf(r.cls), fn = r.fn ?? '', k = (c: string) => classes.get(c)!
+      // the controller's middleware: HasMiddleware's static middleware() (only with the interface; the most-derived one counts), else
+      // a 10-style constructor (which only Illuminate's Controller has); Laravel 13 attributes on top
+      const hasMw = chain.some(c => k(c).interfaces.includes('HasMiddleware'))
+      const fromStatic = hasMw ? chain.map(c => k(c).staticMw).find(Boolean) ?? [] : []
+      const fromCtor = hasMw ? [] : chain.some(c => k(c).illuminate) ? chain.flatMap(c => k(c).ctorMw) : chain.some(c => k(c).ctorMw.length) ? [{ mw: '?' }] : []
+      const attrs = chain.flatMap(c => [...k(c).attrMw, ...k(c).methodMw.get(fn) ?? []]), attrOff = chain.flatMap(c => [...k(c).without, ...k(c).methodWithout.get(fn) ?? []])
+      const ctrl = [...fromStatic, ...fromCtor, ...lv13 === 'no' ? [] : attrs.map(m => lv13 === 'yes' ? m : { ...m, mw: '?' })].filter(applies(fn)).map(m => m.mw)
+      const offAttrs = lv13 === 'no' ? [] : attrOff.filter(applies(fn)).map(m => m.mw)
+      // withoutMiddleware('auth') removes 'auth', and since Laravel 13.39 'auth:sanctum' too (the class before the colon): read that
+      // way on every version, so it errs toward a warning
+      const without = [...ctx.without, ...offAttrs].map(resolved)
+      const off = (m: string) => without.includes(resolved(m)) || without.includes(resolved(m).split(':')[0])
+      const mws = [...expand(ctx.mw), ...groupMw('*'), ...ctrl].filter(m => !off(m)).concat(lv13 === 'maybe' && offAttrs.length ? ['?'] : [])
+      const h = r.facts ?? chain.map(c => methods.get(`${c}.${fn}`)).find(Boolean)
+      const facts = finish(Object.assign(empty(), h, { tables: new Set(h?.tables), written: new Set(h?.written), ops: new Set(h?.ops), env: new Set(h?.env), envReq: new Set(h?.envReq), services: new Set(h?.services), outside: new Set(h?.outside), used: new Set(h?.used), refuses: new Set(h?.refuses) }))
+      // in the handler: its own check; a gate or policy; a FormRequest whose authorize() checks the user; $this->authorize needs a trait
+      // (AuthorizesRequests, on Laravel 10's base controller): without it every request crashes
+      const authorizes = chain.some(c => k(c).traits.includes('AuthorizesRequests'))
+      if (h?.check === 'crash' && !authorizes && r.cls) byPath.get(classes.get(chain[0] ?? '')?.p ?? '')?.risks.add(`authz:${bareName(chain[0] ?? r.cls)}`)
+      // an owner check ($order->user_id !== auth()->id()) turns guests away only while that column is never empty
+      const check = h?.check === 'crash' ? (authorizes ? 'policy' : 'unknown') : h?.check?.startsWith('owner:') ? (nullable.has(h.check.slice(6)) ? 'unknown' : 'login') : h?.check
+      const ps = chain.map(c => params.get(`${c}.${fn}`)).find(Boolean) ?? []
+      const fr = ps.map(t => { const v = formRequests.get(t); return v?.startsWith('owner:') ? (nullable.has(v.slice(6)) ? 'unknown' : 'login') : v }).filter(Boolean)
+      const kinds = [...mws.map(kind), check === 'login' ? 'login' : check === 'policy' || fr.includes('login') ? (guestPolicies ? 'unknown' : 'policy')
+        : check === 'unknown' || fr.includes('unknown') ? 'unknown' : 'none']
+      const guard = kinds.some(x => x === 'login' || x === 'policy')
+      const m = method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : method
+      const at = r.cls ? classes.get(chain.find(c => methods.has(`${c}.${fn}`)) ?? r.cls)?.p ?? p : p
+      files.get(at)!.handlers.push({ server: '', method: m, path: slashes(ctx.prefix + r.path), guard, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
+    }
+    // the files' own facts: config files' env() calls count only through the config() calls that read them
+    for (const [p] of phpFiles) { const f = files.get(p)!; if (/(^|\/)(config|bootstrap|database)\//.test(p)) { f.env.clear(); f.envReq.clear() } finish(f) }
+    // $this->middleware() in a constructor: only Illuminate's Controller has it (Laravel 10's base); on 11+'s bare base it's a crash
+    for (const [c, x] of classes) if (x.ctorMw.length && !chainOf(c).some(y => classes.get(y)!.illuminate) && !chainOf(c).some(y => classes.get(y)!.interfaces.includes('HasMiddleware'))) byPath.get(x.p)!.risks.add(`ctor:${bareName(c)}`)
+    // the visitor's whole input saved into a model that accepts every field ($guarded = [], or Model::unguard() for all of them)
+    const unguardAll = phpFiles.some(([, x]) => x.risks.has('unguard'))
+    for (const [, x] of phpFiles) for (const r of x.risks) if (r.startsWith('all:') && (unguardAll || [...classes].some(([q, c]) => c.model && c.unguarded && bareName(q) === r.slice(4)))) x.risks.add('mass')
+  }
   // form actions outside SvelteKit aren't routes
   for (const f of files.values()) f.handlers = f.handlers.filter(h => h.server !== '@actions')
   // TanStack server actions: calling one (createBooking({ data }), useServerFn(createBooking)) talks to the server.
@@ -1202,10 +1353,12 @@ export function appFacts(snap: Snap) {
     }
   for (const [m, fs] of csModels) all.set(m, fs)
   for (const [m, fs] of javaModels) all.set(m, fs)
+  for (const [m, fs] of phpModels) all.set(m, fs)
   const pyModels = new Set<string>()
   for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()),
+    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()),
+    phpMigrations: [...snap.keys()].filter(p => /(^|\/)database\/migrations\/[^/]+\.php$/.test(p)),
     // Flyway: src/main/resources/db/migration/V2__add_coupons.sql
     flyway: [...snap.keys()].filter(p => /(^|\/)db\/migration\/V[\d_.]+__[\w-]+\.sql$/.test(p)),
     efMigrations: [...snap.keys()].filter(p => /(^|\/)Migrations\/\d+_\w+\.cs$/.test(p) && !/\.Designer\.cs$/.test(p)),
@@ -1296,6 +1449,14 @@ export type Analysis = ReturnType<typeof analyze>
 type Opts = { ref: string; asked?: string; color?: boolean; agentSaid?: string }   // agentSaid: the agent's last message, if known
 export const report = (before: Snap, after: Snap, opts: Opts) => render(analyze(before, after, opts))
 
+// Python and PHP: the mistakes AI makes most (Bandit / Semgrep rules), reported when they're new in a change
+const RISK: Record<string, Problem> = {
+  debug: { kind: 'Unsafe', text: "Debug mode is turned on. If this runs on your live site, an error page can show visitors your code and settings." },
+  secret: { kind: 'Unsafe', text: "The app's secret key is written in the code. Anyone who sees the code can fake logins. Move it to an environment variable." },
+  sql: { kind: 'Unsafe', text: 'A database query is built by pasting in text, which lets attackers read or change your data (SQL injection). Use query parameters instead.' },
+  cors: { kind: 'Check', text: "Any website can call your server from a visitor's browser (CORS allows all sites). Fine for a public API, not for one that uses logins." },
+  csrf: { kind: 'Check', text: 'A form was excluded from forgery protection (csrf_exempt). Other sites could submit it for a logged-in visitor.' },
+}
 export function analyze(before: Snap, after: Snap, opts: Opts) {
   const A = appFacts(before), B = appFacts(after)
   const route = (p: string) => B.routes.get(p) ?? A.routes.get(p) ?? null
@@ -1382,7 +1543,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         clauses.push(...new Set(can))
         if (b.money) clauses.push('charges customers 💰')
         if (b.auth && !isPublic(r.url)) clauses.push('requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
-        else if (!b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url)) clauses.push('works without logging in')   // read-only; changing ones get a warning instead
+        else if (!b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown) clauses.push('works without logging in')   // (not when plain can't tell)   // read-only; changing ones get a warning instead
       } else {
         // what it now does to them: an address that gains update and delete doesn't "save" anything new
         // (ops aren't kept per table, so only when it writes to that one table alone)
@@ -1456,8 +1617,16 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   }
 
   // database
+  // Laravel renames (Schema::rename, renameColumn) keep the data: say renamed, not deleted
+  const renameOps = B.phpMigrations.filter(m => !A.phpMigrations.includes(m)).flatMap(m => (B.files.get(m) as PhpFacts | undefined)?.php.schema ?? [])
+  const renamedTo = new Map(renameOps.filter(x => x.op === 'rename' && x.to).map(x => [modelOf(x.table), modelOf(x.to!)]))
+  const colRenamed = new Map(renameOps.flatMap(x => x.renames.map(([a, b]) => [`${modelOf(x.table)}.${a}`, b] as const)))
+  for (const [from, to] of renamedTo) if (A.models.has(from) && B.models.has(to)) {
+    changes.push({ group: 'Database', text: `${cap(things(from))} are renamed to ${things(to)} in the database. The data stays, but code that still uses the old name will break.` })
+    ship.push(`Check that nothing still uses the old table name (${things(from)}) before you apply the migration that renames it.`)
+  }
   for (const [m, fields] of B.models) {
-    const old = A.models.get(m), links = (fs: string[]) => fs.filter(f => f.startsWith('→')).map(f => f.slice(1))
+    const old = A.models.get(m) ?? A.models.get([...renamedTo].find(([, t]) => t === m)?.[0] ?? ''), links = (fs: string[]) => fs.filter(f => f.startsWith('→')).map(f => f.slice(1))
     if (!old) {
       const l = links(fields)
       const one = l.filter(x => !x.endsWith('[]')).map(x => an(words(x))), many = l.filter(x => x.endsWith('[]')).map(x => things(x.slice(0, -2)))
@@ -1465,7 +1634,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       changes.push({ group: 'Database', isNew: true, name: things(m), text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}${ownOnly(B.db, m) && !findings(B.db, new Set(), things).some(x => new RegExp(`\\b${things(m)}\\b`).test(x.text)) ? ' Each person can only see their own ✓' : ''}` })
       continue
     }
-    const add = fields.filter(x => !old.includes(x)), del = old.filter(x => !fields.includes(x))
+    const moved = old.filter(x => !fields.includes(x) && fields.includes(colRenamed.get(`${m}.${x}`) ?? ''))
+    for (const x of moved) changes.push({ group: 'Database', text: `The ${fieldName(x) || x} on ${things(m)} is renamed to ${fieldName(colRenamed.get(`${m}.${x}`)!) || colRenamed.get(`${m}.${x}`)} (the data stays).` })
+    const add = fields.filter(x => !old.includes(x) && !moved.some(y => colRenamed.get(`${m}.${y}`) === x)), del = old.filter(x => !fields.includes(x) && !moved.includes(x))
     if (fieldList(add)) changes.push({ group: 'Database', name: things(m), text: `${cap(things(m))} now also store the ${fieldList(add)}.` })
     if (links(add).length) changes.push({ group: 'Database', text: `${cap(things(m))} are now linked to ${list(links(add).map(x => things(x.replace('[]', ''))))}.` })
     if (del.length) {
@@ -1473,7 +1644,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       ship.push(`Back up your data first: the ${fieldList(del) || list(del)} on ${things(m)} will be deleted for good.`)
     }
   }
-  for (const m of A.models.keys()) if (!B.models.has(m)) {
+  for (const m of A.models.keys()) if (!B.models.has(m) && !(renamedTo.has(m) && B.models.has(renamedTo.get(m)!))) {
     changes.push({ group: 'Database', text: `Your database will no longer store ${things(m)}.` })
     ship.push(`Back up your data first: all ${things(m)} will be deleted for good.`)
   }
@@ -1584,6 +1755,40 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   }
   for (const p of real) if ((B.files.get(p) as JavaFacts | undefined)?.java?.risks.has('cors') && !(A.files.get(p) as JavaFacts | undefined)?.java?.risks.has('cors'))
     problems.push({ kind: 'Check', text: `Any website can call your server from a visitor's browser (CORS allows all sites). Fine for a public API, not for one that uses logins. (in ${p})` })
+  // Laravel: new migrations run with `php artisan migrate --force` (without --force it does nothing on a live site); what they drop is
+  // listed above, from the tables they build. Said here: a raw DELETE / DROP, and a table dropped and created again (emptied).
+  const newPhp = B.phpMigrations.filter(m => !A.phpMigrations.includes(m))
+  for (const m of newPhp) { const ops = (B.files.get(m) as PhpFacts | undefined)?.php.schema ?? []
+    const emptied = ops.filter(x => x.op === 'drop' && ops.some(y => y.op === 'create' && y.table === x.table) && A.models.has(modelOf(x.table))).map(x => things(modelOf(x.table)))
+    if (emptied.length) ship.push(`Back up your data first: ${m} deletes all ${list(emptied)} (it drops the table and creates it again, empty).`)
+    else if (ops.some(x => x.loses && !x.table)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`) }
+  if (newPhp.length) ship.push(`Apply ${list(newPhp.map(m => m.split('/').pop()!.replace(/\.php$/, '')))} to your live database before the new code goes live (\`php artisan migrate --force\`), or the parts that use it will fail.`)
+  const PHP_RISK: Record<string, Problem> = {
+    mass: { kind: 'Unsafe', text: 'Saves whatever the visitor sends ($request->all()) into the database, and the model accepts every field. A visitor could set fields like is_admin, price or user_id. Use $request->validated(), or list the allowed fields in $fillable.' },
+    force: { kind: 'Unsafe', text: 'Saves whatever the visitor sends ($request->all()) with forceFill / forceCreate, which skips the list of allowed fields. A visitor could set fields like is_admin, price or user_id. Use $request->validated().' },
+  }
+  const phpX = (X: typeof A, p: string) => (X.files.get(p) as PhpFacts | undefined)?.php
+  // mass assignment depends on the model too (made to accept every field in another file): every file, not only the changed ones
+  for (const [p] of B.files) if (phpX(B, p)?.risks.has('mass') && !phpX(A, p)?.risks.has('mass') && !real.includes(p)) problems.push({ ...PHP_RISK.mass, text: `${PHP_RISK.mass.text} (in ${p})` })
+  for (const p of real) {
+    const x = phpX(B, p), was = phpX(A, p)
+    if (!x || /(^|\/)tests\//.test(p)) continue
+    for (const r of x.risks) if (!was?.risks.has(r)) {
+      if (r.startsWith('all:') || r === 'unguard') continue
+      if (PHP_RISK[r]) problems.push({ ...PHP_RISK[r], text: `${PHP_RISK[r].text} (in ${p})` })
+      else if (RISK[r]) problems.push({ ...RISK[r], text: `${RISK[r].text} (in ${p})` })
+      else if (r.startsWith('env:')) problems.push({ kind: 'Check', text: `${p} reads ${r.slice(4)} with env() outside the config folder. Once your live site caches its settings (\`php artisan config:cache\` or \`optimize\`, which Laravel deploys usually run), that gives nothing. Read it in a config file (like config/services.php) and use config(...) here.` })
+      else if (r.startsWith('ctor:')) problems.push({ kind: 'Broken', text: `${r.slice(5)} calls $this->middleware() in its constructor, which Laravel 11 and later controllers don't have: every address it handles will crash. Use the HasMiddleware interface, or ->middleware(...) on the routes.` })
+      else if (r.startsWith('authz:')) problems.push({ kind: 'Broken', text: `${r.slice(6)} calls $this->authorize(), which Laravel 11 and later controllers don't have (it needs the AuthorizesRequests trait): those addresses will crash. Use Gate::authorize(...) instead.` })
+    }
+    // forgery protection switched off for addresses that aren't payment or webhook callbacks ('*': for all of them)
+    const off = x.csrf.filter(e => !/stripe|webhook|hook|paddle|paypal|callback|ipn|twilio|mailgun|postmark|resend|lemon/i.test(e) && !was?.csrf.includes(e))
+    if (off.includes('*')) problems.push({ kind: 'Unsafe', text: `Forgery protection is turned off for the whole site. Other sites could send your forms (change settings, place orders) for a logged-in visitor. (in ${p})` })
+    else if (off.length) problems.push({ kind: 'Check', text: `${list(off.map(e => `"${e}"`))} ${off.length > 1 ? 'are' : 'is'} excluded from forgery protection. Other sites could send those forms for a logged-in visitor. (in ${p})` })
+    // a real key written in a PHP file (config/services.php 'secret' => 'sk_live_...') is visible to anyone who can see the code
+    const secret = (t = '') => t.match(/['"](sk_live_\w{8,}|sk_test_\w{8,}|rk_live_\w{8,}|whsec_\w{8,}|re_\w{16,}|SG\.[\w-]{16,}\.[\w-]{16,}|sk-proj-[\w-]{16,}|sk-ant-[\w-]{16,}|base64:[A-Za-z0-9+/]{40,}={0,2})['"]/)?.[1]
+    if (secret(after.get(p)) && !secret(before.get(p))) problems.push({ kind: 'Unsafe', text: `A secret key is written in ${p}. Anyone who can see the code can use it. Put it in .env and read it with env() in a config file.` })
+  }
   // Drizzle: a changed schema needs a migration (or `drizzle-kit push` for apps that don't keep migration files)
   const newDz = B.dzMigrations.filter(m => !A.dzMigrations.includes(m))
   if ([...B.dzModels, ...A.dzModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newDz.length)
@@ -1614,14 +1819,6 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   if (outsideCalls.length && ![...B.routes.values()].some(r => r.kind === 'endpoint'))
     notes.push(`A page's login check only hides the page. Its data comes from ${list(where)} on ${unread ? "a server plain can't read yet" : "a server that isn't in this project"}, so plain can't check that the server asks for login too. Make sure it does.`)
 
-  // Python: the mistakes AI makes most (Bandit / Semgrep rules), when they're new in this change
-  const RISK: Record<string, Problem> = {
-    debug: { kind: 'Unsafe', text: "Debug mode is turned on. If this runs on your live site, an error page can show visitors your code and settings." },
-    secret: { kind: 'Unsafe', text: "The app's secret key is written in the code. Anyone who sees the code can fake logins. Move it to an environment variable." },
-    sql: { kind: 'Unsafe', text: 'A database query is built by pasting in text, which lets attackers read or change your data (SQL injection). Use query parameters instead.' },
-    cors: { kind: 'Check', text: "Any website can call your server from a visitor's browser (CORS allows all sites). Fine for a public API, not for one that uses logins." },
-    csrf: { kind: 'Check', text: 'A form was excluded from forgery protection (csrf_exempt). Other sites could submit it for a logged-in visitor.' },
-  }
   for (const p of real) for (const r of (B.files.get(p) as PyFacts | undefined)?.risks ?? [])
     if (!(A.files.get(p) as PyFacts | undefined)?.risks?.has(r)) problems.push({ ...RISK[r], text: `${RISK[r].text} (in ${p})` })
   const newPyMigrations = B.pyMigrations.filter(m => !A.pyMigrations.includes(m))
@@ -1691,7 +1888,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
     if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k) || csKeys.has(k)) continue
     ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
-      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
+      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java|php)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
   }
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)

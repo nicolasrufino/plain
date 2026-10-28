@@ -20,7 +20,8 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | **Angular** | ✅ Supported |
 | **C#: ASP.NET Core** | ✅ Supported |
 | **Java: Spring Boot** | ✅ Supported |
-| 8. Laravel (PHP), Ruby on Rails, Go | 🔜 Next |
+| **PHP: Laravel** | ✅ Supported |
+| 9. Ruby on Rails, Go | 🔜 Next |
 
 ## Why this order
 
@@ -55,8 +56,9 @@ those people actually ship, not what's popular with developers.
     worst of any language ([Veracode 2025][veracode]).
   - C# goes first because its app-wide login setting is easy to read reliably.
 - **Laravel, Rails and Go come last.** They're less common for this audience (Laravel 8.9%,
-  Rails 5.9%), and Bolt can't build PHP. Their migrations are plain SQL, so they'll reuse
-  Supabase's SQL reading.
+  Rails 5.9%), and Bolt can't build PHP. Laravel is first of the three: it's the most used, and
+  since Laravel 13 new apps ship with `CLAUDE.md` / `AGENTS.md` for coding agents
+  ([laravel/laravel][lv-skeleton]).
 
 ### Most used languages
 
@@ -67,7 +69,7 @@ those people actually ship, not what's popular with developers.
 | Python | 4 (58%) | **1 (39%)** | 2 | **1** | Planned (3) |
 | Java | 7 (28%) | 8 | 4 | 4 | Planned (7) |
 | C# | 8 (27%) | 7 | 5 | 5 | Planned (6) |
-| PHP | – | – | 6 | 12 | Later (8) |
+| PHP | – | – | 6 | 12 | ✅ Laravel |
 | Go | – | – | 10 | 11 | Later (8) |
 
 Sources: [SO 2026][so-tech], [GitHub Octoverse 2025][octo], [TIOBE][tiobe]. These cover
@@ -546,7 +548,62 @@ a route guard can't do.
 - **Parser:** tree-sitter-java (MIT, 0.4 MB, in `vendor/`).
 - **Not yet:** Kotlin, WebFlux.
 
-## Laravel, Rails, Go (later)
+## PHP: Laravel ✅
+
+Laravel 11, 12 and 13 (the current one), and the shapes agents still write from Laravel 10.
+
+- **Which route files load** ([routing][lv-routing]): `routes/web.php`, and `routes/api.php` only
+  when `bootstrap/app.php` registers it (`withRouting(api: ...)`, which `php artisan install:api`
+  adds) or a Laravel 10 `RouteServiceProvider` does. Its addresses start with `/api`. Files they
+  `require`, or load with `->group(base_path(...))`, come with that group's prefix and middleware.
+- **Addresses:** `Route::get/post/put/patch/delete/match/any`, groups (`Route::prefix('admin')
+  ->middleware('auth')->group(...)` and the older `Route::group([...])`), `Route::controller(X::class)
+  ->group(...)`, and resources: `Route::resource` makes 7 addresses, `apiResource` 5, singletons 3,
+  with `only` / `except` ([resource controllers][lv-resources]). `{order}` becomes `[order]`. The same
+  method and address defined twice: the last one counts.
+- **Who an address lets in** ([middleware][lv-mw], [authorization][lv-authz]):
+  - Login: `auth` (any guard, `auth:sanctum`), `auth.basic`, `verified`, `password.confirm`,
+    `can:...`, Spatie's `role:` / `permission:`, from the route, its groups, or the controller
+    (`HasMiddleware`, or a Laravel 10 constructor; Laravel 13's `#[Middleware]` attributes, which do
+    nothing on 12). Middleware added to the whole `web` / `api` group in `bootstrap/app.php` counts for
+    every route in it.
+  - `guest`, `signed` and `throttle` aren't login checks (`guest` is the opposite).
+  - `withoutMiddleware('auth')` removes `auth`, and since Laravel 13.39 `auth:sanctum` too. plain reads
+    it that way on every version, so it errs toward a warning.
+  - An app middleware (`'admin' => EnsureAdmin::class`) counts when its `handle()` turns away
+    visitors who aren't logged in. One plain can't read: it says nothing, never ✓.
+  - In the handler: `Gate::authorize(...)`, `abort_unless(auth()->check(), 403)`,
+    `if ($order->user_id !== auth()->id()) abort(403)`, or a form request whose `authorize()` looks
+    at the user. `return true;` checks nothing. A check plain can't be sure of (`if ($request->user()
+    && ...)` lets visitors who aren't logged in through) means plain says nothing either way.
+  - A policy that accepts guests (`?User $user`) makes `can:` and gate checks say nothing.
+  - `$this->middleware()` in a constructor only works on Laravel 10's base controller. On 11's, the
+    page crashes, and plain says so ([11 release notes][lv-11]).
+- **What an address does:** Eloquent (`Order::create`, `$order->update(...)`, `$order->delete()`,
+  `$user->orders()->create(...)`, `DB::table('orders')`), Stripe (`stripe-php`, and Cashier's
+  `checkout()` / `charge()` when `laravel/cashier` is installed), email (`Mail::to()->send()`, and
+  notifications whose `via()` includes `mail`).
+- **The tables** come from the migrations (`database/migrations`), replayed in order:
+  `Schema::create`, `Schema::table`, `dropColumn`, `renameColumn`, `Schema::drop`.
+- **Before you ship:** "apply the migration with `php artisan migrate --force`" (without `--force`
+  it does nothing on a live site, [migrations][lv-migrations]); "back up first" when it drops data.
+  `config('services.stripe.secret')` is followed to the env var its config file reads.
+- **To flag:**
+  - `env('X')` outside the `config/` folder: it gives nothing once the live site caches its
+    settings ([configuration][lv-config]).
+  - Saving `$request->all()` into a model that accepts every field (`$guarded = []`, `Model::unguard()`).
+  - Forgery protection turned off for a form (`validateCsrfTokens(except: [...])`, webhooks aside), or
+    for the whole site.
+  - `$this->authorize()` or a constructor's `$this->middleware()` on Laravel 11+'s bare controller: a crash.
+  - A real key written in a PHP file, and a migration that drops a table and creates it again (emptied).
+  - Renamed tables and columns are said as renamed (the data stays), not deleted.
+  - CORS open to every site with cookies (`'*'` and `supports_credentials`).
+  - Debug mode on, and SQL built by pasting in text.
+- **Parser:** tree-sitter-php's pure-PHP grammar (MIT, 1 MB, in `vendor/`).
+- **Not yet:** Blade views, Inertia pages, Livewire/Volt components, and routes from packages
+  (Fortify's login pages, Cashier's `/stripe/*`).
+
+## Rails, Go (later)
 
 They share the same shape: a routes file or registrations, middleware for login, an ORM, and
 migrations. The things to get right:
@@ -556,11 +613,6 @@ migrations. The things to get right:
   - `before_action :authenticate_user!` in `ApplicationController` covers everything, so report
     the `skip_before_action` exceptions instead.
   - `Model.find(params[:id])` lets anyone open anyone's record.
-- **Laravel:**
-  - `routes/api.php` addresses start with `/api`.
-  - Login checks come from `Route::middleware('auth')->group(...)` and from controller
-    middleware.
-  - A form request whose `authorize()` just returns `true` checks nothing.
 - **Go:**
   - `mux.HandleFunc("POST /x/{id}", h)` (Go 1.22), plus chi and gin groups.
   - Wrapping the whole server in auth (`ListenAndServe(addr, withAuth(mux))`) covers every
@@ -634,3 +686,11 @@ Research done 2026-10. Vendor reports are marked.
 [ng-routes]: https://angular.dev/guide/routing/define-routes
 [ng-guards]: https://angular.dev/guide/routing/route-guards
 [aspnet-simple]: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/simple
+[lv-routing]: https://laravel.com/docs/12.x/routing
+[lv-resources]: https://laravel.com/docs/12.x/controllers#resource-controllers
+[lv-mw]: https://laravel.com/docs/12.x/middleware
+[lv-authz]: https://laravel.com/docs/12.x/authorization
+[lv-11]: https://laravel.com/docs/11.x/releases
+[lv-migrations]: https://laravel.com/docs/12.x/migrations#forcing-migrations-to-run-in-production
+[lv-config]: https://laravel.com/docs/12.x/configuration#configuration-caching
+[lv-skeleton]: https://github.com/laravel/laravel/tree/13.x

@@ -73,10 +73,11 @@ staged files. The session log lives in `.git/plain-session.jsonl`.
 | **Angular** | pages, what they show and send, route guards, and that a guard only hides a page (the server has to check too) |
 | **C#**: ASP.NET Core (Entity Framework) | controllers and minimal APIs and who they let in (endpoint, controller, group, app-wide), database writes, migrations, Stripe, keys left in appsettings.json |
 | **Java**: Spring Boot (Spring Security, JPA, Flyway) | controllers, Spring Security's rules in order, services and repositories, Flyway migrations, `ddl-auto=create`, keys left in application.properties |
+| **PHP**: Laravel (Eloquent, Cashier) | route files and who they let in (route, group, controller and app middleware, form requests), Eloquent writes, migrations, `env()` outside config, `$request->all()` into an open model |
 | **Supabase** (Lovable, Bolt) | your tables, and **who your access rules (Row Level Security) let in**: tables anyone can read or change, rules that only check "is logged in", users who can mark their own order paid |
 | **Stripe**, OpenAI, Resend and other services | when your app starts using them, and the code that charges money |
 
-**Coming next:** Laravel, Rails and Go.
+**Coming next:** Rails and Go.
 [Why this order, and what each one needs](docs/languages.md).
 
 On other projects plain won't break, but it won't have much to say yet.
@@ -120,7 +121,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 
 - Fewer false alarms, more money/login/data risks caught ([backlog](docs/trials.md))
 - A GitHub Action that posts the summary on every PR
-- More stacks: Laravel, Rails and Go ([order and why](docs/languages.md))
+- More stacks: Rails and Go ([order and why](docs/languages.md))
 - Zoom into a function and read it line by line in English ([prototype](prototype/))
 
 ## Development
