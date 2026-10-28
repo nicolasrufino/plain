@@ -389,3 +389,51 @@ console.log('ok (routes that start changing data)')
     assert.ok(c2.includes(e), `review 4 missing "${e}"\n${c2}`)
   console.log('ok (review 4)')
 }
+
+// Python: FastAPI and Flask routes with prefixes and login checks, SQLAlchemy models, Stripe, and the mistakes AI makes most.
+{
+  const pyBefore = {
+  'requirements.txt': 'fastapi==0.115.0\nsqlalchemy==2.0.30\n',
+  'app/main.py': "from fastapi import FastAPI\nfrom app.routers import orders\napp = FastAPI()\napp.include_router(orders.router, prefix='/api')\n",
+  'app/models.py': "from sqlalchemy.orm import Mapped, mapped_column\nclass Order(Base):\n    __tablename__ = 'orders'\n    id: Mapped[int] = mapped_column(primary_key=True)\n    total: Mapped[int]\n    notes: Mapped[str]\n",
+  'app/routers/orders.py': "from fastapi import APIRouter, Depends\nfrom app.auth import get_current_user\nrouter = APIRouter(prefix='/orders')\n\n@router.get('/')\ndef list_orders(db = Depends(get_db), user = Depends(get_current_user)):\n    return db.query(Order).all()\n",
+}
+  const pyAfter = { ...pyBefore,
+  'requirements.txt': 'fastapi==0.115.0\nsqlalchemy==2.0.30\nstripe==10.0.0\n',
+  'app/models.py': "from sqlalchemy.orm import Mapped, mapped_column\nclass Order(Base):\n    __tablename__ = 'orders'\n    id: Mapped[int] = mapped_column(primary_key=True)\n    total: Mapped[int]\n\nclass Coupon(Base):\n    __tablename__ = 'coupons'\n    id: Mapped[int] = mapped_column(primary_key=True)\n    code: Mapped[str]\n    percent_off: Mapped[int]\n",
+  'app/routers/orders.py': `from fastapi import APIRouter, Depends, HTTPException
+import os, stripe
+from app.auth import get_current_user
+router = APIRouter(prefix='/orders')
+stripe.api_key = os.environ['STRIPE_SECRET_KEY']
+
+@router.get('/')
+def list_orders(db = Depends(get_db), user = Depends(get_current_user)):
+    return db.query(Order).all()
+
+@router.post('/{order_id}/refund')
+def refund(order_id: int, db = Depends(get_db)):
+    order = db.get(Order, order_id)
+    if order.total <= 0:
+        raise HTTPException(status_code=409, detail="This order can't be refunded.")
+    db.execute(f"UPDATE orders SET status = 'refunded' WHERE id = {order_id}")
+    return {"ok": True}
+
+@router.post('/checkout')
+def checkout(user = Depends(get_current_user)):
+    s = stripe.checkout.Session.create(mode='payment', line_items=[])
+    return {"url": s.url}
+`,
+  'app/routers/coupons.py': "from fastapi import APIRouter\nrouter = APIRouter(prefix='/coupons')\n\n@router.post('/')\ndef create_coupon(data: dict, db = Depends(get_db)):\n    # TODO validate percent\n    db.add(Coupon(**data))\n    db.commit()\n",
+  'app/main.py': "from fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\nfrom app.routers import orders, coupons\napp = FastAPI()\napp.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True)\napp.include_router(orders.router, prefix='/api')\napp.include_router(coupons.router, prefix='/api')\n",
+  'web/app.py': "from flask import Flask, Blueprint, render_template, abort\nfrom flask_login import login_required\napp = Flask(__name__)\napp.secret_key = 'dev-secret-123'\nadmin = Blueprint('admin', __name__, url_prefix='/admin')\n\n@admin.route('/users/<int:user_id>', methods=['POST'])\n@login_required\ndef ban(user_id):\n    User.query.filter_by(id=user_id).delete()\n\n@admin.route('/export')\ndef export():\n    return render_template('export.html', users=User.query.all())\n\napp.register_blueprint(admin)\nif __name__ == '__main__':\n    app.run(debug=True)\n",
+}
+  const c = card(pyBefore, pyAfter)
+  for (const e of ['⚠ Anyone can use the order refund part of your server without logging in.', '⚠ Anyone can use the coupons part of your server without logging in.',
+    '⚠ Anyone can use the admin export part of your server without logging in.', '⚠ A database query is built by pasting in text', "⚠ The app's secret key is written in the code",
+    '⚠ Debug mode is turned on', '! Any website can call your server', 'charges customers 💰 and requires login ✓. /api/orders/checkout', 'deletes users and requires login ✓. /admin/users/[user_id]',
+    'Your database now stores coupons: code and percent off.', 'Orders will no longer store the notes.', '`alembic revision --autogenerate`', 'Add STRIPE_SECRET_KEY', 'stripe (10.0.0)', 'to-do: "validate percent"'])
+    assert.ok(c.includes(e), `python missing: "${e}"\n${c}`)
+  for (const e of ['Other files', 'list orders part', '/api/coupons/ ']) assert.ok(!c.includes(e), `python should not say "${e}"\n${c}`)
+  console.log('ok (python: fastapi + flask)')
+}

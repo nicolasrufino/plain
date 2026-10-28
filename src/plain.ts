@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { readDb, findings, isMigration, type Db } from './supabase.ts'
+import { pyFacts, type PyFacts } from './python.ts'
 
 export type Snap = Map<string, string>
 
@@ -47,11 +48,11 @@ const HOSTS: Record<string, string> = {
 const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
-const CODE = /\.[cm]?[jt]sx?$/
+const CODE = /\.([cm]?[jt]sx?|py)$/
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
 
-type FileFacts = {
+export type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
   tables: Set<string>; ops: Set<string>; writes: boolean; sbAuth: boolean; env: Set<string>; auth: boolean; money: boolean   // sbAuth: supabase.auth.getUser(), a real check only on a server
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
@@ -441,19 +442,31 @@ function models(schema = ''): Map<string, string[]> {
 }
 
 const envKeys = (text = '') => new Set([...text.matchAll(/^\s*([A-Z0-9_]+)\s*=/gm)].map(m => m[1]))
+// requirements.txt lines (stripe==7.1.0) and pyproject dependency strings ("fastapi>=0.110")
+const pyDeps = (text: string) => Object.fromEntries([...text.matchAll(/^\s*["']?([A-Za-z][\w.-]*)(?:\[[^\]]*\])?\s*((?:[=<>!~]=?|@)\s*[^"',;#\s]+)?/gm)]
+  .filter(m => !/^(name|version|description|requires|readme|license|authors|dependencies|build|python|project|tool|\[)/i.test(m[1])).map(m => [m[1].toLowerCase(), (m[2] ?? '*').replace(/\s/g, '').replace(/^==/, '')]))
 const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.dependencies, ...p.devDependencies } as Record<string, string> } catch { return {} } }
 
 export function appFacts(snap: Snap) {
   const files = new Map<string, FileFacts>()
   for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/')) {
-    try { files.set(p, fileFacts(p, t)) } catch { /* unparsable file: report nothing about it */ }
+    try { const f = p.endsWith('.py') ? pyFacts(p, t, empty) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
   }
   // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
-  const resolve = (from: string, spec: string) => {
+  const resolve = (from: string, spec: string): string | undefined => {
+    if (spec.startsWith('py:')) return resolvePy(from, spec.slice(3))
     const rest = spec.slice(2), src = from.slice(0, from.lastIndexOf('src/') + 4)
     const bases = spec.startsWith('@/') ? [rest, 'src/' + rest, src + rest] : spec.startsWith('.') ? [join(from, '..', spec)] : []
     return bases.flatMap(b => [b, ...['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts', '/index.js'].map(e => b.replace(/\.(m?js|jsx)$/, '') + e)])
       .find(c => files.has(c))
+  }
+  // Python: from .routers import orders -> routers/orders.py next to this file; app.routers.orders -> any file ending in app/routers/orders.py.
+  // `from x import router` names something inside x, so try without the last part too.
+  const resolvePy = (from: string, mod: string): string | undefined => {
+    const dots = mod.match(/^\.*/)![0].length, rest = mod.slice(dots).replace(/\./g, '/')
+    const base = dots ? join(from, ...Array(dots).fill('..')) : ''
+    const tries = [rest, rest.split('/').slice(0, -1).join('/')].filter(Boolean).flatMap(r => [`${r}.py`, `${r}/__init__.py`].map(x => dots ? join(base, x) : x))
+    return tries.map(x => files.has(x) ? x : dots ? undefined : [...files.keys()].find(k => k.endsWith('/' + x))).find(Boolean)
   }
   const target = (p: string, name: string) => { const m = files.get(p)!.binds.get(name); return m ? resolve(p, m) : undefined }
 
@@ -466,7 +479,8 @@ export function appFacts(snap: Snap) {
   }
 
   const routes = new Map<string, Route>()
-  const deps_ = Object.assign({}, ...[...snap].filter(([p]) => /(^|\/)package\.json$/.test(p) && !p.includes('node_modules/')).map(([, t]) => deps(t))) as Record<string, string>
+  const deps_ = Object.assign({}, ...[...snap].filter(([p]) => /(^|\/)package\.json$/.test(p) && !p.includes('node_modules/')).map(([, t]) => deps(t)),
+    ...[...snap].filter(([p]) => /(^|\/)(requirements[\w-]*\.txt|pyproject\.toml)$/.test(p)).map(([, t]) => pyDeps(t))) as Record<string, string>
   for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
   // TanStack Start: route files are pages (or server routes); a login check on a parent layout covers its children.
   const browserPages = new Set<string>()
@@ -525,7 +539,7 @@ export function appFacts(snap: Snap) {
       const url = h.path.startsWith('(server action) ') ? `${h.path} in ${p}`
         : (pre!.path.replace(/\/$/, '') + (h.path === '/' ? '' : h.path)).replace(/:(\w+)\??/g, '[$1]') || '/'
       const key = `${p}#${url}`, unit = files.get(key) ?? empty()
-      const hf = h.handler ? f.locals.get(h.handler) ?? (target(p, h.handler) && files.get(target(p, h.handler)!)?.locals.get(h.handler)) ?? h.facts : h.facts
+      const hf = h.handler ? f.locals.get(h.handler) ?? (target(p, h.handler) ? files.get(target(p, h.handler)!)?.locals.get(h.handler) : undefined) ?? h.facts : h.facts
       for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'fetches', 'refuses'] as const) for (const x of hf[k]) unit[k].add(x)
       unit.money ||= hf.money
       unit.fns.set(h.method, hf.printed)
@@ -562,8 +576,11 @@ export function appFacts(snap: Snap) {
   const db = readDb([...snap].filter(([p]) => isMigration(p)))
   const all = models(schemaPath && snap.get(schemaPath))
   for (const [t, tb] of db.tables) all.set(t, [...tb.cols, ...[...tb.refs.values()].map(r => `→${singular(r)}`)])
+  const pyModels = new Set<string>()
+  for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath,
+    files, routes, db, models: all, schemaPath, pyModels,
+    pyMigrations: [...snap.keys()].filter(p => /(^|\/)(migrations\/versions|alembic\/versions|migrations)\/[^/]+\.py$/.test(p) && !p.endsWith('__init__.py')),
     envExample: envKeys([...snap].filter(([p]) => /(^|\/)\.env\.example$/.test(p)).map(([, t]) => t).join('\n')), deps: deps_,
     migrations: [...snap.keys()].filter(p => /prisma\/migrations\/.+\.sql$/.test(p)), sqlMigrations: [...snap.keys()].filter(isMigration),
   }
@@ -754,6 +771,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const writes = changesData(b)
       if (r.kind === 'page' && /admin|dashboard|account/.test(r.url))
         problems.push({ kind: 'Unsafe', text: `Anyone can open ${name} without logging in.` })
+      else if (r.kind === 'endpoint' && /(^|\/)admin(\/|$)/.test(r.url) && (writes || b.tables.size))   // admin data, even just to read
+        problems.push({ kind: 'Unsafe', text: `Anyone can use ${name} without logging in.` })
       else if (r.kind === 'endpoint' && writes && (SENSITIVE.test(r.url) || [...b.written].some(t => SENSITIVE.test(t)) || adminCalls(r.url)))
         problems.push({ kind: 'Unsafe', text: `Anyone can use ${name} without logging in.` })
       else if (r.kind === 'endpoint' && writes) {
@@ -780,7 +799,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Check', text: `You asked to "${verb}", but nothing new lets you change anything: ${list(newViewOnly.map(placeName))} only ${newViewOnly.length > 1 ? 'show' : 'shows'} information. If you wanted buttons to act on things (like refunding or cancelling orders), ask for that. (This is a guess.)` })
 
   // files that aren't code
-  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore)$|prisma\/migrations\/|supabase\/migrations\//.test(p))
+  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\//.test(p))
   {
     const media = (t = '') => new Set(t.match(/@media[^{]*max-width[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g) ?? [])
     const phones = /\.(css|scss)$/.test(p) && [...media(after.get(p))].some(m => !media(before.get(p)).has(m))
@@ -829,6 +848,26 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const before_ = findings(A.db, used(A), things).map(x => x.text), rls = findings(B.db, used(B), things).filter(x => !before_.includes(x.text))
   problems.push(...rls)
   const notes = rls.length ? ["Database access rules are read from supabase/migrations. Rules changed in the Supabase dashboard aren't visible to plain."] : []
+
+  // Python: the mistakes AI makes most (Bandit / Semgrep rules), when they're new in this change
+  const RISK: Record<string, Problem> = {
+    debug: { kind: 'Unsafe', text: "Debug mode is turned on. If this runs on your live site, an error page can show visitors your code and settings." },
+    secret: { kind: 'Unsafe', text: "The app's secret key is written in the code. Anyone who sees the code can fake logins. Move it to an environment variable." },
+    sql: { kind: 'Unsafe', text: 'A database query is built by pasting in text, which lets attackers read or change your data (SQL injection). Use query parameters instead.' },
+    cors: { kind: 'Check', text: "Any website can call your server from a visitor's browser (CORS allows all sites). Fine for a public API, not for one that uses logins." },
+    csrf: { kind: 'Check', text: 'A form was excluded from forgery protection (csrf_exempt). Other sites could submit it for a logged-in visitor.' },
+  }
+  for (const p of real) for (const r of (B.files.get(p) as PyFacts | undefined)?.risks ?? [])
+    if (!(A.files.get(p) as PyFacts | undefined)?.risks?.has(r)) problems.push({ ...RISK[r], text: `${RISK[r].text} (in ${p})` })
+  const newPyMigrations = B.pyMigrations.filter(m => !A.pyMigrations.includes(m))
+  if ([...B.pyModels, ...A.pyModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newPyMigrations.length)
+    ship.push('django' in B.deps
+      ? 'Update your database: run `python manage.py makemigrations`, then `python manage.py migrate` (also on your live site). The models changed, but no migration was created.'
+      : 'Update your database: create a migration (`alembic revision --autogenerate`, or `flask db migrate` with Flask-Migrate) and apply it (`alembic upgrade head` / `flask db upgrade`), also on your live site. The models changed, but no migration was created.')
+  for (const m of newPyMigrations) {
+    const up = (after.get(m) ?? '').split(/def downgrade|def backwards/)[0]
+    if (/op\.drop_(table|column)|RemoveField|DeleteModel|\bDROP\b/.test(up)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+  }
 
   // broken, unasked, unfinished
   const allBefore = new Map<string, string>(), allAfter = new Set<string>()
