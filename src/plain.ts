@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
 import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
+import { csFacts, mergeAuth, join as csJoin, under, csPath, type CsFacts, type CsClass, type CsRoute, type ExtCall, type Auth } from './csharp.ts'
 
 export type Snap = Map<string, string>
 
@@ -49,7 +50,7 @@ const HOSTS: Record<string, string> = {
 const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
-const CODE = /\.([cm]?[jt]sx?|py|vue|svelte)$/
+const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs)$/
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
 
@@ -646,7 +647,9 @@ const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.
 export function appFacts(snap: Snap) {
   const files = new Map<string, FileFacts>()
   for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/')) {
-    try { const f = p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
+    // (EF migrations and their snapshots are read as migrations, not as code)
+    if (/(^|\/)Migrations\/[^/]+\.cs$/.test(p)) continue
+    try { const f = p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
   }
   // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
   const resolve = (from: string, spec: string): string | undefined => {
@@ -679,7 +682,9 @@ export function appFacts(snap: Snap) {
 
   const routes = new Map<string, Route>()
   const deps_ = Object.assign({}, ...[...snap].filter(([p]) => /(^|\/)package\.json$/.test(p) && !p.includes('node_modules/')).map(([, t]) => deps(t)),
-    ...[...snap].filter(([p]) => /(^|\/)(requirements[\w-]*\.txt|pyproject\.toml)$/.test(p)).map(([p, t]) => pyDeps(t, p))) as Record<string, string>
+    ...[...snap].filter(([p]) => /(^|\/)(requirements[\w-]*\.txt|pyproject\.toml)$/.test(p)).map(([p, t]) => pyDeps(t, p)),
+    // .NET: <PackageReference Include="Stripe.net" Version="47.0.0" />
+    ...[...snap].filter(([p]) => p.endsWith('.csproj')).map(([, t]) => Object.fromEntries([...t.matchAll(/<PackageReference\s+Include="([^"]+)"(?:\s+Version="([^"]*)")?/g)].map(m => [m[1], m[2] ?? '*'])))) as Record<string, string>
   for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
   // TanStack Start: route files are pages (or server routes); a login check on a parent layout covers its children.
   const browserPages = new Set<string>()
@@ -707,6 +712,7 @@ export function appFacts(snap: Snap) {
       }
     }
   }
+  const csModels = new Map<string, string[]>()   // Entity Framework entities (filled in below)
   const svelteUrls = new Map<string, string>()   // SvelteKit pages: their <form method="POST"> sends to this address
   // Where a hook's or middleware's login check applies: each checking `if` covers what its path tests allow, and an earlier
   // `if (<path test>) return ...` lets those addresses through unchecked. Tests: startsWith, ===, !==, ['/a', '/b'].includes(path),
@@ -829,6 +835,66 @@ export function appFacts(snap: Snap) {
         f.auth = covered(r.url, r.id) || (writes.length ? writes : ms).length > 0 && (writes.length ? writes : ms).every(m => checks(f.locals.get(m)))
       }
     }
+  }
+  // ASP.NET Core: each endpoint's login, as ASP.NET decides it: AllowAnonymous anywhere on the way skips it; then [Authorize] /
+  // RequireAuthorization() on the endpoint, its handler, its controller (and base classes) or a group; then the project's FallbackPolicy
+  // (or a global AuthorizeFilter for controllers); then a check in the handler's own code.
+  // App-wide rules belong to their project (the folder with its .csproj); test projects (WebApplicationFactory, *.Tests) don't count.
+  const csFiles = [...files].filter(([p]) => p.endsWith('.cs')).map(([p, f]) => [p, (f as CsFacts).cs] as const)
+  if (csFiles.length) {
+    const projects = [...snap.keys()].filter(p => p.endsWith('.csproj')).map(p => p.slice(0, p.lastIndexOf('/') + 1))
+    const projectOf = (p: string) => projects.filter(d => p.startsWith(d)).sort((a, b) => b.length - a.length)[0] ?? ''
+    const isTest = (p: string) => /(^|\/)[\w.]*Tests?(\/|\.)|WebApplicationFactory/.test(p) || /WebApplicationFactory/.test(snap.get(p) ?? '')
+    const appWide = (p: string, k: 'fallback' | 'allControllers') => csFiles.some(([q, c]) => c[k] && !isTest(q) && projectOf(q) === projectOf(p))
+    // a handler given by name (OrderHandlers.Delete): that exact method first, then a method of that name anywhere
+    const methodFacts = (h: string) => { const exact = h.split('.').slice(-2).join('.'), bare = h.split('.').at(-1)!
+      for (const [, c] of csFiles) { const m = c.methods.get(exact); if (m) return m }
+      for (const [, c] of csFiles) { const m = c.methods.get(bare) ?? [...c.methods].find(([k]) => k.endsWith('.' + bare))?.[1]; if (m) return m } }
+    // DbSet<Order> PurchaseOrders: the table is called PurchaseOrders and stores Order rows
+    const sets = new Map(csFiles.flatMap(([, c]) => [...c.dbsets]))
+    const remap = (f: FileFacts) => { for (const k of ['tables', 'written'] as const) for (const t of [...f[k]]) if (sets.has(t)) { f[k].delete(t); f[k].add(sets.get(t)!) } return f }
+    const add = (p: string, r: CsRoute & { auth: Auth }, controller: boolean) => {
+      const m = r.handler ? methodFacts(r.handler) : undefined, facts = remap(r.facts ?? m ?? empty())
+      const auth = mergeAuth(r.auth, m?.csAuth)
+      const guard = auth === 'anon' ? false : auth === 'yes' || appWide(p, 'fallback') || controller && appWide(p, 'allControllers') || handlerChecks(facts)
+      // a method with no verb (Map("/x"), [AcceptVerbs]/[Route] only) answers every one: read as POST if it changes data
+      const method = r.method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : r.method
+      files.get(p)!.handlers.push({ server: '', method, path: r.path, guard, mw: [], facts })
+    }
+    for (const [p, c] of csFiles) if (!isTest(p)) for (const r of c.routes) add(p, r, false)
+    // group.MapOrders() from another file: its routes under the group that calls it (and the extension calls it makes in turn)
+    const exts = new Map(csFiles.flatMap(([p, c]) => [...c.ext].map(([k, v]) => [k, { p, ...v }] as const)))
+    const mount = (call: ExtCall, depth = 0): void => {
+      const e = exts.get(call.name); if (!e || depth > 5) return
+      for (const r of e.routes) add(e.p, { ...r, path: under(call.prefix, r.path), auth: mergeAuth(call.auth, r.auth) }, false)
+      for (const c of e.calls) mount({ name: c.name, prefix: under(call.prefix, c.prefix), auth: mergeAuth(call.auth, c.auth) }, depth + 1)
+    }
+    for (const [p, c] of csFiles) if (!isTest(p)) for (const call of c.extCalls) mount(call)
+    // controllers: a class named ...Controller, or one whose chain has ControllerBase / Controller / [ApiController]; [Route] and
+    // [Authorize] / [AllowAnonymous] come down from base classes too
+    const classes = new Map(csFiles.flatMap(([p, c]) => [...c.classes].map(([k, v]) => [k, { p, ...v }] as const)))
+    const chainOf = (name: string, seen = new Set<string>()): (CsClass & { p: string; name: string })[] => {
+      const c = classes.get(name); if (!c || seen.has(name)) return []
+      seen.add(name); return [{ ...c, name }, ...c.bases.flatMap(b => chainOf(b, seen))]
+    }
+    for (const [name, c] of classes) {
+      if (c.abstract || isTest(c.p)) continue
+      const chain = chainOf(name), baseNames = chain.flatMap(x => x.bases)
+      if (!/Controller$/.test(name) && !chain.some(x => x.api) && !baseNames.some(b => /^(ControllerBase|Controller)$/.test(b))) continue
+      const route = chain.map(x => x.route).find(x => x !== undefined), auth = mergeAuth(...chain.map(x => x.auth))
+      for (const a of chain.flatMap(x => x.actions.map(y => ({ ...y, cls: x.name, p: x.p })))) {
+        if (route === undefined && a.tpl === undefined) continue   // conventional routing: not read yet
+        const tok = (t: string) => t.replace(/\[controller\]/gi, name.replace(/Controller$/, '').toLowerCase()).replace(/\[action\]/gi, a.name.toLowerCase())
+        add(c.p, { method: a.method, path: csPath(tok(csJoin('/' + (route ?? '').replace(/^\//, ''), a.tpl ?? ''))), auth: mergeAuth(auth, a.auth), facts: csFiles.find(([q]) => q === a.p)?.[1].methods.get(`${a.cls}.${a.name}`), controller: true }, true)
+      }
+    }
+    // Entity Framework: the entities the DbSets name (by that name; one defined twice is left out rather than guessed)
+    // (a DTO of the same name elsewhere doesn't replace the entity: prefer Models/Entities/Domain/Data folders, then the one with an Id)
+    const defs = new Map<string, { p: string; props: string[] }[]>()
+    for (const [p, c] of csFiles) for (const [k, v] of c.entities) defs.set(k, [...defs.get(k) ?? [], { p, props: v }])
+    const rank = (d: { p: string; props: string[] }) => (/(^|\/)(Models|Entities|Domain|Data)\//.test(d.p) ? 2 : 0) + (d.props.includes('Id') ? 1 : 0) - (/(^|\/)(Dtos?|Contracts|ViewModels|Requests|Responses)\//.test(d.p) ? 3 : 0)
+    for (const [, t] of sets) { const d = defs.get(t)?.sort((a, b) => rank(b) - rank(a)); if (d?.length) csModels.set(t, d[0].props) }
+    for (const f of files.values()) remap(f)
   }
   // form actions outside SvelteKit aren't routes
   for (const f of files.values()) f.handlers = f.handlers.filter(h => h.server !== '@actions')
@@ -1050,10 +1116,12 @@ export function appFacts(snap: Snap) {
         const ref = k[2].match(/references\(\s*\(\)\s*=>\s*(\w+)\./)?.[1]; fields.push(ref ? `→${singular(ref.replace(/Table$/, ''))}` : k[1]) }
       all.set(name, fields); dzModels.add(name)
     }
+  for (const [m, fs] of csModels) all.set(m, fs)
   const pyModels = new Set<string>()
   for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath, pyModels, dzModels,
+    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()),
+    efMigrations: [...snap.keys()].filter(p => /(^|\/)Migrations\/\d+_\w+\.cs$/.test(p) && !/\.Designer\.cs$/.test(p)),
     // drizzle-kit generate writes drizzle/0001_x.sql (or the `out` folder next to meta/_journal.json)
     dzMigrations: [...snap.keys()].filter(p => /\.sql$/.test(p) && !isMigration(p) && !/prisma\/migrations\//.test(p) && (/(^|\/)drizzle\//.test(p) || snap.has(p.replace(/[^/]+$/, 'meta/_journal.json')))),
     pyMigrations: [...snap.keys()].filter(p => /(^|\/)(migrations\/versions|alembic\/versions|migrations)\/[^/]+\.py$/.test(p) && !p.endsWith('__init__.py')),
@@ -1353,6 +1421,32 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         ship.push(`Check your live data before applying ${m}: it adds a rule that no two ${things(model)} can share the same ${list(cols.map(c => fieldName(c) || words(camel(c).replace(/Id$/, ''))))}. If any already do, the update fails.`)
     }
   }
+  // Entity Framework: a new migration (Migrations/20261028_AddCoupons.cs) runs with `dotnet ef database update`; what its Up() drops is gone
+  const newEf = B.efMigrations.filter(m => !A.efMigrations.includes(m))
+  for (const m of newEf) {
+    const up = (after.get(m) ?? '').split(/protected\s+override\s+void\s+Down\b/)[0]
+    if (/\.(DropTable|DropColumn)\s*\(/.test(up)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+    // CreateIndex(..., table: "Orders", column: "Email", unique: true) on a table with rows and a column that already had data
+    for (const x of up.matchAll(/CreateIndex\s*\(([^;]*?unique:\s*true[^;]*)\)/g)) {
+      const table = x[1].match(/table:\s*"(\w+)"/)?.[1], col = x[1].match(/column:\s*"(\w+)"/)?.[1], model = [...A.models.keys()].find(k => [k.toLowerCase(), pluralize(k.toLowerCase())].includes((table ?? '').toLowerCase()))
+      if (model && col && A.models.get(model)!.some(f => f.toLowerCase() === col.toLowerCase())) ship.push(`Check your live data before applying ${m}: it adds a rule that no two ${things(model)} can share the same ${fieldName(col) || words(col)}. If any already do, the update fails.`)
+    }
+  }
+  if (newEf.length) ship.push(`Apply ${list(newEf.map(m => m.split('/').pop()!.replace(/\.cs$/, '')))} to your live database before the new code goes live (\`dotnet ef database update\`), or the parts that use it will fail.`)
+  if ([...B.csModels, ...A.csModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newEf.length)
+    ship.push('Update your database: run `dotnet ef migrations add <Name>`, then `dotnet ef database update` (also on your live site). The tables changed, but no migration was created.')
+  // appsettings.json is in the code: a real key or password written there is visible to anyone who can see the project
+  // (provider keys in any appsettings file, Development included: it's committed too; a password or signing key only outside Development,
+  // and not for a local database or a placeholder)
+  for (const p of real.filter(p => /(^|\/)appsettings(\.\w+)?\.json$/.test(p))) {
+    const t = after.get(p) ?? '', was = before.get(p) ?? '', dev = /\.Development\.json$/.test(p)
+    const secret = (x: string) => x.match(/"(sk_live_\w{8,}|sk_test_\w{8,}|rk_live_\w{8,}|whsec_\w{8,}|re_\w{16,}|SG\.[\w-]{16,}\.[\w-]{16,})"/)?.[0]
+      ?? (dev ? undefined : [...x.matchAll(/"[^"]*"\s*:\s*"([^"]*)"/g)].map(m => m[1]).find(v => /(?:Password|Pwd)\s*=\s*(?!\s*[;<{])[^;"]{4,}/i.test(v) && !/localhost|\(localdb\)|127\.0\.0\.1|host\.docker\.internal/i.test(v))
+        ?? x.match(/"(?:Jwt|Token|Signing)\w*"\s*:\s*\{[^}]*"(?:Key|Secret|SigningKey)"\s*:\s*"(?![<{]|your|change|replace|placeholder)([^"]{24,})"/i)?.[1])
+    if (secret(t) && !secret(was)) problems.push({ kind: 'Unsafe', text: `A secret key or password is written in ${p}. Anyone who can see the code can use it. Move it to an environment variable (or \`dotnet user-secrets\` while developing).` })
+  }
+  for (const p of real) if ((B.files.get(p) as CsFacts | undefined)?.cs?.risks.has('cors') && !(A.files.get(p) as CsFacts | undefined)?.cs?.risks.has('cors'))
+    problems.push({ kind: 'Check', text: `Any website can call your server from a visitor's browser (CORS allows all sites). Fine for a public API, not for one that uses logins. (in ${p})` })
   // Drizzle: a changed schema needs a migration (or `drizzle-kit push` for apps that don't keep migration files)
   const newDz = B.dzMigrations.filter(m => !A.dzMigrations.includes(m))
   if ([...B.dzModels, ...A.dzModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newDz.length)
@@ -1445,6 +1539,11 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
 
   // env, packages, services
   const usedBefore = new Set([...A.files.values()].flatMap(f => [...f.env]))
+  // .NET: a setting with a value in a committed appsettings.json (Jwt:Issuer -> Jwt__Issuer) needs nothing on the host
+  const dotnet = [...after.keys()].some(p => p.endsWith('.csproj'))
+  const csKeys = new Set<string>()
+  const flatJson = (o: unknown, pre: string) => { if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) typeof v === 'object' ? flatJson(v, `${pre}${k}__`) : v !== '' && v !== null && csKeys.add(`${pre}${k}`) }
+  for (const [p, t] of after) if (/(^|\/)appsettings\.json$/.test(p)) try { flatJson(JSON.parse(t.replace(/^\uFEFF/, '').replace(/\/\/[^\n]*/g, '')), '') } catch { /* not JSON */ }
   const required = new Set([...B.files.values()].flatMap(f => [...f.envReq]))
   for (const k of new Set([...B.files.values()].flatMap(f => [...f.env]))) if (!usedBefore.has(k)) {
     // VITE_, NEXT_PUBLIC_, ... are copied into the code every visitor downloads.
@@ -1453,9 +1552,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     else if (pub && /API_KEY|TOKEN/.test(k)) problems.push({ kind: 'Check', text: `${k} is sent to every visitor's browser (because of its ${k.split('_')[0]}_ prefix). That's fine for keys meant to be public, but not for secret ones.` })
     // Edge functions read their secrets from Supabase, which provides SUPABASE_URL and its keys by itself.
     const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
-    if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k)) continue
+    if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k) || csKeys.has(k)) continue
     ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
-      : `Add ${k} to your hosting settings${B.pyModels.size || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) ? '' : ' It\'s also missing from .env.example.'}`)
+      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj)$/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
   }
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)
@@ -1491,7 +1590,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const cancels = real.some(p => route(p)?.kind !== 'page' && !/\.([jt]sx|py)$/.test(p.split('#')[0]) && !isTest(p.split('#')[0]) && !!B.files.get(p)?.written.size
     && paidCancels(B.files.get(p)!.printed, B.files.get(p.split('#')[0])?.printed) > paidCancels(A.files.get(p)?.printed, A.files.get(p.split('#')[0])?.printed)) || paidCancels(newSql) > 0 && /update\s+[\w.]*\s+set/i.test(newSql)
   // stripe.Refund.create, stripe.refunds.create, refund(...); not a Refund model or Refund(...) row
-  const refunds = [...B.files.values()].some(f => /refunds?\.create|Refund\.create|\brefund\(/.test(f.printed))
+  const refunds = [...B.files.values()].some(f => /refunds?\.create|Refund\.create|\brefund\(|RefundService/.test(f.printed))   // Stripe.net: new RefundService()
   // Python cancels, per def (methods too) and per statement: `.status = ...cancel...` or `update(status=...cancel...)` (the value written,
   // not a filter or a comparison). A cancel is "unpaid only" when its own statement limits it to pending/unpaid rows, or, when it's the
   // def's only cancel, the def does. Defs that react to Stripe's "payment page expired" are left out: no page is open, those were never paid.

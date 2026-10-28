@@ -3,16 +3,10 @@
 // than the code, and Python's own parser gives up on a whole file at the first syntax error.
 // Django: urls.py (path/re_path/include, DRF routers) and the views they point to. plain.ts walks the includes.
 import type { FileFacts } from './plain.ts'
-import { fileURLToPath } from 'node:url'
 
 type N = import('web-tree-sitter').Node
-let parser: import('web-tree-sitter').Parser | undefined
-try {
-  const { Parser, Language } = await import('web-tree-sitter')
-  await Parser.init()
-  parser = new Parser()
-  parser.setLanguage(await Language.load(fileURLToPath(new URL('../vendor/tree-sitter-python.wasm', import.meta.url))))
-} catch { parser = undefined }   // not installed: Python files are skipped
+import { parserFor } from './treesitter.ts'
+const parser = await parserFor('tree-sitter-python.wasm')   // null when web-tree-sitter isn't installed: Python files are skipped
 
 // servers: routers/apps/blueprints made in this file; aliases: CurrentUser = Annotated[User, Depends(get_current_user)]
 export type PyFacts = FileFacts & { models: Map<string, string[]>; risks: Set<string>; servers: Map<string, { prefix: string; guard: boolean }>

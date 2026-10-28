@@ -18,8 +18,8 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | **Python: Django** (`urls.py`, views, Django REST Framework) | ✅ Supported |
 | **Vue / Nuxt, SvelteKit** | ✅ Supported |
 | **Angular** | ✅ Supported |
-| 6. C#: ASP.NET Core | 🔜 Next |
-| 7. Java: Spring Boot | Planned |
+| **C#: ASP.NET Core** | ✅ Supported |
+| 7. Java: Spring Boot | 🔜 Next |
 | 8. Laravel (PHP), Ruby on Rails, Go | Later |
 
 ## Why this order
@@ -475,21 +475,38 @@ a route guard can't do.
   the server checks login too. When the server isn't in the same project (common for Angular),
   the card says so, because plain can't check it.
 
-## C#: ASP.NET Core (planned)
+## C#: ASP.NET Core ✅
 
-- **Addresses:** controllers (`[Route("api/[controller]")]` + `[HttpGet("{id}")]`), and
-  minimal APIs (`app.MapGet("/x", ...)`, `app.MapGroup("/api")`).
-- **Login checks:** `[Authorize]` / `[AllowAnonymous]` on a class or method, and
-  `.RequireAuthorization()` on a route or group.
-  - **App-wide:** a `FallbackPolicy` that requires login makes every address protected unless
-    it says otherwise ([Microsoft docs][aspnet]). In that case plain reports the
-    `[AllowAnonymous]` exceptions instead.
-- **Database:** Entity Framework `DbSet<T>`, `Add` / `Remove` / `SaveChanges`. Migrations live
-  in `Migrations/*.cs`; `DropTable` or `DropColumn` inside `Up()` deletes data.
-- **To flag:** CORS open to every site (`AllowAnyOrigin()`), and secrets written into
-  `appsettings.json`.
-- **Parser:** tree-sitter-c-sharp is about 4–5 MB, the biggest of all. Load it only when the
-  repo has `.cs` files.
+- **Addresses:**
+  - Controllers: `[Route("api/[controller]")]` on the class and `[HttpPost("{id}/refund")]` on
+    the action (`[controller]` and `[action]` filled in; a template starting with `/` or `~/`
+    ignores the controller's route).
+  - Minimal APIs: `app.MapPost("/orders", ...)`, groups (`var api = app.MapGroup("/api")`,
+    nested ones), and groups filled by extension methods in other files
+    (`app.MapGroup("/coupons").MapCoupons()`). `{id:int}` becomes `[id]`.
+- **Who an address lets in, the way ASP.NET decides it** ([Microsoft: simple
+  authorization][aspnet-simple], [fallback policy][aspnet]):
+  - `[AllowAnonymous]` / `.AllowAnonymous()` anywhere on the way: open, whatever else says.
+  - Otherwise `[Authorize]` / `.RequireAuthorization()` on the endpoint, its controller, or a
+    group above it: login required.
+  - Otherwise the app-wide `FallbackPolicy = ...RequireAuthenticatedUser()` (or, for
+    controllers, a global `AuthorizeFilter` / `MapControllers().RequireAuthorization()`).
+  - With none of those, it's open: "Endpoints without authorization metadata don't use the
+    default policy… unless the app configures a fallback policy."
+  - In code: `if (userId is null) return Unauthorized();` and the like.
+- **Database:** Entity Framework. `DbSet<Order> Orders` says the `Orders` table stores `Order`
+  rows (its properties are the columns); `_db.Orders.Add/Remove/ExecuteDeleteAsync`, and
+  changing a loaded row then `SaveChangesAsync()`, are writes.
+- **Before you ship:** a new migration gets "apply it before the new code goes live
+  (`dotnet ef database update`)"; `DropTable` / `DropColumn` in `Up()` gets "back up your data";
+  changed entities without a migration get `dotnet ef migrations add`. Settings read with
+  `Configuration["Stripe:SecretKey"]` come from the env var `Stripe__SecretKey`.
+- **To flag:** CORS open to every site (`AllowAnyOrigin()`), and a real key or password
+  written into `appsettings.json` (not `appsettings.Development.json`).
+- **Money and email:** Stripe.net (`SessionService`, `EventUtility.ConstructEvent`,
+  `RefundService`), SendGrid / SMTP.
+- **Parser:** tree-sitter-c-sharp (MIT, 5.3 MB, in `vendor/`), about 40 ms to load.
+- **Not yet:** conventional routes (`{controller}/{action}`), Razor Pages and Blazor pages.
 
 ## Java: Spring Boot (planned)
 
@@ -593,3 +610,4 @@ Research done 2026-10. Vendor reports are marked.
 [nuxthub-db]: https://hub.nuxt.com/docs/features/database
 [ng-routes]: https://angular.dev/guide/routing/define-routes
 [ng-guards]: https://angular.dev/guide/routing/route-guards
+[aspnet-simple]: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/simple

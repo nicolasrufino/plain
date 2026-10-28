@@ -3,3 +3,6 @@ Vendored files
 - tree-sitter-python.wasm: from the npm package tree-sitter-python@0.25.0 (MIT, see tree-sitter-python.LICENSE).
   Vendored instead of installed because that package runs a native build (node-gyp) on install.
   Loaded with web-tree-sitter (pinned in package.json). To update: npm pack tree-sitter-python@<version>, copy the .wasm, run npm test.
+- tree-sitter-c-sharp.wasm: from the npm package tree-sitter-c-sharp@0.23.5 (MIT, see tree-sitter-c-sharp.LICENSE).
+  Vendored for the same reason. Loaded through src/treesitter.ts, which sets up web-tree-sitter once for every language
+  (a second Parser.init() resets the runtime and breaks parsers made before it).

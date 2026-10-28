@@ -1146,3 +1146,59 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   assert.ok(t.includes('"Buy now" button') && t.includes('the order edit page') && t.includes('box for "Search"'), `review 16: template\n${t}`)
   console.log('ok (review 16)')
 }
+
+// C# (ASP.NET Core): controllers and minimal APIs, who they let in (endpoint, controller, group, app-wide), Entity Framework, Stripe, migrations.
+{
+  const base = { 'Shop.Api/Shop.Api.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.0" /></ItemGroup></Project>\n',
+    'Shop.Api/Data/AppDb.cs': 'public class AppDb : DbContext { public DbSet<Order> Orders { get; set; } }\n',
+    'Shop.Api/Models/Order.cs': 'public class Order { public int Id { get; set; } public string Status { get; set; } = ""; public int TotalCents { get; set; } }\n',
+    'Shop.Api/Program.cs': 'var builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\napp.MapControllers();\napp.Run();\n',
+    'Shop.Api/Migrations/20261001_Init.cs': 'public partial class Init : Migration { protected override void Up(MigrationBuilder migrationBuilder) { migrationBuilder.CreateTable(name: "Orders"); } }\n' }
+  const ctrl = (cls: string, actions: string) => `using Microsoft.AspNetCore.Authorization;\n[ApiController]\n[Route("api/[controller]")]\n${cls}public class OrdersController : ControllerBase {\n  private readonly AppDb _db;\n${actions}}\n`
+  const c1 = card(base, { ...base,
+    'Shop.Api/Controllers/OrdersController.cs': ctrl('[Authorize]\n', '  [HttpGet] public async Task<IActionResult> List() => Ok(await _db.Orders.ToListAsync());\n  [HttpPost("{id:int}/refund")] [AllowAnonymous]\n  public async Task<IActionResult> Refund(int id) { var o = await _db.Orders.FindAsync(id); o.Status = "Refunded"; await _db.SaveChangesAsync(); return Ok(); }\n'),
+    'Shop.Api/Program.cs': 'var builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin()));\nvar app = builder.Build();\nvar api = app.MapGroup("/api").RequireAuthorization();\napi.MapPost("/checkout", async (AppDb db, IConfiguration config) => { StripeConfiguration.ApiKey = config["Stripe:SecretKey"]; var s = await new SessionService().CreateAsync(new SessionCreateOptions()); return Results.Ok(s.Url); });\napp.MapGroup("/api/coupons").MapCoupons();\napp.MapControllers();\napp.Run();\n',
+    'Shop.Api/Endpoints/Coupons.cs': 'public static class CouponEndpoints { public static RouteGroupBuilder MapCoupons(this RouteGroupBuilder group) { group.MapDelete("/{id}", async (int id, AppDb db) => { await db.Orders.Where(o => o.Id == id).ExecuteDeleteAsync(); }); return group; } }\n',
+    'Shop.Api/Models/Order.cs': 'public class Order { public int Id { get; set; } public string Status { get; set; } = ""; public int TotalCents { get; set; } public string? CouponCode { get; set; } }\n',
+    'Shop.Api/appsettings.json': '{ "Stripe": { "SecretKey": "sk_live_51HabcdefghijklmnopQRST" } }\n' })
+  for (const e of ['lists orders and requires login ✓. /api/orders', '⚠ Anyone can use the order refund part of your server without logging in.', 'charges customers 💰 and requires login ✓. /api/checkout',
+    '⚠ Anyone can use the coupon part of your server without logging in.', 'Orders now also store the coupon code.', 'dotnet ef migrations add',
+    '⚠ A secret key or password is written in Shop.Api/appsettings.json', 'Any website can call your server'])
+    assert.ok(c1.includes(e), `csharp missing "${e}"\n${c1}`)
+  // the app-wide fallback policy covers controllers and minimal APIs without their own rule; AllowAnonymous still opens one
+  const fb = { ...base, 'Shop.Api/Program.cs': 'var builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddAuthorization(o => { o.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); });\nvar app = builder.Build();\napp.MapControllers();\napp.Run();\n' }
+  const c2 = card(fb, { ...fb, 'Shop.Api/Controllers/OrdersController.cs': ctrl('', '  [HttpDelete("{id}")] public async Task<IActionResult> Delete(int id) { await _db.Orders.Where(o => o.Id == id).ExecuteDeleteAsync(); return NoContent(); }\n  [HttpPost("track")] [AllowAnonymous] public IActionResult Track() { _db.Orders.Add(new Order()); _db.SaveChanges(); return Ok(); }\n'),
+    'Shop.Api/Migrations/20261028_Drop.cs': 'public partial class Drop : Migration { protected override void Up(MigrationBuilder migrationBuilder) { migrationBuilder.DropColumn(name: "Status", table: "Orders"); } protected override void Down(MigrationBuilder b) { } }\n' })
+  for (const e of ['deletes orders and requires login ✓. /api/orders/[id]', 'Anyone can use the orders track part', 'Back up your data first: Shop.Api/Migrations/20261028_Drop.cs deletes data', 'Apply 20261028_Drop to your live database before the new code goes live (`dotnet ef database update`)'])
+    assert.ok(c2.includes(e), `csharp fallback missing "${e}"\n${c2}`)
+  console.log('ok (csharp)')
+}
+
+// Review 17 (2026-10-28): ASP.NET login the way ASP.NET decides it, and EF entities without false alarms.
+{
+  const proj = { 'A/A.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n', 'A/Data/Db.cs': 'public class AppDb : DbContext { public DbSet<Order> Orders { get; set; } }\n', 'A/Models/Order.cs': 'public class Order { public int Id { get; set; } public string Status { get; set; } = ""; }\n' }
+  const r = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries({ ...proj, ...files })))
+    return [...a.routes].filter(([, x]) => x.kind === 'endpoint').map(([k, x]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : 'open'}`).sort().join(' | ') }
+  const del = 'await _db.Orders.Where(o => o.Id == id).ExecuteDeleteAsync();'
+  const cases: [string, Record<string, string>, string][] = [
+    ['[Authorize] from a base controller', { 'A/Controllers/Base.cs': '[Authorize]\n[ApiController]\n[Route("api/[controller]")]\npublic abstract class SecureController : ControllerBase { }\n', 'A/Controllers/OrdersController.cs': `public class OrdersController : SecureController { [HttpDelete("{id}")] public async Task<IActionResult> Delete(int id) { ${del} return NoContent(); } }\n` }, '/api/orders/[id] login'],
+    ['[AllowAnonymous] on a base class wins', { 'A/Controllers/Base.cs': '[AllowAnonymous]\n[ApiController]\n[Route("api/[controller]")]\npublic abstract class OpenController : ControllerBase { }\n', 'A/Controllers/OrdersController.cs': `[Authorize]\npublic class OrdersController : OpenController { [HttpDelete("{id}")] public async Task<IActionResult> Delete(int id) { ${del} return NoContent(); } }\n` }, '/api/orders/[id] open'],
+    ['the same group name in two methods', { 'A/Program.cs': 'var app = WebApplication.Create();\napp.MapPublic();\napp.MapAdmin();\n', 'A/Endpoints/E.cs': `public static class E {\n  public static void MapPublic(this WebApplication app) { var group = app.MapGroup("/public"); group.MapDelete("/orders/{id}", async (int id, AppDb _db) => { ${del} }); }\n  public static void MapAdmin(this WebApplication app) { var group = app.MapGroup("/admin").RequireAuthorization(); group.MapGet("/stats", () => 1); }\n}\n` }, '/admin/stats login | /public/orders/[id] open'],
+    ['[AllowAnonymous] on a handler in a protected group', { 'A/Program.cs': `var app = WebApplication.Create();\nvar g = app.MapGroup("/orders").RequireAuthorization();\ng.MapDelete("/{id}", [AllowAnonymous] async (int id, AppDb _db) => { ${del} });\n` }, '/orders/[id] open'],
+    ['RequireAuthorization() as its own statement', { 'A/Program.cs': `var app = WebApplication.Create();\nvar g = app.MapGroup("/orders");\ng.RequireAuthorization();\ng.MapDelete("/{id}", async (int id, AppDb _db) => { ${del} });\n` }, '/orders/[id] login'],
+    ['fallback in a test project', { 'A/Program.cs': `var app = WebApplication.Create();\napp.MapDelete("/orders/{id}", async (int id, AppDb _db) => { ${del} });\n`, 'A.Tests/A.Tests.csproj': '<Project></Project>\n', 'A.Tests/Factory.cs': 'class F : WebApplicationFactory<Program> { void C(IServiceCollection s) { s.AddAuthorization(o => { o.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); }); } }\n' }, '/orders/[id] open'],
+    ['SetFallbackPolicy', { 'A/Program.cs': `var builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddAuthorizationBuilder().SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());\nvar app = builder.Build();\napp.MapDelete("/orders/{id}", async (int id, AppDb _db) => { ${del} });\n` }, '/orders/[id] login'],
+    ['a userId from the logged-in user', { 'A/Program.cs': `var app = WebApplication.Create();\napp.MapDelete("/orders/{id}", async (int id, ClaimsPrincipal user, AppDb _db) => { var userId = user.FindFirstValue(ClaimTypes.NameIdentifier); if (userId is null) return Results.Unauthorized(); ${del} return Results.Ok(); });\n` }, '/orders/[id] login'],
+    ['extension called with an argument, ext inside ext', { 'A/Program.cs': 'var app = WebApplication.Create();\napp.MapGroup("/api").RequireAuthorization().MapOrders(app.Configuration);\n', 'A/Endpoints/O.cs': `public static class O { public static RouteGroupBuilder MapOrders(this RouteGroupBuilder group, IConfiguration c) { var g = group.MapGroup("/orders"); g.MapDelete("/{id}", async (int id, AppDb _db) => { ${del} }); return group; } }\n` }, '/api/orders/[id] login'],
+  ]
+  for (const [name, files, want] of cases) assert.equal(r(files), want, `review 17: ${name}`)
+  // a DTO named like an entity, a computed property: no table changes
+  for (const extra of [{ 'A/Dtos/Order.cs': 'namespace A.Dtos; public class Order { public string Name { get; set; } = ""; }\n' }, { 'A/Models/Order.cs': 'public class Order { public int Id { get; set; } public string Status { get; set; } = ""; public bool IsPaid => Status == "Paid"; [NotMapped] public string Note { get; set; } = ""; }\n' }]) {
+    const c = card(proj, { ...proj, ...extra })
+    assert.ok(!c.includes('Database') && !c.includes('migrations add'), `review 17: entity\n${c}`)
+  }
+  // a local database password in appsettings isn't a leaked secret; a live key in appsettings.Development.json is
+  assert.ok(!card(proj, { ...proj, 'A/appsettings.json': '{ "ConnectionStrings": { "Default": "Server=localhost;Database=a;User Id=sa;Password=devpass;" } }\n' }).includes('secret'), 'review 17: localhost')
+  assert.ok(card(proj, { ...proj, 'A/appsettings.Development.json': '{ "Stripe": { "SecretKey": "sk_live_51Habcdefghijklmnop" } }\n' }).includes('A secret key or password is written'), 'review 17: dev live key')
+  console.log('ok (review 17)')
+}
