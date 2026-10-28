@@ -126,7 +126,7 @@ export function fileFacts(path: string, text: string): FileFacts {
 
 // Facts from one subtree: a whole file, one function, or one route handler.
 function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
-  const servers = new Set<string>(), guarded = new Set<string>()
+  const servers = new Set<string>(), guarded = new Set<string>(), sbClients = new Set<string>()
   const isGuard = (a: ts.Node) => !fnLike(a) && GUARD.test(a.getText(sf)) && !NOT_GUARD.test(a.getText(sf))
   const addHandler = (server: string, method: string, path: string, mw: readonly ts.Expression[], h: ts.Expression) =>
     f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard),
@@ -182,6 +182,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         const host = callee.text === 'fetch' && HOSTS[arg?.match(/^https?:\/\/([^/]+)/)?.[1] ?? '']
         if (host) { f.services.add(host); f.outside.add(`${host}: ${EMAIL.has(host) ? 'emails.send' : 'request'}`) }
         else if (callee.text === 'navigate' && arg?.startsWith('/')) f.links.add(arg)
+        else if (/env/i.test(callee.text) && arg && /^[A-Z][A-Z0-9_]+$/.test(arg)) { f.env.add(arg); if (n.arguments.length === 1) f.envReq.add(arg) }   // requireEnv('X'); env('X', 'default') has one
         else if (arg?.startsWith('/') && callee.text !== 'require') f.calls.push({ name: callee.text, path: arg.split('?')[0], method, prop: false })
         if (callee.text === 'require' && arg) { f.imports.push(arg); if (SERVICES[arg]) f.services.add(SERVICES[arg]) }
       } else if (ts.isPropertyAccessExpression(callee)) {
@@ -214,7 +215,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         // Supabase: supabase.from('orders').update(...), and edge functions called with supabase.functions.invoke('name')
         const from = ts.isCallExpression(callee.expression) && ts.isPropertyAccessExpression(callee.expression.expression) && callee.expression.expression.name.text === 'from'
           ? { table: str(callee.expression.arguments[0]), on: callee.expression.expression.expression.getText(sf) } : undefined
-        if (from?.table && /supabase|client|^sb$/i.test(from.on) && !/storage$/.test(from.on) && /^(select|insert|update|upsert|delete)$/.test(last)) {
+        if (from?.table && (sbClients.has(from.on) || /supabase|client|^sb$/i.test(from.on)) && !/storage$/.test(from.on) && /^(select|insert|update|upsert|delete)$/.test(last)) {
           f.tables.add(from.table)
           if (SB_OPS[last]) { f.writes = true; f.written.add(from.table); f.ops.add(SB_OPS[last]) }
         }
@@ -271,6 +272,8 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     if (ts.isVariableDeclaration(n) && n.initializer) {
       const init = n.initializer.getText(sf)
       if (ts.isIdentifier(n.name) && SERVER.test(init)) servers.add(n.name.text)
+      // const admin = getSupabaseAdminClient(): a database client, whatever it's called
+      if (ts.isIdentifier(n.name) && /^(await\s+)?(createClient|createServerClient|createBrowserClient|\w*[Ss]upabase\w*)\s*(<[^>]*>)?\(/.test(init)) sbClients.add(n.name.text)
       const base = init.match(/^axios\.create\([^)]*baseURL:\s*['"`](\/[^'"`]*)/)?.[1]
       if (ts.isIdentifier(n.name) && base) f.wrappers.set(n.name.text, base.replace(/\/$/, ''))
       const mod = init.match(/(?:require|import)\(\s*['"]([^'"]+)['"]/)?.[1]   // require('x'), lazy(() => import('x'))
@@ -302,7 +305,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     }
     // Visible text of an element, minus the choices of a dropdown (a <label> around a <select> is just its name).
     const textOf = (el: ts.JsxElement): string => el.children.map(c => ts.isJsxText(c) ? c.text
-      : ts.isJsxElement(c) && !/^(select|option|textarea)$/.test(c.openingElement.tagName.getText(sf)) ? textOf(c) : '').join('').replace(/\s+/g, ' ').trim()
+      : ts.isJsxElement(c) && !/^(select|option|textarea)$/.test(c.openingElement.tagName.getText(sf)) ? textOf(c) : ' ').join('').replace(/\s+/g, ' ').replace(/\s+([.,!?;:])/g, '$1').trim()
     // A box is named by its aria-label, its type (email, password), the <label> around it, its placeholder, or its name.
     if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && /^(input|textarea|select)$/.test(n.tagName.getText(sf))) {
       const at = (k: string) => { const a = n.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(sf) === k) as ts.JsxAttribute | undefined; return a?.initializer && str(a.initializer) }
@@ -389,7 +392,7 @@ function returnsLiteralOnly(fn: ts.Node): boolean {
 export type Route = { kind: 'page' | 'endpoint'; url: string }
 // TanStack Router file routes: src/routes/classes.$classId.tsx -> /classes/[classId]; _authed/ and (group)/ add nothing;
 // posts_.$id.edit.tsx -> /posts/[id]/edit; files under -folders are ignored; [.] is a literal dot.
-export function tanstackRoute(path: string): { url: string; ids: string[] } | null {
+export function tanstackRoute(path: string): { url: string; ids: string[]; layout: boolean } | null {
   const m = path.match(/^(?:src\/|app\/)?routes\/(.+)\.[jt]sx?$/)
   if (!m || m[1].split('/').some(x => x.startsWith('-')) || /(^|\/)__root$|routeTree\.gen$/.test(m[1])) return null
   const toks = m[1].replace(/\[\.\]/g, '\u0000').split(/[/.]/).map(t => t.replace(/\u0000/g, '.'))
@@ -397,7 +400,7 @@ export function tanstackRoute(path: string): { url: string; ids: string[] } | nu
   const segs = kept.filter(t => !t.startsWith('_') && !/^\(.*\)$/.test(t)).map(t => t.replace(/_$/, ''))
     .map(t => t === '$' ? '[rest]' : t.startsWith('$') ? `[${t.slice(1)}]` : t)
   // ids of the layouts above it, to find a login check on a parent (_authed.tsx, admin/route.tsx)
-  return { url: '/' + segs.join('/'), ids: kept.map((_, i) => kept.slice(0, i + 1).join('/')) }
+  return { url: '/' + segs.join('/'), ids: kept.map((_, i) => kept.slice(0, i + 1).join('/')), layout: !!kept.at(-1)?.startsWith('_') }   // _authed.tsx wraps pages, isn't one
 }
 // Next.js routes come from file paths: app/x/page.tsx, app/api/x/route.ts, and (with pagesDir) pages/x.tsx, pages/api/x.ts.
 export function route(path: string, pagesDir = false): Route | null {
@@ -457,6 +460,7 @@ export function appFacts(snap: Snap) {
     const tr = new Map([...files.keys()].flatMap(p => { const t = tanstackRoute(p); return t ? [[p, t] as const] : [] }))
     const byId = new Map([...tr].map(([p, t]) => [t.ids.at(-1)!, p]))
     for (const [p, t] of tr) {
+      if (t.layout) continue
       const f = files.get(p)!, server = f.serverRoute && !f.jsx.size
       routes.set(p, { kind: server ? 'endpoint' : 'page', url: t.url })
       if (!server) { browserPages.add(p); if (t.ids.some(id => files.get(byId.get(id) ?? '')?.pageGuard)) f.auth = true }
@@ -506,18 +510,19 @@ export function appFacts(snap: Snap) {
     }
   }
   // A page also does what its own components do: fold in facts from local imports.
-  const fold = (p: string, into: FileFacts, seen: Set<string>) => {
+  const fold = (p: string, into: FileFacts, seen: Set<string>, page: boolean) => {
     for (const spec of files.get(p)!.imports) {
       const q = resolve(p, spec)
-      if (!q || seen.has(q) || /(^|\/)lib\//.test(q)) continue
+      // lib/ and server code (server actions, server/, *.server.ts) aren't part of what the page shows; calls to them are
+      if (!q || seen.has(q) || /(^|\/)lib\//.test(q) || page && (/(^|\/)server\/|\.server\.[jt]sx?$/.test(q) || files.get(q)!.serverFns.size)) continue
       seen.add(q)
       const c = files.get(q)!
       for (const k of ['ui', 'fetches', 'links', 'outside', 'tables', 'written', 'ops'] as const) for (const x of c[k]) into[k].add(x)
       into.headings.push(...c.headings); into.forms += c.forms
-      fold(q, into, seen)
+      fold(q, into, seen, page)
     }
   }
-  for (const p of files.keys()) if (routes.has(p) && !p.includes('#')) fold(p, files.get(p)!, new Set([p]))
+  for (const p of files.keys()) if (routes.has(p) && !p.includes('#')) fold(p, files.get(p)!, new Set([p]), routes.get(p)!.kind === 'page')
   for (const [k, r] of routes) if (r.kind === 'endpoint' && !k.includes('#') && globalGuard('request')) files.get(k)!.auth = true
   // Reading the session in the browser redirects nobody; on a server (edge function, Next.js) it's a real check.
   for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k)) files.get(k)!.auth = true
@@ -576,7 +581,7 @@ function merge(clauses: string[]): string[] {
   const groups = new Map<string, string[]>()
   for (const c of clauses) {
     const m = c.match(VERB), key = m ? m[1] : c
-    groups.set(key, [...(groups.get(key) ?? []), ...(m ? [m[2]] : [])])
+    groups.set(key, [...new Set([...(groups.get(key) ?? []), ...(m ? [m[2]] : [])])])
   }
   // "loads data from your server" + "loads bookings from your server" -> "loads data and bookings from your server"
   const tail = (objs: string[]) => objs.map(o => o.match(/ (from|to|on) your server$/)?.[0]).reduce((x, y) => x === y ? x : undefined)
@@ -606,7 +611,7 @@ export type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: s
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
 // Addresses that have to work before you're logged in (or are called by other services): never "missing a login check".
 // Webhooks and sign-in callbacks anywhere in the address; login pages only as the last part, and never under admin.
-const PUBLIC = /^(login|log in|register|signup|sign up|signin|sign in|logout|log out|forgot password|reset password|verify|verify email|health)$/
+const PUBLIC = /^(login|log in|register|signup|sign up|signin|sign in|logout|log out|signout|sign out|forgot password|reset password|verify|verify email|health)$/
 const isPublic = (url: string) => !/admin/i.test(url) && (named(url).some(s => /\b(webhooks?|callback|oauth)\b/.test(s)) || PUBLIC.test(named(url).at(-1) ?? ''))
 
 export type Analysis = ReturnType<typeof analyze>
@@ -644,7 +649,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const newOnly = <T,>(a: Set<T> | undefined, b: Set<T>) => [...b].filter(x => !a?.has(x))
   const newPage = (name: string, f: FileFacts, clauses: string[]) => {
     const title = f.headings.find(h => h.startsWith('h1:'))?.slice(3)
-    const sections = f.headings.filter(h => !h.startsWith('h1:')).map(h => h.slice(3))
+    const sections = f.headings.filter(h => !h.startsWith('h1:')).map(h => h.slice(3).replace(/[.!]$/, ''))
     const rest = merge(clauses.filter(c => c !== 'requires login ✓'))
     return [
       `${cap(name)} is new${title ? `, titled "${title}"` : ''}.`,
