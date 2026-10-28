@@ -235,7 +235,7 @@ create function public.f() returns void language plpgsql as $$ begin execute 'cr
 `,
   'supabase/migrations/20260304000000_broken.sql': 'this is not sql (',
 })
-assert.ok(good.includes('✓ Nothing looks broken') && good.includes('! Anyone, even without logging in, can read all reviews'), good)
+assert.ok(good.includes('✓ No problems spotted') && good.includes('! Anyone, even without logging in, can read all reviews'), good)
 assert.ok(!/⚠|Temp|"y"|"x"/.test(good), `careful app should have no warnings\n${good}`)
 
 // Turning RLS off later is caught, even though the table was created long before.
@@ -276,3 +276,35 @@ const sess = card({}, { 'src/App.tsx': "import Admin from './Admin'\nexport cons
   'supabase/functions/refund/index.ts': "Deno.serve(async (req) => { const { data } = await supabase.auth.getUser(req.headers.get('Authorization')); await supabase.from('orders').update({}) })\n" })
 assert.ok(sess.includes('⚠ Anyone can open the admin page without logging in.') && sess.includes('updates orders and requires login ✓'), sess)
 console.log('ok (supabase login checks)')
+
+// An existing public route that starts changing data is flagged; one that already did isn't repeated every turn.
+const grew = card({ 'app/api/orders/route.ts': 'export async function GET() { return prisma.order.findMany() }\n' },
+  { 'app/api/orders/route.ts': 'export async function GET() { return prisma.order.findMany() }\nexport async function POST() { await prisma.order.update({}) }\n' })
+assert.ok(grew.includes('⚠ Anyone can use the orders part of your server without logging in.'), grew)
+const same = card({ 'app/api/orders/route.ts': 'export async function POST() { await prisma.order.update({}) }\n' },
+  { 'app/api/orders/route.ts': 'export async function POST() { await prisma.order.update({ where: {} }) }\n' })
+assert.ok(!same.includes('Anyone can use'), same)
+console.log('ok (routes that start changing data)')
+
+// Trial findings (dog-walks, 2026-10-28): say what really changed instead of "behind-the-scenes".
+{
+  const page = (btn: string, note = '') => `export default function W() { return <form><button>{busy ? 'Opening…' : ${btn}}</button>${note}</form> }\n`
+  const route = (extra: string) => `import Stripe from 'stripe'\nexport async function POST(req: Request) { ${extra} const s = await stripe.checkout.sessions.create({}); await prisma.booking.update({}) }\n`
+  const base = { 'package.json': '{"dependencies":{"stripe":"1"}}', 'app/walkers/[id]/page.tsx': page('`Pay ${formatMoney(p)}`'), 'app/api/bookings/route.ts': route(''),
+    'app/api/a/route.ts': 'export async function GET() { return 1 }\n', 'app/api/b/route.ts': 'export async function GET() { return 1 }\n', 'styles.css': '.a { color: red }\n',
+    'lib/api.ts': 'export async function api(p: string) { return fetch(p) }\n', 'app/thing/page.tsx': "import { api } from '../../lib/api'\nexport default function T() { return <h1>T</h1> }\n" }
+  const after = { ...base, 'app/walkers/[id]/page.tsx': page("'Continue to checkout'", '<p>Members get 10% off.</p>'),
+    'app/api/bookings/route.ts': route("if (!ok) return NextResponse.json({ error: 'That time is taken.' }, { status: 409 }); const c = process.env.EMAIL_TZ || 'UTC'; await fetch('https://api.resend.com/emails', { method: 'POST' }); const st = 'cancelled';"),
+    'app/api/a/route.ts': 'export async function GET() { return 2 }\n', 'app/api/b/route.ts': 'export async function GET() { return 3 }\n',
+    'styles.css': '.a { color: red }\n@media (max-width: 600px) { .a { display: block } }\n',
+    'lib/api.ts': 'export class ApiError extends Error {}\nexport async function api(p: string) { const r = await fetch(p); if (!r.ok) throw new ApiError(); return r }\n',
+    'app/thing/page.tsx': "import { api, ApiError } from '../../lib/api'\nexport default function T() { return <h1>T</h1> }\n" }
+  const c = report(new Map(Object.entries(base)), new Map(Object.entries(after)),
+    { ref: 'main', asked: 'give 10% off to people who sign up for the newsletter', agentSaid: "Done. I couldn't run the build here." }).replace(/\s+/g, ' ')
+  for (const e of ['no longer shows the price', 'now refuses with "That time is taken."', 'Make a test payment before you ship',
+    'Your app now sends emails through Resend', "Cancelling doesn't give money back", 'You asked for a discount', "The agent says it didn't run or test this",
+    'how the app looks on small screens like phones', 'The agent also changed the a and b parts of your server in ways plain can\'t describe yet', '✓ No problems spotted'])
+    assert.ok(c.includes(e), `trial fixes missing: "${e}"\n${c}`)
+  for (const e of ['behind-the-scenes', 'EMAIL_TZ', 'api() in lib/api.ts', 'Nothing looks broken']) assert.ok(!c.includes(e), `trial fixes should not say "${e}"\n${c}`)
+  console.log('ok (trial findings)')
+}
