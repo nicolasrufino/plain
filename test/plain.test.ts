@@ -235,7 +235,7 @@ create function public.f() returns void language plpgsql as $$ begin execute 'cr
 `,
   'supabase/migrations/20260304000000_broken.sql': 'this is not sql (',
 })
-assert.ok(good.includes('✓ No problems spotted') && good.includes('! Anyone, even without logging in, can read all reviews'), good)
+assert.ok(good.includes('1 thing to decide') && !good.includes('No problems spotted') && good.includes('! Anyone, even without logging in, can read all reviews'), good)
 assert.ok(!/⚠|Temp|"y"|"x"/.test(good), `careful app should have no warnings\n${good}`)
 
 // Turning RLS off later is caught, even though the table was created long before.
@@ -303,7 +303,7 @@ console.log('ok (routes that start changing data)')
     { ref: 'main', asked: 'give 10% off to people who sign up for the newsletter', agentSaid: "Done. I couldn't run the build here." }).replace(/\s+/g, ' ')
   for (const e of ['no longer shows the price', 'now refuses with "That time is taken."', 'Make a test payment before you ship',
     'Your app now sends emails through Resend', "Cancelling doesn't give money back", 'You asked for a discount', "The agent says it didn't run or test this",
-    'how the app looks on small screens like phones', 'The agent changed the a and b parts of your server in ways plain can\'t describe yet', '✓ No problems spotted'])
+    'how the app looks on small screens like phones', 'The agent changed the a and b parts of your server in ways plain can\'t describe yet', '2 things to decide'])
     assert.ok(c.includes(e), `trial fixes missing: "${e}"\n${c}`)
   for (const e of ['behind-the-scenes', 'EMAIL_TZ', 'api() in lib/api.ts', 'Nothing looks broken']) assert.ok(!c.includes(e), `trial fixes should not say "${e}"\n${c}`)
   console.log('ok (trial findings)')
@@ -1057,4 +1057,50 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   ]
   for (const [name, files, want] of cases) assert.equal(r(files), want, `review 14: ${name}`)
   console.log('ok (review 14)')
+}
+
+// Round 5 trials (Nuxt plant shop, SvelteKit tutoring, 2026-10-28)
+{
+  const nuxt = (cfg: string, extra: Record<string, string> = {}) => ({ 'package.json': '{"dependencies":{"nuxt":"3","@prisma/client":"5"}}', 'nuxt.config.ts': `export default defineNuxtConfig({\n  runtimeConfig: {\n${cfg}    public: {\n      appUrl: '',\n    },\n  },\n})\n`, ...extra })
+  const c1 = card(nuxt('    stripeSecretKey: process.env.STRIPE_SECRET_KEY,\n'), nuxt('    stripeSecretKey: process.env.STRIPE_SECRET_KEY,\n    resendApiKey: \'\',\n    sendFromName: \'Leafy\',\n'))
+  assert.ok(c1.includes('Add NUXT_RESEND_API_KEY') && !c1.includes('NUXT_SEND_FROM_NAME'), `round 5: nuxt runtimeConfig\n${c1}`)
+  // a SQLite table rebuild copies the rows: not data loss; a new Prisma migration gets the apply step; a unique index on a table with rows gets a check
+  const prisma = { 'package.json': '{"dependencies":{"@prisma/client":"5"}}', 'prisma/schema.prisma': 'model Booking {\n  id Int @id\n  slot String\n}\n' }
+  const rebuild = 'CREATE TABLE "new_Booking" ("id" INTEGER, "slot" TEXT);\nINSERT INTO "new_Booking" ("id", "slot") SELECT "id", "slot" FROM "Booking";\nDROP TABLE "Booking";\nALTER TABLE "new_Booking" RENAME TO "Booking";\nCREATE UNIQUE INDEX "Booking_slot_key" ON "Booking"("slot");\n'
+  const c2 = card(prisma, { ...prisma, 'prisma/migrations/20261028_slot/migration.sql': rebuild })
+  for (const e of ['Apply prisma/migrations/20261028_slot to your live database before the new code goes live (`npx prisma migrate deploy`)', 'it adds a rule that no two bookings can share the same slot'])
+    assert.ok(c2.includes(e), `round 5 missing "${e}"\n${c2}`)
+  assert.ok(!c2.includes('deletes data'), `round 5: rebuild\n${c2}`)
+  // the refund guess reads Prisma's upper-case enum; "half off" is a deal; a calculator isn't made-up data
+  const stripe = { 'package.json': '{"dependencies":{"stripe":"1","next":"15"}}', 'app/api/pay/route.ts': "import Stripe from 'stripe'\nexport async function POST() { await stripe.checkout.sessions.create({}) }\n" }
+  const c3 = card(stripe, { ...stripe, 'app/api/cancel/route.ts': "export async function POST(req: Request) { const { id } = await req.json(); await prisma.reservation.update({ where: { id }, data: { status: 'CANCELLED' } }) }\n" })
+  assert.ok(c3.includes("Cancelling doesn't give money back"), `round 5: CANCELLED\n${c3}`)
+  const c4 = report(new Map(Object.entries(stripe)), new Map(Object.entries({ ...stripe, 'app/api/pay/route.ts': "export async function POST() { await stripe.checkout.sessions.create({ amount: 50 }) }\n", 'lib/pricing.ts': 'export function getBookingPrice(rate: number) { return { total: rate * 1.07 + 2 } }\n' })), { ref: 'main', asked: 'can new parents get their first session half off if they make an account' })
+  assert.ok(c4.includes('You asked for a discount') && !c4.includes('made-up data'), `round 5: half off\n${c4}`)
+  console.log('ok (round 5 trials)')
+}
+
+// Review 15 (2026-10-28): round 5's rules, without their false alarms.
+{
+  const prisma = { 'package.json': '{"dependencies":{"@prisma/client":"5"}}', 'prisma/schema.prisma': 'model Booking {\n  id Int @id\n  slot String @unique\n}\n', 'prisma/migrations/1_init/migration.sql': 'CREATE TABLE "Booking" ("id" INTEGER, "slot" TEXT);\nCREATE UNIQUE INDEX "Booking_slot_key" ON "Booking"("slot");\n' }
+  const rebuild = 'CREATE TABLE "new_Booking" ("id" INTEGER, "slot" TEXT, "note" TEXT);\nINSERT INTO "new_Booking" SELECT "id", "slot", NULL FROM "Booking";\nDROP TABLE "Booking";\nALTER TABLE "new_Booking" RENAME TO "Booking";\nCREATE UNIQUE INDEX "Booking_slot_key" ON "Booking"("slot");\n'
+  const c1 = card(prisma, { ...prisma, 'prisma/migrations/2_note/migration.sql': rebuild })
+  assert.ok(!c1.includes('Check your live data') && !c1.includes('deletes data'), `review 15: re-created index\n${c1}`)
+  // a real DROP of a table whose name starts another's
+  const c2 = card(prisma, { ...prisma, 'prisma/migrations/2_note/migration.sql': rebuild + 'DROP TABLE "Book";\n' })
+  assert.ok(c2.includes('deletes data'), `review 15: prefix drop\n${c2}`)
+  // drizzle-pg's ADD CONSTRAINT ... UNIQUE on an existing column
+  const dz = { 'package.json': '{"dependencies":{"drizzle-orm":"0.36"}}', 'src/db/schema.ts': "export const users = pgTable('users', {\n  id: serial('id'),\n  email: text('email'),\n})\n", 'drizzle/0000_init.sql': 'CREATE TABLE "users" ("id" serial, "email" text);\n' }
+  assert.ok(card(dz, { ...dz, 'drizzle/0001_u.sql': 'ALTER TABLE "users" ADD CONSTRAINT "users_email_unique" UNIQUE("email");\n' }).includes('no two users can share the same email'), 'review 15: add constraint')
+  // catch (e: any) is fine; a hard-coded list behind getProducts(limit) is still made-up data
+  const c3 = card({}, { 'lib/x.ts': "export async function load() { try { return 1 } catch (e: any) { return 0 } }\nexport function getProducts(limit: number) { return [{ id: 1, name: 'Fern' }] }\n" })
+  assert.ok(!c3.includes('Type checking is turned off') && c3.includes('getProducts() returns made-up data'), `review 15: any + made-up\n${c3}`)
+  // Nuxt runtimeConfig: nested keys add up, comments, APIKey
+  const nuxt = (cfg: string) => ({ 'package.json': '{"dependencies":{"nuxt":"3"}}', 'nuxt.config.ts': `export default defineNuxtConfig({\n  runtimeConfig: {\n${cfg}  },\n})\n` })
+  const c4 = card(nuxt(''), nuxt("    stripe: {\n      webhook: {\n        secret: '', // set in prod\n      },\n    },\n    resendAPIKey: '',\n    public: {\n      stripe: { pk: '' },\n    },\n"))
+  for (const e of ['NUXT_STRIPE_WEBHOOK_SECRET', 'NUXT_RESEND_API_KEY']) assert.ok(c4.includes(e), `review 15 missing ${e}\n${c4}`)
+  // a "not cancelled" filter isn't a cancel
+  const st = { 'package.json': '{"dependencies":{"stripe":"1","next":"15"}}', 'app/api/pay/route.ts': "import Stripe from 'stripe'\nexport async function POST() { await stripe.checkout.sessions.create({}) }\n" }
+  assert.ok(!card(st, { ...st, 'app/api/seen/route.ts': "export async function POST() { await prisma.order.updateMany({ where: { status: { not: 'CANCELLED' } }, data: { seen: true } }) }\n" }).includes("doesn't give money back"), 'review 15: not cancelled')
+  console.log('ok (review 15)')
 }

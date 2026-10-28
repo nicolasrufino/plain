@@ -462,7 +462,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const v = str(n.initializer), name = n.name.getText(sf)
       // <a href>; Vue's <NuxtLink to> / <RouterLink to> (React Router's <Link to> stays out: those cards never listed it)
       const tag = ts.isJsxAttributes(n.parent) && (ts.isJsxOpeningElement(n.parent.parent) || ts.isJsxSelfClosingElement(n.parent.parent)) ? n.parent.parent.tagName.getText(sf) : ''
-      if (v && (name === 'href' || name === 'to' && /^(NuxtLink|RouterLink|nuxt-link|router-link)$/.test(tag)) && v.startsWith('/')) f.links.add(v.replace(/#.*$/, '') || '/')   // /#tutors is the home page
+      if (v && (name === 'href' || name === 'to' && /^(NuxtLink|RouterLink|nuxt-link|router-link)$/.test(tag)) && v.startsWith('/')) f.links.add(v.replace(/[?#].*$/, '') || '/')   // /#tutors is the home page; /login?returnTo=... is the login page
       // a SvelteKit <form method="POST" action="?/create">: sends to its own page's form actions (the page's address, filled in later)
       if (name === 'method' && v?.toUpperCase() === 'POST' && ts.isJsxAttributes(n.parent) && ts.isJsxOpeningElement(n.parent.parent) && n.parent.parent.tagName.getText(sf) === 'form') {
         const action = n.parent.properties.find(q => ts.isJsxAttribute(q) && q.name.getText(sf) === 'action') as ts.JsxAttribute | undefined, a = action?.initializer && str(action.initializer)
@@ -477,8 +477,11 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const at = (k: string) => { const a = n.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(sf) === k) as ts.JsxAttribute | undefined; return a?.initializer && str(a.initializer) }
       const type = at('type') ?? '', el = ts.isJsxOpeningElement(n) ? n.parent.parent : n.parent
       const label = ts.isJsxElement(el) && el.openingElement.tagName.getText(sf) === 'label' ? textOf(el) : ''
-      boxes.push({ id: at('id'), type, v: at('aria-label') ?? (label || undefined), aria: !!at('aria-label') })
-      if (!boxes.at(-1)!.v) boxes.at(-1)!.v = at('placeholder') ?? at('name')   // after <label htmlFor> is known
+      if (type !== 'hidden') {   // <input type="hidden" name="bookingId"> is invisible plumbing
+        boxes.push({ id: at('id'), type, v: at('aria-label') ?? (label || undefined), aria: !!at('aria-label') })
+        // after <label htmlFor> is known; a name attribute is code (bookingId), said in words (booking)
+        if (!boxes.at(-1)!.v) boxes.at(-1)!.v = at('placeholder') ?? (at('name') && words(at('name')!.replace(/\[\]$/, '')).replace(/ id$/, ''))
+      }
     }
     if (ts.isJsxElement(n) && n.openingElement.tagName.getText(sf) === 'label') {
       const a = n.openingElement.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(sf) === 'htmlFor') as ts.JsxAttribute | undefined
@@ -498,7 +501,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       if (t) f.ui.add(`button "${t}"`)
     }
     if (ts.isCatchClause(n) && n.block.statements.length === 0) f.emptyCatch++
-    if (n.kind === ts.SyntaxKind.AnyKeyword) f.anys++
+    if (n.kind === ts.SyntaxKind.AnyKeyword && !(n.parent && ts.isVariableDeclaration(n.parent) && n.parent.parent && ts.isCatchClause(n.parent.parent))) f.anys++   // catch (e: any) is the usual way to write it
     ts.forEachChild(n, visit)
   }
   visit(root)
@@ -543,10 +546,13 @@ function routeLike(n: ts.Node, sf: ts.SourceFile): { path?: string; index: boole
 // A "get/fetch/list" function that returns a literal and never awaits or queries anything.
 function returnsLiteralOnly(fn: ts.Node): boolean {
   let literal = false, real = false
+  // a calculator (getPrice(rate, hours) => ({ total: rate * hours })) computes from its inputs: not made-up data
+  const params = ts.isFunctionLike(fn) ? (fn as ts.SignatureDeclaration).parameters.map(p => p.name.getText()) : []
+  const calc = (e: ts.Node) => params.some(x => new RegExp(`\\b${x}\\b`).test(e.getText())) && !/['"`]/.test(e.getText())
   const visit = (n: ts.Node) => {
     if (ts.isAwaitExpression(n) || (ts.isCallExpression(n) && /prisma|fetch|supabase|db\./.test(n.expression.getText()))) real = true
-    if (ts.isReturnStatement(n) && n.expression && (ts.isArrayLiteralExpression(n.expression) || ts.isObjectLiteralExpression(n.expression))) literal = true
-    if (ts.isArrowFunction(n) && (ts.isArrayLiteralExpression(n.body) || ts.isObjectLiteralExpression(n.body))) literal = true
+    if (ts.isReturnStatement(n) && n.expression && (ts.isArrayLiteralExpression(n.expression) || ts.isObjectLiteralExpression(n.expression)) && !calc(n.expression)) literal = true
+    if (ts.isArrowFunction(n) && (ts.isArrayLiteralExpression(n.body) || ts.isObjectLiteralExpression(n.body)) && !calc(n.body)) literal = true
     ts.forEachChild(n, visit)
   }
   visit(fn)
@@ -708,6 +714,25 @@ export function appFacts(snap: Snap) {
   // Nuxt. Route middleware (middleware/auth.ts, auth.global.ts) turns people away from pages but runs in the Vue part of the app:
   // it never protects server/api. Server middleware with a login check covers every server route, or the paths it tests.
   if ('nuxt' in deps_) {
+    // runtimeConfig: { resendApiKey: '', public: { appUrl: '' } } is filled from NUXT_RESEND_API_KEY / NUXT_PUBLIC_APP_URL; an empty default needs it set
+    for (const [p, f] of files) if (/(^|\/)nuxt\.config\.[cm]?[jt]s$/.test(p)) {
+      const t = snap.get(p) ?? '', at = t.search(/runtimeConfig\s*:\s*\{/)
+      if (at < 0) continue
+      // nested keys add up: public: { stripe: { pk: '' } } -> NUXT_PUBLIC_STRIPE_PK
+      const keys: [string, string][] = [], path: string[] = ['NUXT']
+      for (const raw of t.slice(t.indexOf('{', at) + 1).split('\n')) {
+        const line = raw.replace(/\/\/.*$/, '').trim()
+        if (!line) continue
+        if (/^\}/.test(line)) { if (path.length === 1) break; path.pop(); continue }
+        const m = line.match(/^['"]?(\w+)['"]?\s*:\s*(.*?),?$/)
+        if (!m) continue
+        if (m[2] === '{') path.push(m[1])
+        else keys.push([[...path, m[1]].join('_'), m[2]])
+      }
+      for (const [k, v] of keys) if (/^(''|""|``|undefined|null)$/.test(v)) {
+        const env = k.replace(/([a-z0-9])([A-Z])|([A-Z])([A-Z][a-z])/g, (_, a, b, c, d) => a ? `${a}_${b}` : `${c}_${d}`).toUpperCase(); f.env.add(env); f.envReq.add(env)   // APIKey -> API_KEY
+      }
+    }
     const mw = new Map<string, { global: boolean; covers: (url: string) => boolean }>()
     for (const [p, f] of files) { const m = p.match(/^(?:app\/)?middleware\/([\w-]+?)(\.global)?\.[cm]?[jt]s$/); if (m) mw.set(m[1], { global: !!m[2], covers: coverage(f) }) }
     // @sidebase/nuxt-auth: its own middleware, on every page with globalAppMiddleware enabled (except definePageMeta({ auth: false }))
@@ -1140,7 +1165,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       for (const x of newOnly(a?.fetches, b.fetches)) clauses.push((a ? 'now ' : '') + fetchPhrase(x))
       for (const x of newOnly(a?.links, b.links)) clauses.push(`${a ? 'now links' : 'links'} to ${pageName(x)}`)
       // icons (lucide, heroicons, ...) aren't content: "shows the gift" would be noise
-      const comps = newOnly(a?.jsx, b.jsx).filter(x => /^[A-Z]/.test(x) && !/^(Link|Image|Script|Head)$/.test(x) && !x.includes('.')
+      const comps = newOnly(a?.jsx, b.jsx).filter(x => /^[A-Z]/.test(x) && !/^(Link|Image|Script|Head|NuxtLink|NuxtPage|NuxtLayout|NuxtImg|NuxtLoadingIndicator|ClientOnly|RouterLink|RouterView|Teleport|Transition|KeepAlive|Suspense)$/.test(x) && !x.includes('.')
         && !/icons?|lucide|phosphor|tabler|feather/i.test(b.binds.get(x) ?? '') && !/Icon$/.test(x))
       if (a && comps.length) clauses.push(`now shows the ${list(comps.map(nice))}`)
       const price = (f: FileFacts) => f.texts.has('[price]') || [...f.jsx].some(x => /Price|Money|Amount|Currency/.test(x))   // or a <Price/> component
@@ -1263,14 +1288,37 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const flag = std || sp === 'schema.prisma' ? '' : ` --schema ${sp}`, added = [...B.models.keys()].filter(m => !A.models.has(m) && !B.db.tables.has(m))
     ship.push(`Update your database: ${dir ? `in ${dir}, ` : ''}run \`npx prisma migrate dev${flag}\` (on your live site: \`npx prisma migrate deploy${flag}\`). The database's structure changed, but no migration was created.${added.length ? ` Until you do, anything that uses ${list(added.map(things))} will fail.` : ''}`)
   }
-  for (const m of newMigrations) if (/\bDROP\b/i.test(after.get(m) ?? '')) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+  // (SQLite can't alter a table in place: Prisma rebuilds it as new_X, copies every row, drops X and renames new_X back. Nothing is lost.)
+  const rebuilt = (sql: string) => sql.replace(/DROP TABLE\s+["`]?(\w+)["`]?;?/gi, (m, t: string) => new RegExp(`INSERT INTO\\s+["\`]?(?:__)?new_${t}(?!\\w)["\`]?[\\s\\S]*RENAME TO\\s+["\`]?${t}(?!\\w)`, 'i').test(sql) ? '' : m)   // drizzle-kit: __new_x
+  for (const m of newMigrations) if (/\bDROP\b/i.test(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+  if (newMigrations.length) ship.push(`Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database before the new code goes live (\`npx prisma migrate deploy\`), or the parts that use it will fail.`)
+  // A new "no duplicates" rule (a unique index) on a table that already has rows fails to apply if the live data has duplicates
+  for (const m of [...newMigrations, ...B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m)), ...B.dzMigrations.filter(m => !A.dzMigrations.includes(m))]) {
+    // (only on columns that already had data: a new column starts empty; a partial index's condition must be about old columns too)
+    // (CREATE UNIQUE INDEX [CONCURRENTLY] name ON [schema.]table [USING btree] (cols) [WHERE ...]; ALTER TABLE t ADD CONSTRAINT name UNIQUE (cols))
+    const oldSql = [...before].filter(([p]) => /\.sql$/.test(p)).map(([, t]) => t).join('\n')
+    const forms = [...(after.get(m) ?? '').matchAll(/CREATE\s+UNIQUE\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s*(?:USING\s+\w+\s*)?\(([^)]*)\)([^;]*)/gi)].map(x => [x[0], x[2], x[3], x[4], x[1]])
+      .concat([...(after.get(m) ?? '').matchAll(/ALTER\s+TABLE\s+(?:ONLY\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+ADD\s+CONSTRAINT\s+["`]?(\w+)["`]?\s+UNIQUE\s*\(([^)]*)\)/gi)].map(x => [x[0], x[1], x[3], '', x[2]]))
+    for (const x of forms) {
+      // already there before (a rebuild re-creates it; it was @unique / .unique() already): no new rule
+      if (new RegExp(`["\`]?${x[4]}["\`]?`).test(oldSql)) continue
+      const model = [...A.models.keys()].find(k => [k.toLowerCase(), pluralize(k.toLowerCase())].includes(x[1].toLowerCase()) || things(k).replace(/ /g, '_') === x[1].toLowerCase())
+      const cols = x[2].split(',').map(c => c.replace(/["`\s]|\b(ASC|DESC)\b/gi, '')), norm_ = (c: string) => camel(c).toLowerCase()
+      // (a link column like tutor_id is stored as its link, →tutor)
+      const had = (c: string) => !!model && A.models.get(model)!.some(f => norm_(f) === norm_(c) || f.startsWith('→') && singular(f.slice(1)).toLowerCase() === norm_(c).replace(/id$/, ''))
+      // a partial index (WHERE ...) counts only when its condition is about columns that already had data
+      const where = (x[3].match(/\bWHERE\b([\s\S]*)/i)?.[1] ?? '').replace(/'[^']*'/g, '').match(/[A-Za-z_]\w*/g)?.filter(w => !/^(and|or|not|in|is|null|true|false|like)$/i.test(w)) ?? []
+      if (model && cols.every(had) && where.every(had))
+        ship.push(`Check your live data before applying ${m}: it adds a rule that no two ${things(model)} can share the same ${list(cols.map(c => fieldName(c) || words(camel(c).replace(/Id$/, ''))))}. If any already do, the update fails.`)
+    }
+  }
   // Drizzle: a changed schema needs a migration (or `drizzle-kit push` for apps that don't keep migration files)
   const newDz = B.dzMigrations.filter(m => !A.dzMigrations.includes(m))
   if ([...B.dzModels, ...A.dzModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newDz.length)
     ship.push(B.dzMigrations.length ? 'Update your database: run `npx drizzle-kit generate`, then `npx drizzle-kit migrate` (also on your live site). The tables changed, but no migration was created.'
       : 'Update your database: run `npx drizzle-kit push` (also against your live database). The tables changed, and until then the parts that use them will fail.')
   for (const m of newDz) {
-    if (/\bDROP\b/i.test(after.get(m) ?? '')) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+    if (/\bDROP\b/i.test(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
     ship.push(`Apply ${m} to your live database before the new code goes live (\`npx drizzle-kit migrate\`), or the parts that use it will fail.`)
   }
   // Supabase: new migrations, what they destroy (removed tables and columns are already listed above), and who the rules let in.
@@ -1373,9 +1421,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const moneyChanged = real.some(p => B.files.get(p)?.money && route(p))
   const said = (x: string | undefined) => x ?? ''
   // A deal for new sign-ups (newsletter, first order, welcome) can be claimed again with another email.
-  if (moneyChanged && /(\d+\s*(%|percent)|\$\s*\d+\s+off|discount|promo|coupon|\bfree\b(\s+\w+){0,2}\s+(shipping|delivery|trial|month|week|walk|order|item|session|class|lesson|booking|visit|consultation)s?\b|\bfirst\s+\w+\s+(is\s+)?free\b)/i.test(said(opts.asked)) && /(sign ?up|newsletter|subscribe|\bfirst\b|new (customer|user|account)|welcome|referr)/i.test(said(opts.asked)))
+  if (moneyChanged && /(\d+\s*(%|percent)|\$\s*\d+\s+off|half[- ]?(off|price)|discount|promo|coupon|\bfree\b(\s+\w+){0,2}\s+(shipping|delivery|trial|month|week|walk|order|item|session|class|lesson|booking|visit|consultation)s?\b|\bfirst\s+\w+\s+(is\s+)?free\b)/i.test(said(opts.asked)) && /(sign ?up|newsletter|subscribe|\bfirst\b|new (customer|user|account)|welcome|referr)/i.test(said(opts.asked)))
     problems.push({ kind: 'Check', text: 'You asked for a discount. If it depends on a new account or email address, people can usually get it again by signing up with another email. What stops that? (This is a guess.)' })
-  // Cancelling that can hit paid rows: a 'cancelled' write whose surroundings don't limit it to pending/unpaid ones.
+  // Cancelling that can hit paid rows ('cancelled', or a Prisma enum 'CANCELLED'): a 'cancelled' write whose surroundings don't limit it to pending/unpaid ones.
   // A cancel counts when it isn't limited to pending/unpaid rows: a write that sets 'cancelled', or a validated
   // list (['completed', 'cancelled']) next to a write of `status` from the request.
   // ponytail: no control flow; a pending row cancelled right after Stripe charged it (charged, no booking) is missed
@@ -1384,8 +1432,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const pendingOnly = (x: string) => /\b(pending|unpaid|expired|open)\b/i.test(x) && !/(?<!un)\bpaid\b/i.test(x.replace(/payment_status\s*={1,3}\s*['"`]paid['"`]/g, ''))
   const statusFromInput = (t: string) => [...t.matchAll(/\bstatus\s*(?=[,}])|\bstatus\s*:\s*(?!['"`])[A-Za-z_]/g)].some(m => { const x = stmtAt(t, m.index!); return isWrite(x) && !pendingOnly(x) })
   // writes of 'cancelled', plus (when status comes from the request) lists of allowed values in the file: ['completed', 'cancelled'], z.enum([...]), in (...)
-  const paidCancels = (t = '', file = t) => [...t.matchAll(/['"`]cancell?ed['"`]/g)].filter(m => isWrite(stmtAt(t, m.index!)) && !pendingOnly(stmtAt(t, m.index!))).length
-    + (statusFromInput(t) ? new Set([...file.matchAll(/['"`]cancell?ed['"`]/g)].map(m => stmtAt(file, m.index!)).filter(x => !isWrite(x) && /\[[^\]]*cancell?ed[^\]]*\]|enum\s*\(|\bin\s*\(/i.test(x))).size : 0)
+  const paidCancels = (t = '', file = t) => [...t.matchAll(/['"`]cancell?ed['"`]/gi)].filter(m => !/(\bnot|notIn|!==?|<>)\s*:?\s*\[?\s*$/.test(t.slice(Math.max(0, m.index! - 12), m.index)) && isWrite(stmtAt(t, m.index!)) && !pendingOnly(stmtAt(t, m.index!))).length
+    + (statusFromInput(t) ? new Set([...file.matchAll(/['"`]cancell?ed['"`]/gi)].map(m => stmtAt(file, m.index!)).filter(x => !isWrite(x) && /\[[^\]]*cancell?ed[^\]]*\]|enum\s*\(|\bin\s*\(/i.test(x))).size : 0)
   const newSql = B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m)).map(m => after.get(m) ?? '').join('\n')
   // test code sets up cancelled orders; it isn't the app. A test_*.py / *_test.py counts only if it holds tests (test_drive.py may be a feature)
   const isTest = (p: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)(tests|conftest)\.py$|\.(test|spec)\.[jt]sx?$/.test(p)
@@ -1525,7 +1573,7 @@ export function render(r: {
   // an unasked change is a guess ("?"), not a problem: it's for the owner to decide
   const checks = r.problems.filter(p => p.kind === 'Check' || p.kind === 'Unasked').length, bad = r.problems.length - checks
   out.push('', '  ' + [
-    bad ? red(`⚠ ${plural(bad, 'problem')}`) : green('✓ No problems spotted'),
+    bad ? red(`⚠ ${plural(bad, 'problem')}`) : checks ? '' : green('✓ No problems spotted'),   // never "no problems" above something to look at
     checks ? yellow(`${plural(checks, 'thing')} to decide`) : '',
     r.unfinished.length ? yellow(`${plural(r.unfinished.length, 'loose end')}`) : '',
     r.ship.length ? `${plural(r.ship.length, 'step')} before you ship` : '',
