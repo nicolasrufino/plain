@@ -82,6 +82,9 @@ const empty = (printed = ''): FileFacts => ({
   texts: new Set(), refuses: new Set(), envReq: new Set(), exports: new Set(),
 })
 const fnLike = (n?: ts.Node) => !!n && (ts.isArrowFunction(n) || ts.isFunctionExpression(n))
+// `process.env.PORT || 3001` has a real default; `|| ''` or `?? undefined` only quiets TypeScript, the value is still needed
+const hasDefault = (n: ts.Node) => ts.isBinaryExpression(n.parent) && n.parent.left === n && /^(\|\||\?\?)$/.test(n.parent.operatorToken.getText())
+  && !/^(''|""|``|null|undefined)$/.test(n.parent.right.getText().trim())
 
 export function fileFacts(path: string, text: string): FileFacts {
   const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true,
@@ -93,6 +96,9 @@ export function fileFacts(path: string, text: string): FileFacts {
     if (/^(get|fetch|load|list)[A-Z]/.test(name) && returnsLiteralOnly(node)) f.hardcoded.push(name)
   }
   for (const st of sf.statements) {
+    if (isExported(st) && ts.isVariableStatement(st))   // export const POST = withErrors(async () => ...)
+      for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name) && METHODS.includes(d.name.text) && d.initializer && ts.isCallExpression(d.initializer))
+        f.fns.set(d.name.text, printer.printNode(ts.EmitHint.Unspecified, d.initializer, sf))
     if (isExported(st)) for (const d of ts.isVariableStatement(st) ? st.declarationList.declarations : [st as ts.DeclarationStatement])
       if (d.name && ts.isIdentifier(d.name)) f.exports.add(d.name.text)
     const fns: [string, ts.Node][] = ts.isFunctionDeclaration(st) && st.name ? [[st.name.text, st]]
@@ -168,7 +174,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         const nextStatus = last === 'json' && args[1] && ts.isObjectLiteralExpression(args[1])
           ? code((args[1].properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(sf) === 'status') as ts.PropertyAssignment | undefined)?.initializer) : 0
         const st = statusCall || nextStatus
-        if (st >= 400 && st < 500 && st !== 401 && st !== 403 && /^(json|send)$/.test(last) && msg(args[0])) f.refuses.add(msg(args[0])!)   // 401/403: login, said elsewhere
+        if (st >= 400 && st < 500 && ![401, 403, 404].includes(st) && /^(json|send)$/.test(last) && msg(args[0]) && !msg(args[0])!.includes('[…]')) f.refuses.add(msg(args[0])!)   // 401/403: login, said elsewhere; 404: noise
         // Supabase: supabase.from('orders').update(...), and edge functions called with supabase.functions.invoke('name')
         const from = ts.isCallExpression(callee.expression) && ts.isPropertyAccessExpression(callee.expression.expression) && callee.expression.expression.name.text === 'from'
           ? { table: str(callee.expression.arguments[0]), on: callee.expression.expression.expression.getText(sf) } : undefined
@@ -179,7 +185,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         if (last === 'invoke' && /functions$/.test(obj) && arg) f.fetches.add(`POST /functions/v1/${arg}`)
         if (obj === 'Deno.env' && last === 'get' && arg) {
           f.env.add(arg)
-          if (!(ts.isBinaryExpression(n.parent) && n.parent.left === n && /^(\|\||\?\?)$/.test(n.parent.operatorToken.getText(sf)))) f.envReq.add(arg)
+          if (!hasDefault(n)) f.envReq.add(arg)
         }
         if (/^(getUser|getSession|getClaims)$/.test(last) && /auth$/.test(obj)) f.sbAuth = true   // supabase.auth.getUser()
         if (/^(prisma|db)$/.test(parts[0]) && parts.length === 3 && !parts[1].startsWith('$') && !parts[1].includes('(')) {
@@ -191,25 +197,38 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         if (parts.at(-1) === 'push' && /router/.test(parts[0]) && str(n.arguments[0])?.startsWith('/')) f.links.add(str(n.arguments[0])!)
       }
     }
-    if ((ts.isCallExpression(n) || ts.isNewExpression(n)) && n.arguments?.length === 2 && ts.isNumericLiteral(n.arguments[0]) && str(n.arguments[1])) {
-      const c = +n.arguments[0].text   // new HttpError(409, 'That time is taken'), fail(400, '...')
-      if (c >= 400 && c < 500 && c !== 401 && c !== 403) f.refuses.add(str(n.arguments[1])!)
+    // new HttpError(409, 'That time is taken'), fail(400, '...'), createError(400, '...')
+    if ((ts.isCallExpression(n) || ts.isNewExpression(n)) && n.arguments?.length === 2 && ts.isNumericLiteral(n.arguments[0]) && str(n.arguments[1])
+      && /(Error|^fail|^abort|^reject|^createError|^httpError)$/i.test(n.expression.getText(sf).split('.').at(-1)!)) {
+      const c = +n.arguments[0].text, m = str(n.arguments[1])!
+      if (c >= 400 && c < 500 && ![401, 403, 404].includes(c) && !m.includes('[…]')) f.refuses.add(m)
     }
     if (ts.isPropertyAccessExpression(n) && /^(process|import\.meta)\.env$/.test(n.expression.getText(sf))) {
       f.env.add(n.name.text)
       // `process.env.PORT || 3001` has a fallback, so it doesn't need setting up
-      if (!(ts.isBinaryExpression(n.parent) && n.parent.left === n && /^(\|\||\?\?)$/.test(n.parent.operatorToken.getText(sf)))) f.envReq.add(n.name.text)
+      if (!hasDefault(n)) f.envReq.add(n.name.text)
     }
     // Words on screen: text between tags, and strings or formatted prices inside {...} (not attributes like className)
     if (ts.isJsxText(n) && /[a-z]{2}/i.test(n.text)) f.texts.add(n.text.replace(/\s+/g, ' ').trim())
-    if (ts.isJsxExpression(n) && n.expression && (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent))) {
+    const tagOf = (x: ts.Node) => ts.isJsxElement(x) ? x.openingElement.tagName.getText(sf) : ''
+    if (ts.isJsxExpression(n) && n.expression && (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent)) && !/^(style|script)$/.test(tagOf(n.parent))) {
+      // Follow only what gets rendered: both sides of `a ? b : c`, the right of `a && b`; never conditions, keys or arguments.
       const words_ = (e: ts.Node): void => {
-        if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e) || ts.isJsxFragment(e) || fnLike(e)) return
-        if (ts.isCallExpression(e) && /format(Money|Price|Currency|Amount)|toLocaleString|Intl\.NumberFormat/i.test(e.expression.getText(sf))) { f.texts.add('[price]'); return }
-        const t = str(e as ts.Expression)
-        if (t && /[a-z]{2}/i.test(t)) f.texts.add(t.replace(/\s+/g, ' ').trim())
-        if (!ts.isTemplateExpression(e)) ts.forEachChild(e, words_)
-        else e.templateSpans.forEach(sp => words_(sp.expression))
+        if (ts.isParenthesizedExpression(e)) return words_(e.expression)
+        if (ts.isConditionalExpression(e)) { words_(e.whenTrue); words_(e.whenFalse); return }
+        if (ts.isBinaryExpression(e)) {
+          const op = e.operatorToken.getText(sf)
+          if (op === '&&') words_(e.right)
+          else if (/^(\|\||\?\?|\+)$/.test(op)) { words_(e.left); words_(e.right) }
+          return
+        }
+        if (ts.isCallExpression(e)) {   // a price only with a currency hint: formatMoney(x), toLocaleString('en', { style: 'currency' })
+          if (/format(Money|Price|Currency|Amount)/i.test(e.expression.getText(sf)) || /toLocaleString|NumberFormat/.test(e.expression.getText(sf)) && /currency/i.test(e.getText(sf))) f.texts.add('[price]')
+          return
+        }
+        const t = str(e as ts.Expression)?.replace(/\[…\]/g, '…').replace(/\s+/g, ' ').trim()
+        if (t && /[a-z]{2}/i.test(t) && /\s/.test(t) && !/^https?:/.test(t)) f.texts.add(t)   // words, not keys like 'home.title' or 'USD'
+        if (ts.isTemplateExpression(e)) e.templateSpans.forEach(sp => words_(sp.expression))
       }
       words_(n.expression)
     }
@@ -588,9 +607,12 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       for (const x of newOnly(a?.links, b.links)) clauses.push(`${a ? 'now links' : 'links'} to ${pageName(x)}`)
       const comps = newOnly(a?.jsx, b.jsx).filter(x => /^[A-Z]/.test(x) && !/^(Link|Image|Script|Head)$/.test(x) && !x.includes('.'))
       if (a && comps.length) clauses.push(`now shows the ${list(comps.map(nice))}`)
-      if (a && a.texts.has('[price]') && !b.texts.has('[price]')) clauses.push('no longer shows the price')
-      if (a && !a.texts.has('[price]') && b.texts.has('[price]')) clauses.push('now shows a price')
-      const said = newOnly(a?.texts, b.texts).filter(t => t !== '[price]' && ![...b.ui].some(u => u.includes(t)) && !b.headings.some(h => h.endsWith(t)))
+      const price = (f: FileFacts) => f.texts.has('[price]') || [...f.jsx].some(x => /Price|Money|Amount|Currency/.test(x))   // or a <Price/> component
+      if (a && price(a) && !price(b)) clauses.push('no longer shows the price')
+      if (a && !price(a) && price(b)) clauses.push('now shows a price')
+      const gone = [...(a?.texts ?? [])].filter(t => !b.texts.has(t)).map(t => t.toLowerCase().replace(/[^a-z]/g, ''))
+      const said = newOnly(a?.texts, b.texts).filter(t => t !== '[price]' && ![...b.ui].some(u => u.includes(t)) && !b.headings.some(h => h.endsWith(t))
+        && !gone.includes(t.toLowerCase().replace(/[^a-z]/g, '')))   // "Save" -> "Save!" isn't new copy
       if (a && !clauses.length && said.length) clauses.push(`now says ${list(said.slice(0, 2).map(t => `"${t.length > 90 ? t.slice(0, 87) + '…' : t}"`))}`)
       if (!a && b.auth) clauses.push('requires login ✓')
     } else {
@@ -610,7 +632,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         for (const x of newOnly(a.written, b.written)) clauses.push(`saves ${things(x)}`)
         for (const x of newOnly(a.tables, b.tables).filter(x => !b.written.has(x))) clauses.push(`reads ${things(x)}`)
         if (!a.money && b.money) clauses.push('charges customers 💰')
-        for (const m of newOnly(a.refuses, b.refuses).slice(0, 3)) clauses.push(`refuses with "${m}"`)
+        // only when there are more ways to say no than before: a reworded message isn't a new rule
+        for (const m of newOnly(a.refuses, b.refuses).slice(0, Math.min(3, b.refuses.size - a.refuses.size))) clauses.push(`refuses with "${m}"`)
       }
       for (const o of newOnly(a?.outside, b.outside).filter(o => !o.startsWith('Stripe: checkout.sessions'))) clauses.push(outsidePhrase(o))
     }
@@ -642,7 +665,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     if (vs.length < 2) continue
     for (const v of vs) changes.splice(changes.indexOf(v), 1)
     const names = vs.map(v => g === 'Pages' ? pageName(v.detail!) : named(v.detail!).join(' ') || 'main')
-    changes.push({ group: g, text: `The agent also changed ${g === 'Pages' ? list(names) : `the ${list(names)} parts of your server`} in ways plain can't describe yet. Ask the agent what they do differently.` })
+    changes.push({ group: g, text: `The agent changed ${g === 'Pages' ? list(names) : `the ${list(names)} parts of your server`} in ways plain can't describe yet. Ask the agent what they do differently.` })
   }
 
   // asked to change things, but nothing new can change anything
@@ -686,8 +709,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const newMigrations = B.migrations.filter(m => !A.migrations.includes(m))
   if (changed.some(p => p.endsWith('schema.prisma')) && !newMigrations.length)
   {
-    const dir = B.schemaPath?.split('prisma/')[0] ?? '', added = [...B.models.keys()].filter(m => !A.models.has(m) && !B.db.tables.has(m))
-    ship.push(`Update your database: ${dir ? `in ${dir}, ` : ''}run \`npx prisma migrate dev\` (on your live site: \`npx prisma migrate deploy\`). The database's structure changed, but no migration was created.${added.length ? ` Until you do, anything that uses ${list(added.map(things))} will fail.` : ''}`)
+    const sp = B.schemaPath ?? '', std = /(^|\/)prisma\/schema\.prisma$/.test(sp), dir = std ? sp.replace(/prisma\/schema\.prisma$/, '') : ''
+    const flag = std || sp === 'schema.prisma' ? '' : ` --schema ${sp}`, added = [...B.models.keys()].filter(m => !A.models.has(m) && !B.db.tables.has(m))
+    ship.push(`Update your database: ${dir ? `in ${dir}, ` : ''}run \`npx prisma migrate dev${flag}\` (on your live site: \`npx prisma migrate deploy${flag}\`). The database's structure changed, but no migration was created.${added.length ? ` Until you do, anything that uses ${list(added.map(things))} will fail.` : ''}`)
   }
   for (const m of newMigrations) if (/\bDROP\b/i.test(after.get(m) ?? '')) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
   // Supabase: new migrations, what they destroy (removed tables and columns are already listed above), and who the rules let in.
@@ -719,7 +743,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const added = [...b.exports].filter(x => !a.exports.has(x))
       const feature = added.some(x => [...B.files].some(([q, f]) => q !== p && real.includes(q) && (f.used.has(x) || f.jsx.has(x))))
       if (!fns.length && !feature) problems.push({ kind: 'Unasked', text: `The agent also changed ${p}, which doesn't look related to what you asked for.` })
-      for (const n of feature ? [] : fns) {
+      for (const n of fns.filter(n => !added.some(x => new RegExp(`\\b${x}\\b`).test(b.fns.get(n) ?? '')))) {
         const u = usersOf(n, p)
         problems.push({ kind: 'Unasked', text: `The agent also changed ${n}() in ${p}, which doesn't look related to what you asked for.${u.length ? ` It's used by ${list(u)}, so check that ${u.length > 1 ? 'they' : 'it'} still ${u.length > 1 ? 'work' : 'works'}.` : ''}` })
       }
@@ -736,14 +760,15 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
 
   // env, packages, services
   const usedBefore = new Set([...A.files.values()].flatMap(f => [...f.env]))
-  for (const k of new Set([...B.files.values()].flatMap(f => [...f.envReq]))) if (!usedBefore.has(k)) {
+  const required = new Set([...B.files.values()].flatMap(f => [...f.envReq]))
+  for (const k of new Set([...B.files.values()].flatMap(f => [...f.env]))) if (!usedBefore.has(k)) {
     // VITE_, NEXT_PUBLIC_, ... are copied into the code every visitor downloads.
     const pub = /^(VITE|NEXT_PUBLIC|REACT_APP|EXPO_PUBLIC|PUBLIC)_/.test(k) && !/PUBLISHABLE|ANON/.test(k)
     if (pub && /SECRET|SERVICE_ROLE|PRIVATE|PASSWORD/.test(k)) problems.push({ kind: 'Unsafe', text: `${k} is a secret, but its name makes it part of the code every visitor's browser downloads, so anyone can read it. Move it to server-only code and give it a name without the ${k.split('_')[0]}_ prefix.` })
     else if (pub && /API_KEY|TOKEN/.test(k)) problems.push({ kind: 'Check', text: `${k} is sent to every visitor's browser (because of its ${k.split('_')[0]}_ prefix). That's fine for keys meant to be public, but not for secret ones.` })
     // Edge functions read their secrets from Supabase, which provides SUPABASE_URL and its keys by itself.
     const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
-    if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k)) continue
+    if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k)) continue
     ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
       : `Add ${k} to your hosting settings (like Vercel).${B.envExample.has(k) ? '' : ' It\'s also missing from .env.example.'}`)
   }
@@ -760,13 +785,17 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const moneyChanged = real.some(p => B.files.get(p)?.money && route(p))
   const said = (x: string | undefined) => x ?? ''
   // A deal for new sign-ups (newsletter, first order, welcome) can be claimed again with another email.
-  if (moneyChanged && /(\d+\s*%|percent|discount|\boff\b|\bfree\b|promo)/i.test(said(opts.asked)) && /(sign ?up|newsletter|subscribe|\bfirst\b|new (customer|user|account)|welcome|referr)/i.test(said(opts.asked)))
+  if (moneyChanged && /(\d+\s*(%|percent)|\$\s*\d+\s+off|discount|promo|coupon|\bfree (shipping|delivery|trial|month|week|walk|order|item|session|class|lesson)s?\b)/i.test(said(opts.asked)) && /(sign ?up|newsletter|subscribe|\bfirst\b|new (customer|user|account)|welcome|referr)/i.test(said(opts.asked)))
     problems.push({ kind: 'Check', text: 'You asked for a discount. If it depends on a new account or email address, people can usually get it again by signing up with another email. What stops that? (This is a guess.)' })
-  const cancels = real.some(p => { const t = B.files.get(p)?.printed ?? '', o = A.files.get(p)?.printed ?? ''; return /['"`]cancell?ed['"`]/.test(t) && !/['"`]cancell?ed['"`]/.test(o) || (t.match(/['"`]cancell?ed['"`]/g)?.length ?? 0) > (o.match(/['"`]cancell?ed['"`]/g)?.length ?? 0) })
+  const nCancel = (t = '') => t.match(/['"`]cancell?ed['"`]/g)?.length ?? 0
+  const cancels = real.some(p => route(p)?.kind !== 'page' && !/\.[jt]sx$/.test(p.split('#')[0]) && !!B.files.get(p)?.written.size
+    && nCancel(B.files.get(p)!.printed) > nCancel(A.files.get(p)?.printed))
   const refunds = [...B.files.values()].some(f => /refunds?\.create|\brefund\(/.test(f.printed))
   if (cancels && !refunds && [...B.files.values()].some(f => f.services.has('Stripe')))
     problems.push({ kind: 'Check', text: "Cancelling doesn't give money back: nothing in your app refunds a Stripe payment. If someone cancels after paying, they stay charged. (This is a guess.)" })
-  if (/\b(did ?n[o']?t|could ?n[o']?t|was ?n[o']?t able to|unable to|not able to|have ?n[o']?t|wasn't able to)\b[^.\n]{0,60}\b(run|test|build|install|verify|start|check)/i.test(said(opts.agentSaid)))
+  // "I couldn't run the tests", "didn't get a chance to test", "tests not run", "untested"; not "I didn't change the tests"
+  const NOT_RUN = /\b(did ?n[o']?t|could ?n[o']?t|was ?n[o']?t able to|were ?n[o']?t able to|unable to|not able to|have ?n[o']?t|has ?n[o']?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\buntested\b/i
+  if (NOT_RUN.test(said(opts.agentSaid)))
     ship.unshift("The agent says it didn't run or test this. Try it yourself before you ship.")
 
   return { ...opts, files: real.filter(p => !p.includes('#')).length, noise: noise.length, changes, problems, unfinished, ship, notes, A, B, schemaChanged: changed.some(p => p.endsWith('schema.prisma')) }

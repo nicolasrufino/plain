@@ -99,7 +99,8 @@ vibe coders and compared to just asking the agent "explain what you did".
 
 ## Docs
 
-- [Trials](docs/trials.md): 6 vibe-coder personas, plain vs. the agent explaining itself
+- [Trials](docs/trials.md): 6 vibe-coder personas, plain vs. the agent explaining itself (Next.js)
+- [Trials, round 2](docs/trials-node-react.md): the same on a Node + React app, and what changed in plain because of it
 - [Scenario](docs/scenario.md): one feature, from building to reviewing
 - [Review research](docs/review-research.md): the review bottleneck, what exists, the gap
 - [Code-to-English research](docs/research.md): line-level English and prior work

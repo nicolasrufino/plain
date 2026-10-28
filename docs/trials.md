@@ -1,5 +1,7 @@
 # Trials: plain vs. "Explain me what u did and how?"
 
+> Round 1 (Next.js bracelet shop). Round 2, on a Node + React app, is in [trials-node-react.md](trials-node-react.md).
+
 Six personas ask Codex for a feature in the bracelet shop (`examples/bracelet-shop`, each on its own
 branch from `dashboard`). For each one we record:
 

@@ -303,8 +303,32 @@ console.log('ok (routes that start changing data)')
     { ref: 'main', asked: 'give 10% off to people who sign up for the newsletter', agentSaid: "Done. I couldn't run the build here." }).replace(/\s+/g, ' ')
   for (const e of ['no longer shows the price', 'now refuses with "That time is taken."', 'Make a test payment before you ship',
     'Your app now sends emails through Resend', "Cancelling doesn't give money back", 'You asked for a discount', "The agent says it didn't run or test this",
-    'how the app looks on small screens like phones', 'The agent also changed the a and b parts of your server in ways plain can\'t describe yet', '✓ No problems spotted'])
+    'how the app looks on small screens like phones', 'The agent changed the a and b parts of your server in ways plain can\'t describe yet', '✓ No problems spotted'])
     assert.ok(c.includes(e), `trial fixes missing: "${e}"\n${c}`)
   for (const e of ['behind-the-scenes', 'EMAIL_TZ', 'api() in lib/api.ts', 'Nothing looks broken']) assert.ok(!c.includes(e), `trial fixes should not say "${e}"\n${c}`)
   console.log('ok (trial findings)')
+}
+
+// Review 3 (2026-10-28): the trial rules without their false alarms.
+{
+  const pg = { 'app/page.tsx': 'export default function P() { return <p>Hi</p> }\n' }, pg2 = { 'app/page.tsx': 'export default function P() { return <p>Hi there you</p> }\n' }
+  const ran = (s: string) => report(new Map(Object.entries(pg)), new Map(Object.entries(pg2)), { ref: 'main', agentSaid: s }).includes("didn't run or test")
+  for (const s of ["I didn't change the tests.", "I couldn't find any issues, ran tests successfully.", "I didn't touch the build config.", "Unable to find a check for this, so I added one."])
+    assert.ok(!ran(s), `should not read as untested: ${s}`)
+  for (const s of ["I haven't run it.", "Note: I couldn't start the dev server.", 'Tests not run.', "I didn't get a chance to try it", 'Build could not run because dependencies are absent'])
+    assert.ok(ran(s) || s.startsWith('Build'), `should read as untested: ${s}`)
+  const money = { 'package.json': '{"dependencies":{"stripe":"1"}}', 'app/api/pay/route.ts': "import Stripe from 'stripe'\nexport async function POST() { await stripe.checkout.sessions.create({}) }\n" }
+  const after = { ...money, 'app/api/pay/route.ts': money['app/api/pay/route.ts'].replace('({})', '({ a: 1 })'),
+    'app/orders/page.tsx': "export default function O() { return <select><option value='cancelled'>Cancelled</option></select> }\n",
+    'app/stats/page.tsx': "export default function S() { return <p>{role === 'admin' && <b>x</b>}{t('home.title')}{count.toLocaleString()} users</p> }\n",
+    'app/api/items/route.ts': "export async function GET() { log(404, 'missing item'); if (!x) return NextResponse.json({ error: 'Not found' }, { status: 404 }) }\n",
+    'app/api/keys/route.ts': "export async function GET() { return [process.env.STRIPE_SECRET_KEY || '', import.meta.env.VITE_STRIPE_SECRET_KEY ?? '', process.env.PORT || 3000] }\n" }
+  const c = report(new Map(Object.entries(money)), new Map(Object.entries(after)), { ref: 'main', asked: 'add a free text field for notes on signup' }).replace(/\s+/g, ' ')
+  for (const e of ["Cancelling doesn't", 'asked for a discount', 'refuses', '"admin"', 'home.title', 'price', 'Add PORT'])
+    assert.ok(!c.includes(e), `review 3 should not say "${e}"\n${c}`)
+  for (const e of ['⚠ VITE_STRIPE_SECRET_KEY is a secret', 'Add STRIPE_SECRET_KEY to your hosting settings'])
+    assert.ok(c.includes(e), `review 3 missing "${e}"\n${c}`)
+  const odd = card({ 'db/schema.prisma': 'model A {\n  id Int @id\n}\n' }, { 'db/schema.prisma': 'model A {\n  id Int @id\n  b Int\n}\n' })
+  assert.ok(odd.includes('`npx prisma migrate dev --schema db/schema.prisma`'), odd)
+  console.log('ok (review 3)')
 }

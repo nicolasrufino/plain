@@ -68,8 +68,16 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 - **Broken.** A function was deleted but other code still uses it.
 - **Unasked.** Code changed that doesn't match what you asked for. This one is a guess, and the
   card says so.
-- **Before you ship.** Data that will be deleted, migrations to run, new env vars and new
-  packages.
+- **Guesses about money, worded as questions.** Each one says it's a guess:
+  - A cancel status with no refund anywhere.
+  - A sign-up discount that people can claim again with another email.
+- **Before you ship.** Data that will be deleted, and migrations to run (with the folder, the
+  live-site command and what fails until then). Also new env vars without a default, new
+  packages, a test payment when payment code changed, and "the agent says it didn't run or
+  test this" when its last message says so.
+
+When plain can't describe a change, it says so ("changed in a way plain can't describe yet")
+instead of guessing that it's harmless.
 
 `render()` turns these into the card. The wording is in one place, so it stays consistent.
 
