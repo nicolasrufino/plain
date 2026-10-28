@@ -159,6 +159,8 @@ Security (RLS)** policies, written in SQL in `supabase/migrations/*.sql`.
 | RLS on but no rule, for a table the app uses | the app can't read or save it | ! |
 | A public storage bucket | anyone with the link can open the files | ! |
 | A view without `security_invoker` | it skips the access rules of the tables it reads | ⚠ / ! |
+| A `security definer` function still callable by `anon`/`authenticated` (revoking from `public` isn't enough) that doesn't check the caller | anyone with the public key can run it | ⚠ if it writes, ! if it only reads |
+| `create or replace function` on one that already exists | "Test what X does": a rule the app relied on was rewritten | before you ship |
 | A migration that empties a table, deletes all rows, or changes a column's type | "Back up your data first" | before you ship |
 
 **Before you ship:**
@@ -201,7 +203,6 @@ Security (RLS)** policies, written in SQL in `supabase/migrations/*.sql`.
   "things to decide", not alarms.
 
 **Not yet:**
-- `security definer` functions callable by anyone
 - `verify_jwt = false` in `supabase/config.toml`
 - grants on single columns
 - `rpc()` and storage calls from the browser

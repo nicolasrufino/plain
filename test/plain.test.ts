@@ -503,3 +503,35 @@ def checkout(user = Depends(get_current_user)):
     assert.ok(w.includes(e), `round 3 missing "${e}"\n${w}`)
   console.log('ok (round 3 trials)')
 }
+
+// Review 6 (2026-10-28): "only their own ✓" only when true; definer functions tracked through revokes, drops and overloads.
+{
+  const tbl = 'create table public.notes (id uuid primary key, user_id uuid references auth.users, body text, public boolean);\nalter table public.notes enable row level security;\n'
+  const own = (extra: string, policy = 'auth.uid() = user_id') => card({}, { 'supabase/migrations/1.sql': `${tbl}create policy "p" on public.notes for select using (${policy});\n${extra}` }).includes('their own ✓')
+  assert.ok(own(''))
+  assert.ok(!own('', 'auth.uid() = user_id or public'), 'OR another way in')
+  assert.ok(!own('create view public.all_notes as select * from public.notes;\n'), 'a definer view reads them all')
+  assert.ok(!own('create policy "u" on public.notes for update using (true);\n'), 'anyone can change them')
+  const def = (sql: string) => findings(readDb([['1.sql', sql]]), new Set(), t => t).map(f => f.text).join(' ')
+  const fn = (args = 'u uuid', body = 'update notes set body = 1;') => `create or replace function public.f(${args}) returns void language plpgsql security definer as $$\nbegin\n${body}\nend $$;\n`
+  assert.ok(def(fn()).includes('which changes data'), 'body on its own line')
+  assert.ok(!def(fn() + 'revoke execute on function public.f(uuid) from anon;\nrevoke execute on function public.f(uuid) from authenticated;\n'), 'two revokes')
+  assert.ok(!def(fn().replace('public.f', 'private.f')), 'not reachable from the API')
+  assert.ok(!def(fn() + 'drop function public.f(uuid);\n'), 'dropped')
+  assert.ok(!def(fn() + 'alter function public.f(uuid) security invoker;\n'), 'now security invoker')
+  assert.ok(!def('alter default privileges in schema public revoke execute on functions from anon, authenticated;\n' + fn()), 'default privileges')
+  assert.ok(!def(fn('u uuid', 'if not has_role(auth.uid(), \'admin\') then raise exception; end if; update notes set body = 1;')), 'checks the caller')
+  assert.ok(!def(fn() + 'revoke execute on all functions in schema public from anon, authenticated;\n'), 'bulk revoke')
+  assert.ok(def(fn() + fn('u uuid, n int') + 'revoke execute on function public.f(uuid, int) from anon, authenticated;\n').includes('function f'), 'the other overload is still open')
+  // refund guess: not a create table with updated_at; not a status comparison
+  const cb = (sql: string) => card({ 'package.json': '{"dependencies":{"stripe":"1"}}', 'a.ts': "import Stripe from 'stripe'\n" },
+    { 'package.json': '{"dependencies":{"stripe":"1"}}', 'a.ts': "import Stripe from 'stripe'\n", 'supabase/migrations/1.sql': sql }).includes("Cancelling doesn't")
+  assert.ok(!cb("create table public.bookings (id uuid primary key, status text check (status in ('pending','paid','cancelled')), updated_at timestamptz);\ncreate function public.touch() returns trigger language plpgsql as $$ begin update public.x set y = 1; return new; end $$;\n"))
+  // vague asks and named files
+  const ask = (asked: string) => report(new Map(), new Map([['src/auth.ts', 'export const a = 1\n']]), { ref: 'main', asked }).replace(/\s+/g, ' ')
+  for (const a of ['fix the typo in the footer', 'make the button faster to find', 'add a bug report form']) assert.ok(!ask(a).includes('exactly what was wrong'), a)
+  for (const a of ["it's weird, fix it", "checkout doesn't work"]) assert.ok(ask(a).includes('exactly what was wrong'), a)
+  assert.ok(!ask("add a footer but don't touch src/auth.ts").includes('as you asked'))
+  assert.equal(ask('edit src/auth.ts, then src/auth.ts again').match(/as you asked/g)?.length, 1)
+  console.log('ok (review 6)')
+}

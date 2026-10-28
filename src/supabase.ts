@@ -11,19 +11,22 @@ export type Table = { cols: string[]; refs: Map<string, string>; rls: boolean; p
 export type View = { invoker: boolean; reads: string[] }
 export type Db = { tables: Map<string, Table>; views: Map<string, View>; publicBuckets: Set<string>; destructive: Map<string, string[]>
   functions: Set<string>; replaced: Map<string, string[]>
-  definers: Map<string, { checksUser: boolean; writes: boolean; revoked: Set<string> }> }   // security definer functions: who's asked, who can still call them   // replaced: migration -> existing database functions it rewrote
+  definers: Map<string, { name: string; checksUser: boolean; writes: boolean; revoked: Set<string> }>; defaultRevoked: Set<string> }   // keyed name(argtypes)   // security definer functions: who's asked, who can still call them   // replaced: migration -> existing database functions it rewrote
 
 export const isMigration = (p: string) => /(^|\/)supabase\/migrations\/[^/]+\.sql$/.test(p)
 
 const name = (rel: Node) => rel?.relname as string | undefined
 const schemaOk = (rel: Node) => !rel?.schemaname || rel.schemaname === 'public'
 const sval = (n: Node) => n?.String?.sval as string | undefined
+const typeName = (t: Node) => sval(t?.TypeName?.names?.at(-1) ?? t?.names?.at(-1)) ?? '?'
+// a function that looks at who's calling: auth.uid(), auth.jwt(), the JWT claims, or a helper like is_admin() / has_role()
+const CALLER = /auth\.(uid|role|jwt|email)\s*\(|is_admin\s*\(|has_role\s*\(|has_permission\s*\(|current_setting\s*\(\s*'request\.jwt|\bcurrent_user\b/i
 const roleNames = (rs: Node[] = []) => rs.map((r: Node) => r.RoleSpec?.rolename ?? (r.RoleSpec?.roletype === 'ROLESPEC_PUBLIC' ? 'public' : '?'))
 const relnames = (n: Node): string[] => [...JSON.stringify(n ?? null).matchAll(/"RangeVar":\{(?:"schemaname":"public",)?"relname":"([^"]+)"/g)].map(m => m[1])
 const invoker = (opts: Node[] = []) => opts.some((o: Node) => o.DefElem?.defname === 'security_invoker' && /^(on|true|1)$/i.test(sval(o.DefElem.arg) ?? String(o.DefElem.arg?.Integer?.ival ?? '')))
 
 export function readDb(files: [string, string][]): Db {
-  const db: Db = { tables: new Map(), views: new Map(), publicBuckets: new Set(), destructive: new Map(), functions: new Set(), replaced: new Map(), definers: new Map() }
+  const db: Db = { tables: new Map(), views: new Map(), publicBuckets: new Set(), destructive: new Map(), functions: new Set(), replaced: new Map(), definers: new Map(), defaultRevoked: new Set() }
   if (!pg) return db
   for (const [path, sql] of [...files].sort(([a], [b]) => a.localeCompare(b))) {
     let stmts: Node[]
@@ -46,21 +49,30 @@ export function readDb(files: [string, string][]): Db {
       }
       // create or replace function on one that already exists: a rule the app relies on was rewritten
       if (kind === 'CreateFunctionStmt') {
-        const fn = sval(s.funcname?.at(-1))
+        const names = (s.funcname ?? []).map(sval), fn = names.at(-1) as string | undefined
+        const key = `${fn}(${(s.parameters ?? []).filter((q: Node) => !/OUT|TABLE/.test(q.FunctionParameter?.mode ?? '')).map((q: Node) => typeName(q.FunctionParameter?.argType)).join(',')})`
         if (fn && s.replace && db.functions.has(fn)) db.replaced.set(path, [...(db.replaced.get(path) ?? []), fn])
         if (fn) db.functions.add(fn)
-        // security definer skips every access rule; trigger functions can't be called from the API
+        // security definer skips every access rule. Only public-schema functions are reachable from the API; trigger functions aren't callable.
         const opt = (k: string) => (s.options ?? []).find((o: Node) => o.DefElem?.defname === k)?.DefElem?.arg
-        const body = JSON.stringify(opt('as') ?? '')
-        if (fn && opt('security')?.Boolean?.boolval && !/"sval":"trigger"/.test(JSON.stringify(s.returnType ?? '')))
-          db.definers.set(fn, { checksUser: /auth\.uid|auth\.role|auth\.jwt|is_admin|current_user/.test(body), writes: /\b(insert|update|delete)\b/i.test(body),
-            revoked: db.definers.get(fn)?.revoked ?? new Set() })
+        const body = (opt('as')?.List?.items ?? []).map(sval).join('\n')
+        const definer = !!opt('security')?.Boolean?.boolval && (names.length < 2 || names[0] === 'public') && !/"sval":"trigger"/.test(JSON.stringify(s.returnType ?? ''))
+        if (fn && definer) db.definers.set(key, { name: fn, checksUser: CALLER.test(body), writes: /\b(insert\s+into|update\s+[\w."]+\s+set|delete\s+from)\b/i.test(body),
+          revoked: new Set(db.definers.get(key)?.revoked ?? db.defaultRevoked) })
+        else db.definers.delete(key)   // recreated as security invoker
       }
-      // revoke execute on function f from anon, authenticated (revoking from public isn't enough: Supabase grants anon and authenticated directly)
-      if (kind === 'GrantStmt' && s.objtype === 'OBJECT_FUNCTION') for (const o of s.objects ?? []) {
-        const fn = sval(o.ObjectWithArgs?.objname?.at(-1)), d = fn && db.definers.get(fn)
-        if (d) for (const r of roleNames(s.grantees)) s.is_grant ? d.revoked.delete(r) : d.revoked.add(r)
+      // revoke execute on function f(uuid) from anon, authenticated (revoking from public isn't enough: Supabase grants anon and authenticated directly)
+      const definersFor = (o: Node) => { const n = sval(o.ObjectWithArgs?.objname?.at(-1)), args = o.ObjectWithArgs?.objargs
+        return [...db.definers].filter(([k, d]) => d.name === n && (!args || k === `${n}(${args.map(typeName).join(',')})`)).map(([, d]) => d) }
+      if (kind === 'GrantStmt' && s.objtype === 'OBJECT_FUNCTION') {
+        const ds = s.targtype === 'ACL_TARGET_ALL_IN_SCHEMA' ? [...db.definers.values()] : (s.objects ?? []).flatMap(definersFor)   // on all functions in schema public
+        for (const d of ds) for (const r of roleNames(s.grantees)) s.is_grant ? d.revoked.delete(r) : d.revoked.add(r)
       }
+      // alter default privileges ... revoke execute on functions from anon: applies to functions made after it
+      if (kind === 'AlterDefaultPrivilegesStmt' && s.action?.objtype === 'OBJECT_FUNCTION')
+        for (const r of roleNames(s.action.grantees)) s.action.is_grant ? db.defaultRevoked.delete(r) : db.defaultRevoked.add(r)
+      if (kind === 'AlterFunctionStmt' && (s.actions ?? []).some((a: Node) => a.DefElem?.defname === 'security' && !a.DefElem.arg?.Boolean?.boolval))
+        for (const d of definersFor({ ObjectWithArgs: s.func })) db.definers.forEach((v, k) => v === d && db.definers.delete(k))
       if (kind === 'ViewStmt' && schemaOk(s.view)) db.views.set(name(s.view)!, { invoker: invoker(s.options), reads: relnames(s.query) })
       if (kind === 'RenameStmt' && schemaOk(s.relation)) {
         const t = db.tables.get(name(s.relation)!)
@@ -100,6 +112,7 @@ export function readDb(files: [string, string][]): Db {
         }
         if (s.removeType === 'OBJECT_POLICY') db.tables.get(parts.at(-2)!)?.policies.delete(parts.at(-1)!)   // drop policy "x" on t
         if (s.removeType === 'OBJECT_VIEW') db.views.delete(parts.at(-1)!)
+        if (s.removeType === 'OBJECT_FUNCTION') { const n = sval(o.ObjectWithArgs?.objname?.at(-1)); db.definers.forEach((v, k) => v.name === n && db.definers.delete(k)) }
       }
       if (kind === 'TruncateStmt') bad.push(`empties ${(s.relations ?? []).map((r: Node) => name(r.RangeVar)).join(', ')}`)
       if (kind === 'DeleteStmt' && !s.whereClause) bad.push(`deletes every row of ${name(s.relation)}`)
@@ -154,7 +167,10 @@ const MONEY_COL = /^(status|paid|is_paid|payment_status|role|is_admin|admin|cred
 // Every rule that lets people read the table limits them to their own rows: worth saying out loud.
 export function ownOnly(db: Db, t: string): boolean {
   const tb = db.tables.get(t), reads = [...tb?.policies.values() ?? []].filter(p => p.permissive && (p.cmd === 'select' || p.cmd === 'all') && !p.roles.every(r => ADMIN_ROLES.test(r)))
-  return !!tb?.rls && reads.length > 0 && reads.every(p => own(p.qual))
+  // strict: one AND part where every OR choice is "your own row" (auth.uid() = user_id OR is_public isn't)
+  const admin = (x: Node) => /is_admin|has_role|"sval":"admin"/.test(text(x))   // ... OR is_admin(): admins may see everything
+  const strictOwn = (n: Node) => parts(n, 'AND_EXPR').some(a => parts(a, 'OR_EXPR').every(x => own(x) || admin(x)) && parts(a, 'OR_EXPR').some(x => own(x)))
+  return !!tb?.rls && reads.length > 0 && reads.every(p => strictOwn(p.qual))
 }
 
 export type Finding = { kind: 'Unsafe' | 'Check'; text: string }
@@ -212,7 +228,7 @@ export function findings(db: Db, used: Set<string>, things: (t: string) => strin
       ? { kind: 'Unsafe', text: `The view ${v} shows ${list_(priv.map(things))} to anyone, skipping their access rules. Create it with security_invoker = on.` }
       : { kind: 'Check', text: `The view ${v} skips the access rules of the tables it reads (${list_(view.reads.map(things)) || 'its tables'}). Create it with security_invoker = on unless that's on purpose.` })
   }
-  for (const [fn, d] of db.definers) if (!d.checksUser && !(d.revoked.has('anon') && d.revoked.has('authenticated')))
+  for (const { name: fn, ...d } of db.definers.values()) if (!d.checksUser && !(d.revoked.has('anon') && d.revoked.has('authenticated')))
     out.push(d.writes
       ? { kind: 'Unsafe', text: `Anyone with your app's public key can run the database function ${fn}, which changes data. It skips your access rules (security definer) and never checks who's calling. Revoke it from anon and authenticated, or check auth.uid() inside.` }
       : { kind: 'Check', text: `Anyone with your app's public key can run the database function ${fn}. It only reads, but it skips your access rules (security definer) and doesn't check who's calling, so it can reveal data about other people.` })

@@ -1,6 +1,6 @@
 # Trials: plain vs. "Explain me what u did and how?"
 
-> Round 1 (Next.js bracelet shop). Round 2, on a Node + React app, is in [trials-node-react.md](trials-node-react.md).
+> Round 1 (Next.js bracelet shop). Round 2, on a Node + React app: [trials-node-react.md](trials-node-react.md). Round 3, on TanStack Start + Supabase (Lovable's stack): [trials-tanstack-supabase.md](trials-tanstack-supabase.md).
 
 Six personas ask Codex for a feature in the bracelet shop (`examples/bracelet-shop`, each on its own
 branch from `dashboard`). For each one we record:

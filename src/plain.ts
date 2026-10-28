@@ -854,7 +854,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const l = links(fields)
       const one = l.filter(x => !x.endsWith('[]')).map(x => an(words(x))), many = l.filter(x => x.endsWith('[]')).map(x => things(x.slice(0, -2)))
       const rels = [one.length ? `belongs to ${list(one)}` : '', many.length ? `can have many ${list(many)}` : ''].filter(Boolean)
-      changes.push({ group: 'Database', isNew: true, name: things(m), text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}${ownOnly(B.db, m) ? ' Each person can only see their own ✓' : ''}` })
+      changes.push({ group: 'Database', isNew: true, name: things(m), text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}${ownOnly(B.db, m) && !findings(B.db, new Set(), things).some(x => new RegExp(`\\b${things(m)}\\b`).test(x.text)) ? ' Each person can only see their own ✓' : ''}` })
       continue
     }
     const add = fields.filter(x => !old.includes(x)), del = old.filter(x => !fields.includes(x))
@@ -976,16 +976,15 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // list (['completed', 'cancelled']) next to a write of `status` from the request.
   // ponytail: no control flow; a pending row cancelled right after Stripe charged it (charged, no booking) is missed
   const stmtAt = (t: string, i: number) => t.slice(t.lastIndexOf(';', i) + 1, (t.indexOf(';', i) + 1 || t.length))
-  const isWrite = (x: string) => /update|\.save\(|\bdata\s*:|\bset\b/i.test(x)
+  const isWrite = (x: string) => !/^\s*create\s+(table|type|domain)/i.test(x) && /\bupdate\b|\.save\(|\bdata\s*:|\bset\b/i.test(x)   // not updated_at, not a table definition
   const pendingOnly = (x: string) => /pending|unpaid|expired|open/i.test(x) && !/(?<!un)\bpaid\b/i.test(x.replace(/payment_status\s*={1,3}\s*['"`]paid['"`]/g, ''))
   const statusFromInput = (t: string) => [...t.matchAll(/\bstatus\s*(?=[,}])|\bstatus\s*:\s*(?!['"`])[A-Za-z_]/g)].some(m => { const x = stmtAt(t, m.index!); return isWrite(x) && !pendingOnly(x) })
-  const paidCancels = (t = '') => [...t.matchAll(/['"`]cancell?ed['"`]/g)].filter(m => {
-    const x = stmtAt(t, m.index!)
-    return isWrite(x) ? !pendingOnly(x) : statusFromInput(t)
-  }).length
+  // writes of 'cancelled', plus (when status comes from the request) lists of allowed values in the file: ['completed', 'cancelled'], z.enum([...]), in (...)
+  const paidCancels = (t = '', file = t) => [...t.matchAll(/['"`]cancell?ed['"`]/g)].filter(m => isWrite(stmtAt(t, m.index!)) && !pendingOnly(stmtAt(t, m.index!))).length
+    + (statusFromInput(t) ? new Set([...file.matchAll(/['"`]cancell?ed['"`]/g)].map(m => stmtAt(file, m.index!)).filter(x => !isWrite(x) && /\[[^\]]*cancell?ed[^\]]*\]|enum\s*\(|\bin\s*\(/i.test(x))).size : 0)
   const newSql = B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m)).map(m => after.get(m) ?? '').join('\n')
   const cancels = real.some(p => route(p)?.kind !== 'page' && !/\.[jt]sx$/.test(p.split('#')[0]) && !!B.files.get(p)?.written.size
-    && paidCancels(B.files.get(p)!.printed) > paidCancels(A.files.get(p)?.printed)) || paidCancels(newSql) > 0 && /update\s+[\w.]*\s+set/i.test(newSql)
+    && paidCancels(B.files.get(p)!.printed, B.files.get(p.split('#')[0])?.printed) > paidCancels(A.files.get(p)?.printed, A.files.get(p.split('#')[0])?.printed)) || paidCancels(newSql) > 0 && /update\s+[\w.]*\s+set/i.test(newSql)
   const refunds = [...B.files.values()].some(f => /refunds?\.create|\brefund\(/.test(f.printed))
   if (cancels && !refunds && [...B.files.values()].some(f => f.services.has('Stripe')))
     problems.push({ kind: 'Check', text: "Cancelling doesn't give money back: nothing in your app refunds a Stripe payment. If someone cancels after paying, they stay charged. (This is a guess.)" })
@@ -993,12 +992,15 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const NOT_RUN = /\b(did ?n[o'’]?t|could ?n[o'’]?t|was ?n[o'’]?t able to|were ?n[o'’]?t able to|unable to|not able to|have ?n[o'’]?t|has ?n[o'’]?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\buntested\b/i
   // "fix it", "it's weird", "make it faster" without saying what's wrong: the agent had to guess what to fix
   const ask = said(opts.asked)
-  if (/\b(fix|broken|weird|buggy|bug|slow|faster|not working|doesn'?t work|glitch\w*|janky)\b/i.test(ask) && ask.split(/\s+/).length < 16 && !/["'`]|\berror\b|\bwhen i\b|\bafter\b/i.test(ask))
+  if (/\b(fix (it|this|that|things)|broken|weird|buggy|not working|doesn'?t work|isn'?t working|glitchy|janky|(is|so|too|kinda|really) slow|make it faster|speed it up)\b/i.test(ask)
+    && ask.split(/\s+/).length < 16 && !/"[^"]+"|`[^`]+`|\berror\b|\bwhen i\b|\bafter\b/i.test(ask))
     ship.unshift("You didn't say exactly what was wrong, so the agent guessed. Check that the problem you saw is gone.")
   // a file you named in your request: say it's there
+  const named_ = new Set<string>()
   for (const m of ask.matchAll(/[\w./-]+\.(?:ts|tsx|js|jsx|py|sql|css)\b/g)) {
+    if (/\b(don'?t|do not|never|without|except|leave|not)\b[^.]{0,25}$/i.test(ask.slice(0, m.index))) continue   // "don't touch src/auth.ts"
     const hit = real.find(p => p === m[0] || p.endsWith('/' + m[0].replace(/^\.?\//, '')))
-    if (hit) changes.push({ group: 'Other files', isNew: !before.has(hit), text: `The agent ${before.has(hit) ? 'changed' : 'created'} ${hit}, as you asked.` })
+    if (hit && !named_.has(hit) && named_.add(hit)) changes.push({ group: 'Other files', isNew: !before.has(hit), text: `The agent ${before.has(hit) ? 'changed' : 'created'} ${hit}, as you asked.` })
   }
   if (NOT_RUN.test(said(opts.agentSaid)))
     ship.unshift("The agent says it didn't run or test this. Try it yourself before you ship.")
