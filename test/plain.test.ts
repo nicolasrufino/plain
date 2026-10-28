@@ -581,7 +581,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
     fields = ['total']
 `) })
   for (const e of ['⚠ Anyone can use the orders part of your server without logging in.', '⚠ Anyone can use the order part of your server without logging in.',
-    '⚠ Anyone can use the order cancel part', 'New server code that deletes orders. /orders/[pk]/cancel', 'lists coupons, saves new ones and requires login ✓. /coupons/[code]',
+    '⚠ Anyone can use the order cancel part', 'New server code that deletes orders. /orders/[pk]/cancel', 'lists coupons, saves new ones and needs login to change anything ✓ (anyone can view it). /coupons/[code]',
     'requires login ✓. /account', 'saves new orders and requires login ✓. /orders/new', 'updates orders and requires login ✓. /api/orders/[pk]/refund',
     'now saves orders. /api/orders', 'now updates and deletes orders. /api/orders/[pk]'])
     assert.ok(c1.includes(e), `django missing "${e}"\n${c1}`)
@@ -1217,7 +1217,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   // rules in order, first match wins: GET is open, the cancel is open by an earlier permitAll, the rest needs login
   const c1 = card(base, { ...base, [`${J}OrderController.java`]: ctrl, ...sec('      .requestMatchers(HttpMethod.GET, "/orders/**").permitAll()\n      .requestMatchers("/orders/*/cancel").permitAll()\n      .anyRequest().authenticated()') })
   // (GET /orders is open and DELETE /orders needs login: one address, its changes need login)
-  for (const e of ['lists orders, deletes orders and requires login ✓. /api/orders', '⚠ Anyone can use the order cancel part of your server without logging in.', 'Add STRIPE_SECRET_KEY'])
+  for (const e of ['lists orders, deletes orders and needs login to change anything ✓ (anyone can view it). /api/orders', '⚠ Anyone can use the order cancel part of your server without logging in.', 'Add STRIPE_SECRET_KEY'])
     assert.ok(c1.includes(e), `java missing "${e}"\n${c1}`)
   // the starter with no rules of its own: everything needs login; without the starter, nothing does (method security alone isn't on)
   const c2 = card(base, { ...base, [`${J}OrderController.java`]: ctrl })
@@ -1607,6 +1607,17 @@ class OrderCreate(LoginRequiredMixin, CreateView):
     const idx = (up: string) => lv({ 'database/migrations/2026_10_28_000000_idx.php': `<?php\nreturn new class extends Migration { public function up(): void { ${up} } };\n` })
     for (const up of ["Schema::table('orders', fn (Blueprint $t) => $t->index('status')); DB::table('orders')->update(['status' => 'new']);", "Schema::table('orders', function (Blueprint $t) { $t->index('status'); DB::table('orders')->update(['status' => 'new']); });", "Schema::table('orders', fn (Blueprint $t) => $t->fullText('status'));"])
       not(idx(up), 'nothing breaks if it runs later')
+  }
+  // one address, an open read and a guarded change: not a bare "requires login ✓"
+  has(lv({ 'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function show(Order $order) { return $order; }\n  public function destroy(Order $order) { $order->delete(); }\n  public function index"),
+    ...web("Route::resource('orders', OrderController::class)->only(['show', 'destroy'])->middlewareFor('destroy', 'auth');\n") }), 'needs login to change anything ✓ (anyone can view it)')
+  // review 22: a GET that deletes decides like a POST; a Next.js route file whose GET checks nothing isn't a bare ✓
+  {
+    const ex = { 'package.json': '{"dependencies":{"express":"4"}}' }
+    has(card(ex, { ...ex, 'server/index.js': "import express from 'express'\nimport { requireAuth } from './auth'\nconst app = express()\nconst router = express.Router()\nrouter.get('/:id', async (req, res) => { await prisma.order.delete({ where: { id: req.params.id } }) })\nrouter.post('/:id', requireAuth, async (req, res) => { await prisma.order.delete({ where: { id: req.params.id } }) })\napp.use('/api/orders', router)\n" }), 'without logging in')
+    const nx = { 'package.json': '{"dependencies":{"next":"14"}}' }
+    const c = card(nx, { ...nx, 'app/api/orders/route.ts': "import { auth } from '@/lib/auth'\nexport async function GET() { return prisma.order.findMany() }\nexport async function POST() { const s = await auth(); if (!s) return new Response('no', { status: 401 }); await prisma.order.create({}) }\n" })
+    has(c, 'needs login to change anything ✓'); not(c, 'and requires login ✓')
   }
   console.log('ok (laravel)')
 }

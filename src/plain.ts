@@ -1317,14 +1317,16 @@ export function appFacts(snap: Snap) {
       // opening the address (GET) changes or deletes things: a link alone can do it
       // (not a view that checks request.method == 'POST': its GET and POST share one body; not a views counter: F('views') + 1)
       const shared = f.handlers.some(o => o !== h && o.facts === h.facts && o.method !== 'GET')
+      let getWrites = false
       if (h.anyMethod || h.method === 'GET' && !shared) { const t = empty(); if (p.endsWith('.py')) pyFold(p, hf, t, new Set())
-        if (['update', 'delete'].some(o => hf.ops.has(o) || t.ops.has(o)) && !([...hf.printed.matchAll(/\.a?update\(((?:[^()]|\([^()]*\))*)\)/g)].every(m => /\bF\(\s*['"]\w+['"]\s*\)\s*[+-]/.test(m[1])) && /\bF\(/.test(hf.printed) && !hf.ops.has('delete') && !/\.a?save\(/.test(hf.printed))) (unit as FileFacts & { getWrites?: boolean }).getWrites = true }
+        if (['update', 'delete'].some(o => hf.ops.has(o) || t.ops.has(o)) && !([...hf.printed.matchAll(/\.a?update\(((?:[^()]|\([^()]*\))*)\)/g)].every(m => /\bF\(\s*['"]\w+['"]\s*\)\s*[+-]/.test(m[1])) && /\bF\(/.test(hf.printed) && !hf.ops.has('delete') && !/\.a?save\(/.test(hf.printed))) getWrites = (unit as FileFacts & { getWrites?: boolean }).getWrites = true }
       unit.fns.set(h.method, hf.printed)
       unit.printed += `\n${h.method} ${hf.printed}`
       // Logged in if every handler that changes something checks (or, with none, every handler does).
       // A named middleware counts unless this repo defines it and it can't stop anyone; reading the user counts only if the code acts on it.
       const mwGuard = h.guard && !(h.mw.length && h.mw.every(m => middleware.get(m) === false))
-      const writes = h.method !== 'GET', guard = pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
+      // (a GET that updates or deletes changes things too: its login decides, like a POST's)
+      const writes = h.method !== 'GET' || getWrites, guard = pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
       const u = unit as FileFacts & { w?: boolean[]; r?: boolean[]; wu?: string[]; ru?: string[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
@@ -1562,7 +1564,12 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         if (b.fns.has('DELETE')) can.push(`deletes ${noun}`)
         clauses.push(...new Set(can))
         if (b.money) clauses.push('charges customers 💰')
-        if (b.auth && !isPublic(r.url)) clauses.push('requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
+        // (when only its changes need login, and reading it doesn't, say so: one ✓ for both would hide the open part)
+        // (route files with one exported function per method, Next.js route.ts / SvelteKit +server.ts: a GET whose own code checks
+        // nothing may still be covered by middleware, so only the changes' login is claimed)
+        const ownGet = !p.includes('#') && b.fns.has('GET') && METHODS.slice(1).some(m => b.fns.has(m)) && b.locals.has('GET') && !handlerChecks(b.locals.get('GET'))
+        const u = b as FileFacts & { w?: boolean[]; ru?: string[] }, reads = u.w?.length ? u.ru ?? [] : ownGet ? ['unknown'] : []
+        if (b.auth && !isPublic(r.url)) clauses.push(reads.includes('open') ? 'needs login to change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'needs login to change anything ✓' : 'requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
         else if (!b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown) clauses.push('works without logging in')   // (not when plain can't tell)   // read-only; changing ones get a warning instead
       } else {
         // what it now does to them: an address that gains update and delete doesn't "save" anything new
