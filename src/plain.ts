@@ -60,7 +60,7 @@ export type FileFacts = {
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
-  handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
+  handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
   mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
   pages: { path: string; comp: string; guard: boolean }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
@@ -645,11 +645,13 @@ export function appFacts(snap: Snap) {
     for (const x of routes) if (viewset || x.sub === '') {
       // a function view with no method check: POST if it (or a helper it calls) changes data
       let method = x.method
-      if (method === 'ANY') { const t = empty(); pyFold(r.file, x.facts, t, new Set()); method = x.facts.writes || x.facts.money || x.facts.outside.size || t.writes || t.written.size || t.money || t.outside.size ? 'POST' : 'GET' }
+      const anyMethod = method === 'ANY'
+      if (anyMethod) { const t = empty(); pyFold(r.file, x.facts, t, new Set()); method = x.facts.writes || x.facts.money || x.facts.outside.size || t.writes || t.written.size || t.money || t.outside.size ? 'POST' : 'GET' }
       const own = x.guard
       const g = own === undefined ? (x.drf ? (djDrf === 'writes' ? method !== 'GET' : djDrf) : false) : own === 'writes' ? method !== 'GET' : own
       // LoginRequiredMiddleware skips @login_not_required views, and DRF views (DRF 3.16+ exempts them: its own permissions decide)
-      files.get(r.file)!.handlers.push({ server: '', method, path: djUrl(url + (viewset ? x.sub + '/' : '')), guard: guard || !!r.guard || g || djLoginMw && !x.open && !x.drf, mw: [], facts: x.facts })
+      // anyMethod: it answers a plain visit (GET) too, and does the same thing
+      files.get(r.file)!.handlers.push({ server: '', method, path: djUrl(url + (viewset ? x.sub + '/' : '')), guard: guard || !!r.guard || g || djLoginMw && !x.open && !x.drf, mw: [], facts: x.facts, anyMethod })
     }
   }
   const djWalk = (p: string, pre: string, guard: boolean, seen: Set<string>) => {
@@ -674,6 +676,11 @@ export function appFacts(snap: Snap) {
       for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'fetches', 'refuses'] as const) for (const x of hf[k]) unit[k].add(x)
       unit.money ||= hf.money
       if (p.endsWith('.py')) pyFold(p, hf, unit, new Set())
+      // opening the address (GET) changes or deletes things: a link alone can do it
+      // (not a view that checks request.method == 'POST': its GET and POST share one body; not a views counter: F('views') + 1)
+      const shared = f.handlers.some(o => o !== h && o.facts === h.facts && o.method !== 'GET')
+      if (h.anyMethod || h.method === 'GET' && !shared) { const t = empty(); if (p.endsWith('.py')) pyFold(p, hf, t, new Set())
+        if (['update', 'delete'].some(o => hf.ops.has(o) || t.ops.has(o)) && !([...hf.printed.matchAll(/\.a?update\(((?:[^()]|\([^()]*\))*)\)/g)].every(m => /\bF\(\s*['"]\w+['"]\s*\)\s*[+-]/.test(m[1])) && /\bF\(/.test(hf.printed) && !hf.ops.has('delete') && !/\.a?save\(/.test(hf.printed))) (unit as FileFacts & { getWrites?: boolean }).getWrites = true }
       unit.fns.set(h.method, hf.printed)
       unit.printed += `\n${h.method} ${hf.printed}`
       // Logged in if every handler that changes something checks (or, with none, every handler does).
@@ -875,7 +882,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       if (!a) {
         const can: string[] = [], creates = b.ops.has('create') || (b.writes && !b.ops.size)
         if (b.fns.has('GET')) can.push(`lists ${noun}`)
-        if (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m))) can.push(creates ? (can.length ? 'saves new ones' : `saves new ${noun}`)
+        if (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m))) can.push(creates ? (can.length && (!t || b.written.has(t)) ? 'saves new ones' : `saves new ${t && !b.written.has(t) && b.written.size ? things([...b.written][0]) : noun}`)
           : b.ops.has('update') ? `updates ${noun}` : b.ops.has('delete') ? `deletes ${noun}` : t ? `looks up ${noun}` : 'accepts requests')
         if (b.fns.has('PUT') || b.fns.has('PATCH')) can.push(`updates ${noun}`)
         if (b.fns.has('DELETE')) can.push(`deletes ${noun}`)
@@ -1003,8 +1010,13 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       ? 'Update your database: run `python manage.py makemigrations`, then `python manage.py migrate` (also on your live site). The models changed, but no migration was created.'
       : 'Update your database: create a migration (`alembic revision --autogenerate`, or `flask db migrate` with Flask-Migrate) and apply it (`alembic upgrade head` / `flask db upgrade`), also on your live site. The models changed, but no migration was created.')
   // a migration the new code depends on: until it runs on the live database, those parts fail
-  if (newPyMigrations.length) ship.push(`Apply ${list(newPyMigrations)} to your live database before the new code goes live (${'django' in B.deps ? '`python manage.py migrate`'
-    : '`alembic upgrade head`, or `flask db upgrade` with Flask-Migrate'}), or the parts that use it will fail.`)
+  // one that only adds an index just speeds things up: nothing breaks if it runs late
+  const indexOnly = (m: string) => { const up = (after.get(m) ?? '').split(/def downgrade/)[0], ops = [...up.matchAll(/migrations\.(\w+)\(|\b(?:op|batch_op)\.(\w+)\(/g)].map(x => x[1] ?? x[2]).filter(o => !/^(f|batch_alter_table)$/.test(o))
+    return ops.length > 0 && ops.every(o => /^(AddIndex|RemoveIndex|RenameIndex|create_index|drop_index)$/.test(o)) }
+  const cmd = 'django' in B.deps ? '`python manage.py migrate`' : '`alembic upgrade head`, or `flask db upgrade` with Flask-Migrate'
+  const needed = newPyMigrations.filter(m => !indexOnly(m)), speed = newPyMigrations.filter(indexOnly)
+  if (needed.length) ship.push(`Apply ${list(needed)} to your live database before the new code goes live (${cmd}), or the parts that use it will fail.`)
+  if (speed.length) ship.push(`Apply ${list(speed)} to your live database too (${cmd}). It only makes lookups faster, so nothing breaks if it runs later.`)
   for (const m of newPyMigrations) {
     const up = (after.get(m) ?? '').split(/def downgrade|def backwards/)[0]
     if (/op\.drop_(table|column)|RemoveField|DeleteModel|\bDROP\b/.test(up)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
@@ -1054,7 +1066,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
     if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k)) continue
     ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
-      : `Add ${k} to your hosting settings (like Vercel).${B.envExample.has(k) ? '' : ' It\'s also missing from .env.example.'}`)
+      : `Add ${k} to your hosting settings${B.pyModels.size || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) ? '' : ' It\'s also missing from .env.example.'}`)
   }
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)
@@ -1077,19 +1089,43 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // ponytail: no control flow; a pending row cancelled right after Stripe charged it (charged, no booking) is missed
   const stmtAt = (t: string, i: number) => t.slice(t.lastIndexOf(';', i) + 1, (t.indexOf(';', i) + 1 || t.length))
   const isWrite = (x: string) => !/^\s*create\s+(table|type|domain)/i.test(x) && /\bupdate\b|\.save\(|\bdata\s*:|\bset\b/i.test(x)   // not updated_at, not a table definition
-  const pendingOnly = (x: string) => /pending|unpaid|expired|open/i.test(x) && !/(?<!un)\bpaid\b/i.test(x.replace(/payment_status\s*={1,3}\s*['"`]paid['"`]/g, ''))
+  const pendingOnly = (x: string) => /\b(pending|unpaid|expired|open)\b/i.test(x) && !/(?<!un)\bpaid\b/i.test(x.replace(/payment_status\s*={1,3}\s*['"`]paid['"`]/g, ''))
   const statusFromInput = (t: string) => [...t.matchAll(/\bstatus\s*(?=[,}])|\bstatus\s*:\s*(?!['"`])[A-Za-z_]/g)].some(m => { const x = stmtAt(t, m.index!); return isWrite(x) && !pendingOnly(x) })
   // writes of 'cancelled', plus (when status comes from the request) lists of allowed values in the file: ['completed', 'cancelled'], z.enum([...]), in (...)
   const paidCancels = (t = '', file = t) => [...t.matchAll(/['"`]cancell?ed['"`]/g)].filter(m => isWrite(stmtAt(t, m.index!)) && !pendingOnly(stmtAt(t, m.index!))).length
     + (statusFromInput(t) ? new Set([...file.matchAll(/['"`]cancell?ed['"`]/g)].map(m => stmtAt(file, m.index!)).filter(x => !isWrite(x) && /\[[^\]]*cancell?ed[^\]]*\]|enum\s*\(|\bin\s*\(/i.test(x))).size : 0)
   const newSql = B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m)).map(m => after.get(m) ?? '').join('\n')
-  const cancels = real.some(p => route(p)?.kind !== 'page' && !/\.[jt]sx$/.test(p.split('#')[0]) && !!B.files.get(p)?.written.size
+  // test code sets up cancelled orders; it isn't the app. A test_*.py / *_test.py counts only if it holds tests (test_drive.py may be a feature)
+  const isTest = (p: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)(tests|conftest)\.py$|\.(test|spec)\.[jt]sx?$/.test(p)
+    || /(^|\/)(test_\w+|\w+_tests?)\.py$/.test(p) && /\bdef test_|\bTestCase\b|import pytest/.test(after.get(p) ?? before.get(p) ?? '')
+  // (Python files are judged by pyCancels below: a whole Python file has no `;` to split statements on)
+  const cancels = real.some(p => route(p)?.kind !== 'page' && !/\.([jt]sx|py)$/.test(p.split('#')[0]) && !isTest(p.split('#')[0]) && !!B.files.get(p)?.written.size
     && paidCancels(B.files.get(p)!.printed, B.files.get(p.split('#')[0])?.printed) > paidCancels(A.files.get(p)?.printed, A.files.get(p.split('#')[0])?.printed)) || paidCancels(newSql) > 0 && /update\s+[\w.]*\s+set/i.test(newSql)
-  const refunds = [...B.files.values()].some(f => /refunds?\.create|\brefund\(/.test(f.printed))
-  if (cancels && !refunds && [...B.files.values()].some(f => f.services.has('Stripe')))
+  // stripe.Refund.create, stripe.refunds.create, refund(...); not a Refund model or Refund(...) row
+  const refunds = [...B.files.values()].some(f => /refunds?\.create|Refund\.create|\brefund\(/.test(f.printed))
+  // Python cancels, per def (methods too) and per statement: `.status = ...cancel...` or `update(status=...cancel...)` (the value written,
+  // not a filter or a comparison). A cancel is "unpaid only" when its own statement limits it to pending/unpaid rows, or, when it's the
+  // def's only cancel, the def does. Defs that react to Stripe's "payment page expired" are left out: no page is open, those were never paid.
+  // afterPaid: unpaid-only cancels in a def that first checks the payment (payment_status, Session.retrieve)
+  const pyCancels = (t = '') => {
+    const out = { pending: 0, paid: 0, afterPaid: 0 }
+    for (const d of t.replace(/#[^\n]*/g, '').replace(/("""|''')[\s\S]*?\1/g, '').split(/\n(?=[ \t]*(?:async\s+)?def\s)/)) {
+      if (/session\.expired/.test(d) || !/\.a?(update|bulk_update|save)\(/.test(d)) continue
+      let depth = 0, flat = ''; for (const ch of d) { depth += '([{'.includes(ch) ? 1 : ')]}'.includes(ch) ? -1 : 0; flat += ch === '\n' && depth > 0 ? ' ' : ch }
+      const lines = flat.split('\n').filter(l => /\.status\s*=(?!=)[^\n]*cancel|update\([^)]*\bstatus\s*=\s*[^,)]*cancel/i.test(l))
+      for (const line of lines) {
+        if (!(pendingOnly(line) || lines.length === 1 && pendingOnly(d))) { out.paid++; continue }
+        out.pending++; if (/payment_status|[Ss]ession\.retrieve/.test(d)) out.afterPaid++
+      }
+    }
+    return out
+  }
+  const pyPaidCancel = real.some(p => !p.includes('#') && p.endsWith('.py') && !isTest(p) && pyCancels(after.get(p)).paid > pyCancels(before.get(p)).paid)
+  if ((cancels || pyPaidCancel) && !refunds && [...B.files.values()].some(f => f.services.has('Stripe')))
     problems.push({ kind: 'Check', text: "Cancelling doesn't give money back: nothing in your app refunds a Stripe payment. If someone cancels after paying, they stay charged. (This is a guess.)" })
-  // "I couldn't run the tests", "didn't get a chance to test", "tests not run", "untested"; not "I didn't change the tests"
-  const NOT_RUN = /\b(did ?n[o'’]?t|could ?n[o'’]?t|was ?n[o'’]?t able to|were ?n[o'’]?t able to|unable to|not able to|have ?n[o'’]?t|has ?n[o'’]?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\buntested\b/i
+  // "I couldn't run the tests", "didn't get a chance to test", "tests not run", "untested", "the suite still needs to be run";
+  // not "I didn't change the tests", "no (new) tests need to be run"
+  const NOT_RUN = /\b(did ?n[o'’]?t|could ?n[o'’]?t|was ?n[o'’]?t able to|were ?n[o'’]?t able to|unable to|not able to|have ?n[o'’]?t|has ?n[o'’]?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\buntested\b|\b(?<!\b(no|nothing)\s+(?:\w+\s+)?)(tests?|test suite|suite|it|this|everything)\s+(still\s+)?needs?\s+to\s+(be\s+)?(run|tested)\b/i
   // "fix it", "it's weird", "make it faster" without saying what's wrong: the agent had to guess what to fix
   const ask = said(opts.asked)
   if (/\b(fix (it|this|that|things)|broken|weird|buggy|not working|doesn'?t work|isn'?t working|glitchy|janky|(is|so|too|kinda|really) slow|make it faster|speed it up)\b/i.test(ask)
@@ -1102,6 +1138,65 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const hit = real.find(p => p === m[0] || p.endsWith('/' + m[0].replace(/^\.?\//, '')))
     if (hit && !named_.has(hit) && named_.add(hit)) changes.push({ group: 'Other files', isNew: !before.has(hit), text: `The agent ${before.has(hit) ? 'changed' : 'created'} ${hit}, as you asked.` })
   }
+  // A cancelled unpaid order whose Stripe payment page is still open can be paid: the money comes in, the order stays cancelled.
+  // Cancelling unpaid orders: Python per def and statement (pyCancels above); elsewhere per statement
+  const CANCEL = /['"`]cancell?ed['"`]|\.cancell?ed\b/i
+  // code reacting to Stripe's "payment page expired" has no open page left to close (Python: pyCancels skips those defs)
+  const pendingCancels = (p: string, x: typeof B, text?: string) => { const f = x.files.get(p)
+    return !f ? { n: 0, paid: 0 } : p.endsWith('.py') ? { n: pyCancels(text).pending, paid: pyCancels(text).afterPaid } : /session\.expired/.test(f.printed) ? { n: 0, paid: 0 }
+      : { n: [...f.printed.matchAll(new RegExp(CANCEL.source, 'gi'))].map(m => stmtAt(f.printed, m.index!)).filter(t => isWrite(t) && pendingOnly(t)).length,
+          paid: /payment_status|sessions\.retrieve|Session\.retrieve/.test(f.printed) ? 1 : 0 } }
+  const usesCheckout = [...B.files.values()].some(f => [...f.outside].some(o => o.startsWith('Stripe: checkout.sessions')))
+  const cancelFiles = real.filter(p => !p.includes('#') && !isTest(p) && pendingCancels(p, B, after.get(p)).n > pendingCancels(p, A, before.get(p)).n)
+  // the same code confirms the payment first (payment_status, sessions.retrieve): the customer already paid when it cancels
+  const afterPaying = cancelFiles.some(p => pendingCancels(p, B, after.get(p)).paid > 0)
+  const closesPages = [...B.files.values()].some(f => /Session\.expire\(|sessions\.expire\(/.test(f.printed))
+  if (usesCheckout && cancelFiles.length && !refunds && !closesPages && afterPaying)
+    problems.push({ kind: 'Check', text: "Someone can be charged and then have their booking cancelled (for example when the spot was taken while they paid), and nothing refunds them. Refund them when that happens. (This is a guess.)" })
+  else if (usesCheckout && cancelFiles.length && !refunds && !closesPages)
+    problems.push({ kind: 'Check', text: "Cancelled orders can still be paid: someone who still has the Stripe payment page open can finish paying, and their order stays cancelled, so you'd keep money for nothing. Close their payment page when you cancel (Stripe's Session.expire), or refund them. (This is a guess.)" })
+  // a GET that changes things: opening a link (from another site, an email preview, a browser loading ahead) is enough
+  const onlyPost = 'django' in B.deps ? 'with `@require_POST`' : 'flask' in B.deps ? "with `methods=['POST']`" : 'a POST route instead of a GET one'
+  // links meant to act when opened: email confirmations, payment returns. Stripe's cancel_url sends people back by GET: that view is skipped
+  // when the cancel_url names it (reverse('shop:checkout_cancel') for /checkout/[id]/cancel), not any view with "cancel" in it.
+  const ACTS = new Set(['verify', 'confirm', 'unsubscribe', 'activate', 'magic', 'logout', 'callback', 'success', 'return', 'session'])
+  const cancelUrls = [...B.files.values()].flatMap(f => [...f.printed.matchAll(/cancel_url\W{1,4}([^\n]{0,160})/g)].map(m => m[1].split(/,\s*['"]?\w+['"]?\s*[:=]/)[0]))
+  const stripeReturn = (url: string) => { const parts = url.split('/').filter(x => x && !x.startsWith('['))
+    return parts.length > 0 && cancelUrls.some(c => parts.every(x => c.includes(x))) }
+  for (const p of real) {
+    const r = route(p), b = B.files.get(p) as FileFacts & { getWrites?: boolean } | undefined, a = A.files.get(p) as FileFacts & { getWrites?: boolean } | undefined
+    // ponytail: Python views only (a Django view answers every method unless told otherwise)
+    if (r?.kind === 'endpoint' && p.split('#')[0].endsWith('.py') && b?.getWrites && !a?.getWrites && !isPublic(r.url) && !r.url.split('/').some(x => ACTS.has(x)) && !stripeReturn(r.url))
+      problems.push({ kind: 'Check', text: `${cap(placeName(p))} changes things when someone just opens its address. A link on another site, or a browser loading pages ahead, can do it without the person meaning to. Make it accept only form submissions (POST, ${onlyPost}). (${r.url})` })
+  }
+  // Django sends email through EMAIL_BACKEND; the console one only prints it in the server log. Live settings only (not dev/local/test/ci),
+  // and any of them sending for real is enough (production.py overriding base.py; `console if DEBUG else anymail`).
+  // Unset means SMTP, which works when EMAIL_HOST points somewhere other than this machine.
+  const settings = [...B.files].filter(([p, f]) => (f as PyFacts).dj && !/(^|\/|_)(dev|development|local|tests?|ci)\w*\.py$|(^|\/)(tests?|settings\/(dev|local|tests?|ci))\//.test(p)).map(([, f]) => (f as PyFacts).dj)
+  const QUIET_MAIL = /console|locmem|dummy|filebased/, sends = /smtp|anymail|ses|sendgrid|mailgun|postmark|resend|brevo|sparkpost/i
+  const realBackend = settings.some(d => d.emailBackend && (sends.test(d.emailBackend) || !QUIET_MAIL.test(d.emailBackend)))
+  const consoleBackend = settings.some(d => d.emailBackend && QUIET_MAIL.test(d.emailBackend))
+  const realHost = settings.some(d => d.emailHost && !/^\s*['"](localhost|127\.0\.0\.1)['"]\s*$/.test(d.emailHost))
+  const mailsNow = (x: typeof B) => [...x.files.values()].some(f => f.outside.has('email: send'))
+  if ('django' in B.deps && mailsNow(B) && !mailsNow(A) && !realBackend && (consoleBackend || !realHost))
+    ship.push(`Turn on real email sending on your live site: set EMAIL_BACKEND to your email service (${consoleBackend ? 'right now it falls back to printing emails in the server log' : "nothing sets it, so Django tries a mail server on this same machine"}). Until then, nobody gets these emails.`)
+  // a new text field with a default on a table that already has rows: every existing row gets that value
+  for (const m of B.pyMigrations.filter(m => !A.pyMigrations.includes(m))) for (const x of (after.get(m) ?? '').split(/(?=migrations\.\w+\()/).map(op => op.match(/^migrations\.AddField\(\s*model_name=['"](\w+)['"],\s*name=['"](\w+)['"],([\s\S]*)/)).filter(x => !!x)) {
+    // the field's own default (after its choices), on a model that existed before
+    const d = x[3].match(/\b(?:db_)?default=(['"])([^'"]*)\1/), model = [...A.models.keys()].find(k => k.toLowerCase() === x[1])
+    const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const label = d && x[3].match(new RegExp(`\\(\\s*['"]${esc(d[2])}['"]\\s*,\\s*(?:_\\()?['"]([^'"]+)['"]`))?.[1]   // choices: ('sm', 'Small') -> Small
+    if (d && d[2] && model) problems.push({ kind: 'Check', text: `Every ${singular(things(model))} you already have gets "${label ?? d[2]}" as its ${fieldName(x[2]) || words(x[2])}. Change the ones that should be different. (in ${m})` })
+  }
+  // Python files the card doesn't mention otherwise (services.py, API files, tests): say they changed. Not the ones the card already
+  // covers another way: models (Database), files that only wire up routers or urls, files a problem names.
+  // ponytail: TypeScript components and helpers already show up through the pages that use them
+  const shown = [...changes.map(c => `${c.text} ${c.detail ?? ''}`), ...problems.map(x => x.text), ...ship, ...unfinished].join('\n')
+  const wiring = (f?: FileFacts) => { const x = f as PyFacts | undefined; return !!x && (x.models.size > 0 || x.mounts.length > 0 || x.servers.size > 0 || x.dj.urls.length > 0 || x.dj.routers.size > 0) }
+  const quiet = real.filter(p => !p.includes('#') && p.endsWith('.py') && !route(p) && ![...B.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
+    && !/(^|\/)(migrations|alembic)\/|(^|\/)__init__\.py$|(^|\/)(apps|asgi|wsgi|manage)\.py$/.test(p))
+  for (const [verb, xs] of [['added', quiet.filter(q => !before.has(q))], ['changed', quiet.filter(q => before.has(q) && after.has(q))], ['deleted', quiet.filter(q => !after.has(q))]] as const)
+    if (xs.length) changes.push({ group: 'Other files', text: `The agent also ${verb} ${list(xs)}${xs.every(q => /(^|\/)tests?(_\w+)?\.py$|(^|\/)tests?\//.test(q)) ? ' (tests)' : ''}.` })
   if (NOT_RUN.test(said(opts.agentSaid)))
     ship.unshift("The agent says it didn't run or test this. Try it yourself before you ship.")
 
@@ -1128,7 +1223,8 @@ export function render(r: {
   if (!r.changes.length && !r.problems.length && !r.unfinished.length && !r.ship.length)
     return [...out, '', 'Nothing about the app changed.'].join('\n')
 
-  const checks = r.problems.filter(p => p.kind === 'Check').length, bad = r.problems.length - checks
+  // an unasked change is a guess ("?"), not a problem: it's for the owner to decide
+  const checks = r.problems.filter(p => p.kind === 'Check' || p.kind === 'Unasked').length, bad = r.problems.length - checks
   out.push('', '  ' + [
     bad ? red(`⚠ ${plural(bad, 'problem')}`) : green('✓ No problems spotted'),
     checks ? yellow(`${plural(checks, 'thing')} to decide`) : '',

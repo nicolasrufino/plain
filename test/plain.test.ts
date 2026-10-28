@@ -48,7 +48,7 @@ for (const e of ['plain recap · 1 request', 'YOUR APP NOW', '1. "add coupon cod
 rmSync(dir, { recursive: true, force: true })
 
 const expect = [
-  '⚠ 3 problems  ·  5 loose ends  ·  4 steps before you ship',           // verdict first
+  '⚠ 2 problems  ·  1 thing to decide  ·  5 loose ends  ·  4 steps before you ship',           // verdict first
   '⚠ Anyone can use the coupon part of your server without logging in.',  // no login check
   '✖ oldDiscount() was deleted from lib/money.ts, but the admin refunds page still uses it',
   '? The agent also changed calculateTotal() in lib/money.ts',             // unasked change...
@@ -767,4 +767,106 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   const hook = (body: string) => ({ ...site({}), ...shop("path('hook/', views.hook)", `from django.views.decorators.csrf import csrf_exempt\n@csrf_exempt\ndef hook(request):\n${body}    return None\n`) })
   assert.ok(card(site({}), hook("    # TODO verify the signature\n    p.signature = request.POST['signature']\n")).includes('csrf'), 'review 9 csrf')
   console.log('ok (review 9)')
+}
+
+// Round 4 trials (Django bakery, 2026-10-28): what the graders found that fixed rules can see.
+{
+  const site = (extra: Record<string, string>) => ({ 'requirements.txt': 'Django==5.1\nstripe==10\n',
+    'mysite/urls.py': "from django.urls import path, include\nurlpatterns = [path('', include('shop.urls'))]\n",
+    'shop/models.py': "from django.db import models\nclass Product(models.Model):\n    name = models.CharField(max_length=80)\nclass Order(models.Model):\n    status = models.CharField(max_length=20)\n",
+    'shop/checkout.py': "import stripe\ndef pay(order):\n    return stripe.checkout.Session.create(mode='payment', metadata={'order_id': order.pk})\n", ...extra })
+  const urls = (u: string) => ({ 'shop/urls.py': `from django.urls import path\nfrom . import views\nurlpatterns = [${u}]\n` })
+  const sellOut = (extra = '') => ({ ...urls("path('sold-out/<int:pk>/', views.sold_out)"), 'shop/views.py': `from django.contrib.admin.views.decorators import staff_member_required\nfrom django.views.decorators.http import require_POST\nfrom .services import cancel_unpaid\n@staff_member_required\n@require_POST\ndef sold_out(request, pk):\n    cancel_unpaid(pk)\n`,
+    'shop/services.py': `def cancel_unpaid(pk):\n    orders = list(Order.objects.filter(items__product=pk, status=Order.Status.PENDING))\n    for order in orders:\n        order.status = Order.Status.CANCELLED\n${extra}    Order.objects.bulk_update(orders, ['status'])\n` })
+  const c1 = card(site({}), site(sellOut()))
+  for (const e of ['! Cancelled orders can still be paid', 'The agent also added shop/services.py']) assert.ok(c1.includes(e), `round 4 missing "${e}"\n${c1}`)
+  assert.ok(!card(site({}), site(sellOut('        stripe.checkout.Session.expire(order.stripe_session_id)\n'))).includes('can still be paid'), 'round 4: expire closes the page')
+  // a view that changes things on a plain visit; with @require_POST it doesn't
+  const cancel = (deco: string) => site({ ...urls("path('o/<int:pk>/cancel/', views.cancel)"), 'shop/views.py': `${deco}def cancel(request, pk):\n    Order.objects.filter(pk=pk).update(status='cancelled')\n` })
+  assert.ok(card(site({}), cancel('')).includes('changes things when someone just opens its address'), 'round 4: GET writes')
+  assert.ok(!card(site({}), cancel('@require_POST\n')).includes('just opens its address'), 'round 4: POST only')
+  // Django email on the console backend; an index-only migration; a new field with a default on a table that has rows
+  const mail = (backend: string) => site({ 'mysite/settings.py': backend, ...urls("path('hi/', views.hi)"), 'shop/views.py': "from django.core.mail import send_mail\ndef hi(request):\n    send_mail('Hi', 'Hello', None, ['a@b.c'])\n" })
+  assert.ok(card(site({}), mail("EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')\n")).includes('Turn on real email sending'), 'round 4: console email')
+  assert.ok(!card(site({}), mail("EMAIL_BACKEND = 'anymail.backends.resend.EmailBackend'\n")).includes('Turn on real email sending'), 'round 4: real email')
+  const mig = (name: string, ops: string) => ({ [`shop/migrations/${name}.py`]: `from django.db import migrations, models\nclass Migration(migrations.Migration):\n    operations = [\n${ops}    ]\n` })
+  const c2 = card(site({}), site(mig('0002_order_index', "        migrations.AddIndex(model_name='order', index=models.Index(fields=['status'], name='order_status')),\n")))
+  assert.ok(c2.includes('It only makes lookups faster') && !c2.includes('will fail'), `round 4: index only\n${c2}`)
+  const c3 = card(site({}), site(mig('0002_product_category', "        migrations.AddField(\n            model_name='product',\n            name='category',\n            field=models.CharField(choices=[('bread', 'Bread'), ('other', 'Other')], default='other', max_length=20),\n        ),\n")))
+  assert.ok(c3.includes('Every product you already have gets "Other" as its category'), `round 4: default\n${c3}`)
+  // "still needs to be run"; unasked guesses are things to decide, not problems
+  const c4 = report(new Map(Object.entries(site({}))), new Map(Object.entries(site({ 'shop/tests.py': 'def test_x():\n    assert True\n' }))), { ref: 'main', agentSaid: 'Added a test. The full suite still needs to be run.' })
+  assert.ok(c4.includes("didn't run or test this") && c4.includes('The agent also added shop/tests.py (tests)'), `round 4: not run\n${c4}`)
+  console.log('ok (round 4 trials)')
+}
+
+// Review 10 (2026-10-28): the round 4 rules, without their false alarms.
+{
+  const site = (extra: Record<string, string>) => ({ 'requirements.txt': 'Django==5.1\nstripe==10\n',
+    'mysite/urls.py': "from django.urls import path, include\nurlpatterns = [path('', include('shop.urls'))]\n",
+    'shop/models.py': "from django.db import models\nclass Order(models.Model):\n    status = models.CharField(max_length=20)\n",
+    'shop/checkout.py': "import stripe\ndef pay(order):\n    return stripe.checkout.Session.create(mode='payment', cancel_url='/x')\n", ...extra })
+  const view = (body: string, deco = '') => site({ 'shop/urls.py': "from django.urls import path\nfrom . import views\nurlpatterns = [path('o/<int:pk>/stop/', views.stop)]\n", 'shop/views.py': `${deco}def stop(request, pk):\n${body}` })
+  const has = (c: string, e: string) => c.includes(e)
+  // the confirm-page pattern: the write only happens on POST
+  assert.ok(!has(card(site({}), view("    if request.method == 'POST':\n        Order.objects.filter(pk=pk).update(status='stopped')\n        return redirect('/')\n    return render(request, 'confirm.html')\n")), 'just opens'), 'review 10: confirm page')
+  assert.ok(!has(card(site({}), view("    Order.objects.filter(pk=pk).update(views=F('views') + 1)\n")), 'just opens'), 'review 10: counter')
+  // cancelling: per def, the written value; a read-only dashboard, a skip, an exclude aren't cancels
+  const svc = (body: string) => site({ 'shop/services.py': body })
+  for (const b of ["def counts():\n    ctx = {}\n    ctx.update({'p': Order.objects.filter(status='pending').count(), 'c': Order.objects.filter(status='cancelled').count()})\n    return ctx\n",
+    "def remind():\n    for o in Order.objects.filter(status='pending'):\n        if o.status == 'cancelled':\n            continue\n        o.save()\n"])
+    assert.ok(!has(card(site({}), svc(b)), 'can still be paid'), `review 10: not a cancel\n${b}`)
+  // a class method that cancels unpaid orders counts; a refund anywhere (stripe.Refund.create) quiets both guesses
+  const cls = "class Order2:\n    def cancel(self):\n        Order.objects.filter(pk=self.pk, status='pending').update(status='cancelled')\n"
+  assert.ok(has(card(site({}), svc(cls)), 'can still be paid'), 'review 10: class method')
+  assert.ok(!has(card(site({}), svc(cls + "def refund_late(pi):\n    stripe.Refund.create(payment_intent=pi)\n")), 'can still be paid'), 'review 10: refunds')
+  // cancelling paid orders through an enum; the word "open" inside another word doesn't make it "unpaid only"
+  const paid = "def close_day(day):\n    if day.opening_hours:\n        return\n    Order.objects.filter(pickup_date=day, status=Order.Status.PAID).update(status=Order.Status.CANCELLED)\n"
+  assert.ok(has(card(site({}), svc(paid)), "Cancelling doesn't give money back"), 'review 10: paid enum cancel')
+  // "X needs to be run" is about something else; "the suite still needs to be run" is about tests
+  for (const [said, fires] of [['All 42 tests pass. The new migration still needs to be run on your live database.', false], ['Ran all tests: 18 passed. No migrations need to be run.', false],
+    ['I ran the full test suite (all green); nothing else needs to be run.', false], ['The full suite still needs to be run.', true]] as const)
+    assert.equal(report(new Map(Object.entries(site({}))), new Map(Object.entries(svc('def f():\n    return 1\n'))), { ref: 'main', agentSaid: said }).includes("didn't run or test"), fires, `review 10: "${said}"`)
+  // email: unset backend with a real EMAIL_HOST is SMTP; dev settings with console next to production settings with a real one
+  const mail = (s: Record<string, string>) => site({ ...s, 'shop/urls.py': "from django.urls import path\nfrom . import views\nurlpatterns = [path('hi/', views.hi)]\n", 'shop/views.py': "from django.core.mail import send_mail\ndef hi(request):\n    send_mail('Hi', 'x', None, ['a@b.c'])\n" })
+  for (const s of [{ 'mysite/settings.py': "EMAIL_HOST = 'smtp.sendgrid.net'\n" }, { 'mysite/settings/dev.py': "EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'\n", 'mysite/settings/production.py': "EMAIL_BACKEND = 'anymail.backends.mailgun.EmailBackend'\n" },
+    { 'mysite/settings.py': "EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' if DEBUG else 'anymail.backends.mailgun.EmailBackend'\n" }])
+    assert.ok(!has(card(site({}), mail(s)), 'Turn on real email sending'), `review 10: email ${Object.keys(s)}`)
+  // a default from choices reads as its label; an _id field still has a name; a deleted helper says deleted
+  const mig = (field: string) => ({ ...site({}), 'shop/migrations/0002_x.py': `from django.db import migrations, models\nclass Migration(migrations.Migration):\n    operations = [\n        migrations.AddField(model_name='order', name='size', field=${field}),\n    ]\n` })
+  assert.ok(has(card(site({}), mig("models.CharField(choices=[('sm', 'Small'), ('lg', 'Large')], default='sm', max_length=2)")), 'gets "Small" as its size'), 'review 10: choice label')
+  const gone = site({ 'shop/helpers.py': 'def h():\n    return 1\n' })
+  assert.ok(has(card(gone, site({})), 'The agent also deleted shop/helpers.py'), 'review 10: deleted helper')
+  console.log('ok (review 10)')
+}
+
+// Review 11 (2026-10-28): the guesses about cancelling, links and email, made narrower.
+{
+  const site = (extra: Record<string, string>) => ({ 'requirements.txt': 'Django==5.1\nstripe==10\n',
+    'mysite/urls.py': "from django.urls import path, include\nurlpatterns = [path('', include('shop.urls'))]\n",
+    'shop/models.py': "from django.db import models\nclass Order(models.Model):\n    status = models.CharField(max_length=20)\n", ...extra })
+  const co = { 'shop/checkout.py': "import stripe\ndef pay(order):\n    return stripe.checkout.Session.create(mode='payment', cancel_url='https://x.com/cart')\n" }
+  const paidCancel = 'def close(day):\n    Order.objects.filter(day=day).update(status=\'cancelled\')\n'
+  // a Refund model isn't a refund; an app file named test_drive.py isn't a test; real tests are
+  assert.ok(card(site(co), site({ ...co, 'shop/models.py': site({})['shop/models.py'] + 'class Refund(models.Model):\n    amount = models.IntegerField()\n', 'shop/services.py': paidCancel })).includes("doesn't give money back"), 'review 11: Refund model')
+  assert.ok(card(site(co), site({ ...co, 'shop/test_drive.py': paidCancel })).includes("doesn't give money back"), 'review 11: test_drive.py')
+  assert.ok(!card(site(co), site({ ...co, 'shop/tests.py': 'def test_close():\n    o = Order()\n    o.status = "cancelled"\n    o.save()\n' })).includes("doesn't give money back"), 'review 11: tests.py')
+  // a pending-only cancel in a file that says "paid" elsewhere; an expired-session handler next to a separate cancel
+  const pend = "def is_paid(o):\n    return o.status == 'paid'\ndef cancel_unpaid():\n    Order.objects.filter(status='pending').update(status='cancelled')\n"
+  const c1 = card(site(co), site({ ...co, 'shop/services.py': pend }))
+  assert.ok(c1.includes('can still be paid') && !c1.includes("doesn't give money back"), `review 11: pending only\n${c1}`)
+  assert.ok(card(site(co), site({ ...co, 'shop/hooks.py': "def on_expired(event):\n    if event['type'] == 'checkout.session.expired':\n        pass\n" + pend.split('def is_paid')[0] + pend.slice(pend.indexOf('def cancel_unpaid')) })).includes('can still be paid'), 'review 11: expired per def')
+  // the cancel_url exemption only covers the view it names
+  const cancelView = (cancelUrl: string) => site({ 'shop/checkout.py': `import stripe\ndef pay(order):\n    return stripe.checkout.Session.create(mode='payment', cancel_url=${cancelUrl})\n`,
+    'shop/urls.py': "from django.urls import path\nfrom . import views\nurlpatterns = [path('checkout/<int:pk>/cancel/', views.cancel)]\n",
+    'shop/views.py': "@login_required\ndef cancel(request, pk):\n    Order.objects.filter(pk=pk).update(status='stopped')\n    return redirect('/')\n" })
+  assert.ok(card(site({}), cancelView("'https://x.com/cart'")).includes('just opens its address'), 'review 11: other cancel_url')
+  assert.ok(!card(site({}), cancelView("request.build_absolute_uri(reverse('shop:checkout_cancel', args=[order.pk]))")).includes('just opens its address'), 'review 11: this cancel_url')
+  // email: production.py overrides base.py's console backend, in any order
+  const mail = (files: Record<string, string>) => site({ ...files, 'shop/urls.py': "from django.urls import path\nfrom . import views\nurlpatterns = [path('hi/', views.hi)]\n", 'shop/views.py': "from django.core.mail import send_mail\ndef hi(request):\n    send_mail('Hi', 'x', None, ['a@b.c'])\n" })
+  assert.ok(!card(site({}), mail({ 'mysite/settings/base.py': "EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'\n", 'mysite/settings/production.py': "EMAIL_BACKEND = 'anymail.backends.mailgun.EmailBackend'\n" })).includes('Turn on real email'), 'review 11: base + production')
+  // "no new tests need to be run" isn't "didn't run the tests"; "all tests still need to be run" is
+  for (const [said, fires] of [['No new tests need to be run.', false], ['All tests still need to be run.', true]] as const)
+    assert.equal(report(new Map(Object.entries(site({}))), new Map(Object.entries(site({ 'shop/x.py': 'def f():\n    return 1\n' }))), { ref: 'main', agentSaid: said }).includes("didn't run or test"), fires, `review 11: "${said}"`)
+  console.log('ok (review 11)')
 }

@@ -24,7 +24,7 @@ export type DjDef = { name: string; facts: FileFacts; guard: boolean; act?: { su
 export type DjClass = { bases: string[]; pc?: string; getPerms?: string; model?: string; lookup?: string; http?: string[]; md: Set<string>; open: boolean; defs: DjDef[]; rest: FileFacts }
 type DjRef = { view: string; guard: boolean; actions?: Record<string, string>; pc?: string }   // pc: as_view(permission_classes=[...]) overrides the class's
 export type Dj = { urls: ({ path: string; include?: string } & Partial<DjRef> & { guard: boolean })[]; routers: Map<string, { prefix: string; view: string }[]>
-  views: Map<string, DjRoute[]>; classes: Map<string, DjClass>; aliases: Map<string, DjRef>; stars: string[]; drf?: boolean | 'writes'; loginMw: boolean }
+  views: Map<string, DjRoute[]>; classes: Map<string, DjClass>; aliases: Map<string, DjRef>; stars: string[]; drf?: boolean | 'writes'; loginMw: boolean; emailBackend?: string; emailHost?: string }
 
 const str = (n?: N | null) => n?.type === 'string' && !n.namedChildren.some(c => c?.type === 'interpolation')
   ? n.namedChildren.filter(c => c?.type === 'string_content').map(c => c!.text).join('') : undefined
@@ -316,6 +316,8 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
       if (right?.type === 'call' && /(^|\.)(Default|Simple)Router$/.test(fnName(right)) && left) routers.add(left)
       if (left === 'REST_FRAMEWORK') { const m = code(right).match(/['"]DEFAULT_PERMISSION_CLASSES['"]\s*:\s*([\[(][^\])]*[\])])/); if (m) dj.drf = perm(m[1]) }
       if (left === 'MIDDLEWARE' && /['"]django\.contrib\.auth\.middleware\.LoginRequiredMiddleware['"]/.test(code(right))) dj.loginMw = true
+      if (left === 'EMAIL_BACKEND') dj.emailBackend = code(right)
+      if (left === 'EMAIL_HOST') dj.emailHost = code(right)
       // views.py: wipe = Wipe.as_view(), wipe = csrf_exempt(_wipe)
       if (left && /^\w+$/.test(left) && a.parent?.parent?.type === 'module' && right?.type === 'call' && (/\.as_view$/.test(fnName(right)) || /^[a-z_][\w.]*$/.test(fnName(right)) && !!pos(right)[0]))
         dj.aliases.set(left, unwrap(right))
