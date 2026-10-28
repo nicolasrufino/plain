@@ -1281,5 +1281,44 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   // [Migration] written in the migration file itself (no Designer file) is found by EF too
   const c3 = card(base, { ...base, 'S/Migrations/20261028_AddRating.cs': '[DbContext(typeof(AppDb))]\n[Migration("20261028_AddRating")]\n' + mig })
   assert.ok(!c3.includes('Designer.cs next to it'), `round 6: attribute in file\n${c3}`)
+  // SQLite: a hand-written migration that rebuilds a table (no BuildTargetModel) throws at startup; with the model, or Up() only adding, it's fine
+  const lite = { ...base, 'S/Program.cs': base['S/Program.cs'].replace('var app', 'builder.Services.AddDbContext<AppDb>(o => o.UseSqlite("Data Source=app.db"));\nvar app') }
+  const att = '[DbContext(typeof(AppDb))]\n[Migration("20261028_AddRating")]\n'
+  const chk = 'public partial class AddRating : Migration { protected override void Up(MigrationBuilder b) { b.AddColumn<int>(name: "Rating", table: "Jobs"); b.AddCheckConstraint(name: "CK_Rating", table: "Jobs", sql: "Rating BETWEEN 1 AND 5"); } protected override void Down(MigrationBuilder b) { b.DropColumn(name: "Rating", table: "Jobs"); } }\n'
+  const s1 = card(lite, { ...lite, 'S/Migrations/20261028_AddRating.cs': att + chk })
+  assert.ok(s1.includes('20261028_AddRating will fail on your SQLite database: it changes the existing Jobs table') && s1.includes("so it won't start"), `round 6: sqlite rebuild\n${s1}`)
+  for (const [why, files] of Object.entries({
+    'target model': { 'S/Migrations/20261028_AddRating.cs': att + chk.replace('protected override void Down', 'protected override void BuildTargetModel(ModelBuilder m) { m.Entity("Job", b => { b.ToTable("Jobs"); }); } protected override void Down') },
+    'commented out': { 'S/Migrations/20261028_AddRating.cs': att + mig.replace('}', '// SQLite cannot do b.AlterColumn(name: "Rating", table: "Jobs")\n}') },
+    'sqlite in tests only': { 'S/Migrations/20261028_AddRating.cs': att + chk, 'S.Tests/Factory.cs': 'class F { void C(DbContextOptionsBuilder o) => o.UseSqlite(":memory:"); }\n', 'S/Program.cs': base['S/Program.cs'].replace('var app', 'builder.Services.AddSqlServer<AppDb>("x");\nvar app') },
+    'aspire provider': { 'S/Migrations/20261028_AddRating.cs': att + chk, 'S/Data/Prod.cs': 'class P { void C(IHostApplicationBuilder b) => b.AddNpgsqlDbContext<AppDb>("db"); }\n' },
+    'add only': { 'S/Migrations/20261028_AddRating.cs': att + mig.replace('}', '} protected override void Down(MigrationBuilder b) { b.DropColumn(name: "Rating", table: "Jobs"); }') },
+    'new table': { 'S/Migrations/20261028_AddRating.cs': att + 'public partial class AddRating : Migration { protected override void Up(MigrationBuilder b) { b.CreateTable(name: "Ratings", columns: t => new { Id = t.Column<int>() }); b.AddForeignKey(name: "FK_R", table: "Ratings", column: "JobId", principalTable: "Jobs"); } }\n' },
+    'not only sqlite': { 'S/Migrations/20261028_AddRating.cs': att + chk, 'S/Data/Prod.cs': 'class P { void C(DbContextOptionsBuilder o) => o.UseNpgsql("x"); }\n' },
+  })) {
+    const c = card(lite, { ...lite, ...files })
+    assert.ok(!c.includes('will fail on your SQLite database'), `round 6: sqlite ${why}\n${c}`)
+  }
+  assert.ok(!s1.includes('Apply 20261028_AddRating') && !s1.includes('will change your live database by itself'), `round 6: no apply step for a migration that crashes\n${s1}`)
+  for (const [why, files] of Object.entries({
+    'stub model': { 'S/Migrations/20261028_AddRating.cs': att + chk, 'S/Migrations/20261028_AddRating.Designer.cs': 'partial class AddRating { protected override void BuildTargetModel(ModelBuilder m) { m.HasAnnotation("ProductVersion", "9.0.0"); } }\n' },
+    'Down first': { 'S/Migrations/20261028_AddRating.cs': att + 'public partial class AddRating : Migration { protected override void Down(MigrationBuilder b) { } protected override void Up(MigrationBuilder b) { b.AlterColumn<string>(name: "Name", table: "Jobs"); } }\n' },
+    'AddSqlite': { 'S/Migrations/20261028_AddRating.cs': att + chk, 'S/Program.cs': base['S/Program.cs'].replace('var app', 'builder.Services.AddSqlite<AppDb>("Data Source=app.db");\nvar app') },
+  })) {
+    const c = card(lite, { ...lite, ...files })
+    assert.ok(c.includes('will fail on your SQLite database'), `round 6: sqlite ${why}\n${c}`)
+  }
+  // a table made in the same migration isn't "existing"; [Migration] without [DbContext] is never found by EF (so it can't crash either)
+  const s2 = card(lite, { ...lite, 'S/Migrations/20261028_AddRating.cs': att + 'public partial class AddRating : Migration { protected override void Up(MigrationBuilder b) { b.CreateTable(name: "Ratings", columns: t => new { Id = t.Column<int>() }); b.AddUniqueConstraint(name: "AK_R", table: "Ratings", column: "Id"); } }\n' })
+  assert.ok(s2.includes('it changes the Ratings table'), `round 6: new table wording\n${s2}`)
+  const s3 = card(lite, { ...lite, 'S/Migrations/20261028_AddRating.cs': '[Migration("20261028_AddRating")]\n' + chk })
+  assert.ok(s3.includes('has no 20261028_AddRating.Designer.cs next to it') && !s3.includes('will fail on your SQLite database'), `round 6: no DbContext attribute\n${s3}`)
+  // [DbContext(...), Migration(...)] in one list is found too; a migration that crashes deletes nothing; "//" in a string isn't a comment
+  const s4 = card(lite, { ...lite, 'S/Migrations/20261028_AddRating.cs': '[DbContext(typeof(AppDb)), Migration("20261028_AddRating")]\n' + chk })
+  assert.ok(s4.includes('will fail on your SQLite database') && !s4.includes('next to it'), `round 6: attribute list\n${s4}`)
+  const s5 = card(lite, { ...lite, 'S/Migrations/20261028_AddRating.cs': att + 'public partial class AddRating : Migration { protected override void Up(MigrationBuilder b) { b.DropColumn(name: "Old", table: "Jobs"); } }\n' })
+  assert.ok(s5.includes('will fail on your SQLite database') && !s5.includes('Back up your data first'), `round 6: crash deletes nothing\n${s5}`)
+  const s6 = card(base, { ...base, 'S/Migrations/20261028_AddRating.cs': att + 'public partial class AddRating : Migration { protected override void Up(MigrationBuilder b) { b.AddColumn<string>(name: "Url", table: "Jobs", defaultValue: "https://x.com"); b.DropColumn(name: "Old", table: "Jobs"); } }\n' })
+  assert.ok(s6.includes('Back up your data first'), `round 6: // in a string\n${s6}`)
   console.log('ok (round 6 trials)')
 }

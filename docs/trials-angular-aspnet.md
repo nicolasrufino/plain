@@ -266,7 +266,7 @@ Login claims checked: p3 "requires login ✓" is correct. p4 "requires login ✓
 | Login claims | accurate on login and owner checks every time | **All correct** ("requires login ✓" on p3, p4; "/quote works without logging in" on p5). None wrong |
 | 🔴 problems caught | 0 (p3's database rule, which SQLite may refuse at startup, was called a safety feature) | 0 |
 | Database steps | – | 🟡 "run `dotnet ef database update`" though the app migrates itself at startup |
-| Wording | – | refunds read as "charges customers"; optional email settings listed as required; pages "now send data" when they only show new fields |
+| Wording | – | optional email settings listed as required; pages "now send data" when they only show new fields; "Rush serviceAdd $5" glued together |
 
 **The honest result.** The ASP.NET and Angular readers held: no false ✓ or ⚠ in six changes,
 including staff-only cancelling and an owner-only rating. The misses were again what happens after
@@ -277,8 +277,8 @@ booking-per-half-hour rule for the whole shop.
 
 | Gap | Fix | Result |
 |---|---|---|
-| A refund read as "charges customers" (p4) | Stripe.net calls are told apart by the service they're on: `RefundService` is "asks Stripe to create a refund" | p4 |
 | "Run `dotnet ef database update`" for an app that migrates itself | When the code calls `Database.Migrate()`: "will change your live database by itself the next time the app starts. Back up first; if it fails, the app won't start." | All five migration cards |
+| A SQLite migration that stops the server starting (p3, 🔴 missed) | SQLite can't alter a table in place: EF rebuilds it from the migration's model, which lives in the `.Designer.cs`. A hand-written migration without one that adds a CHECK constraint, drops a column, etc. is now 🔴 "will fail on your SQLite database… so it won't start". Reproduced on a real EF Core 8 run (`NotSupportedException`), and the same migration with a model goes through | p3 |
 | A migration EF can't find | New: a migration with no `[Migration]` attribute (in the file or its `.Designer.cs`) never runs. Checked against all six branches: Codex wrote the attribute in the file each time, so it stays quiet | – |
 | Optional settings listed as required (p4) | A setting with a real fallback (`?? "FixIt"`) is optional; `?? ""` / `string.Empty` / `throw` keeps it required | p4, and the base app |
 

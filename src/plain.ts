@@ -1510,8 +1510,40 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   }
   // Entity Framework: a new migration (Migrations/20261028_AddCoupons.cs) runs with `dotnet ef database update`; what its Up() drops is gone
   const newEf = B.efMigrations.filter(m => !A.efMigrations.includes(m))
+  // Up()'s body, comments out (Down() only runs on a rollback, and may come first)
+  const efUp = (t: string) => { const u = t.replace(/@"(?:[^"]|"")*"|"(?:[^"\\]|\\.)*"|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, x => x[0] === '/' ? '' : x), i = u.search(/\bvoid\s+Up\s*\(/); if (i < 0) return ''; const j = u.slice(i).search(/\bvoid\s+Down\s*\(/); return j < 0 ? u.slice(i) : u.slice(i, i + j) }
+  const efName = (m: string) => m.split('/').pop()!.replace(/\.cs$/, '')
+  const designerOf = (m: string) => after.get(m.replace(/\.cs$/, '.Designer.cs')) ?? ''
+  // EF finds a migration through its [DbContext(typeof(...))] and [Migration("...")] attributes, normally in the .Designer.cs: without them, it never runs
+  const attr = (name: string, t: string) => new RegExp(`[\\[,]\\s*(?:[\\w.]+\\.)?${name}(?:Attribute)?\\s*\\(`).test(t)   // [A, B(...)] lists too
+  const found = (m: string) => attr('Migration', (after.get(m) ?? '') + designerOf(m)) && attr('DbContext', (after.get(m) ?? '') + designerOf(m))
+  for (const m of newEf) if (!after.has(m.replace(/\.cs$/, '.Designer.cs')) && !found(m))   // (the attributes can sit in the file itself)
+    problems.push({ kind: 'Broken', text: `${m} has no ${efName(m)}.Designer.cs next to it, which is how Entity Framework finds a migration: it will never run, and the code that needs its changes will fail. Re-create it with \`dotnet ef migrations add\`.` })
+  // an app that calls Database.Migrate() at startup applies new migrations itself
+  const selfMigrates = [...after].some(([p, t]) => p.endsWith('.cs') && /\.Database\.Migrate(Async)?\s*\(/.test(t))
+  // SQLite can't alter a table in place: EF rebuilds it from the migration's target model (BuildTargetModel, normally in the
+  // .Designer.cs), and when that model doesn't have the table these operations throw NotSupportedException (EF Core
+  // SqliteMigrationsSqlGenerator; reproduced on EF Core 8). Only for an app on SQLite alone (tests aside), and only for migrations EF finds.
+  const appCs = [...after].filter(([p]) => p.endsWith('.cs') && !/(^|\/)[\w.]*Tests?(\/|\.)/.test(p)).map(([, t]) => t)
+  const sqliteOnly = appCs.some(t => /\.(UseSqlite\s*\(|AddSqlite\s*<)/.test(t))
+    && !appCs.some(t => /\.(Use(SqlServer|Npgsql|MySql|MySQL|Oracle|Cosmos|AzureSql|AzureSynapse)\s*\(|Add(SqlServer|Npgsql|MySql|Oracle|Cosmos)(DbContext)?\s*<)/.test(t))
+  const crashes = new Set<string>()
   for (const m of newEf) {
-    const up = (after.get(m) ?? '').split(/protected\s+override\s+void\s+Down\b/)[0]
+    const text = after.get(m) ?? '', model = text + designerOf(m)
+    if (!sqliteOnly || !found(m)) continue
+    const up = efUp(text)
+    const created = [...up.matchAll(/CreateTable\s*\(\s*name:\s*"(\w+)"/g)].map(x => x[1])
+    const ops = [...up.matchAll(/\.(AddCheckConstraint|DropCheckConstraint|AddUniqueConstraint|DropUniqueConstraint|AddPrimaryKey|DropPrimaryKey|DropForeignKey|AlterColumn|DropColumn|RenameIndex|AddForeignKey)\s*(?:<[^>]*>)?\s*\(([^;]*)/g)]
+      .map(x => ({ op: x[1], table: x[2].match(/table:\s*"(\w+)"/)?.[1] ?? '' }))
+      .filter(x => x.op !== 'AddForeignKey' || !created.includes(x.table))   // merged into the CreateTable
+      .filter(x => !/BuildTargetModel/.test(model) || !(x.table && new RegExp(`ToTable\\(\\s*"${x.table}"`).test(model)))   // the model has the table: EF rebuilds it
+    if (!ops.length) continue
+    crashes.add(m)
+    const tables = [...new Set(ops.map(x => x.table).filter(Boolean))], old = tables.filter(t => !created.includes(t))
+    problems.push({ kind: 'Broken', text: `${efName(m)} will fail on your SQLite database: it changes ${tables.length ? `the ${old.length === tables.length ? 'existing ' : ''}${list(tables)} table${tables.length > 1 ? 's' : ''}` : 'a table'} in a way SQLite only allows for a migration made with \`dotnet ef migrations add\` (it needs the description of the tables that command writes in ${efName(m)}.Designer.cs).${selfMigrates ? " The app applies migrations when it starts, so it won't start." : ''} Ask the agent to re-create it with \`dotnet ef migrations add\`.` })
+  }
+  for (const m of newEf.filter(m => !crashes.has(m))) {   // a crashing one changes nothing
+    const up = efUp(after.get(m) ?? '')
     if (/\.(DropTable|DropColumn)\s*\(/.test(up)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
     // CreateIndex(..., table: "Orders", column: "Email", unique: true) on a table with rows and a column that already had data
     for (const x of up.matchAll(/CreateIndex\s*\(([^;]*?unique:\s*true[^;]*)\)/g)) {
@@ -1519,14 +1551,10 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       if (model && col && A.models.get(model)!.some(f => f.toLowerCase() === col.toLowerCase())) ship.push(`Check your live data before applying ${m}: it adds a rule that no two ${things(model)} can share the same ${fieldName(col) || words(col)}. If any already do, the update fails.`)
     }
   }
-  // EF finds a migration through its [Migration("...")] attribute, normally in the .Designer.cs: without either, it never runs
-  for (const m of newEf) if (!after.has(m.replace(/\.cs$/, '.Designer.cs')) && !/\[Migration\(/.test(after.get(m) ?? ''))   // (the attribute can sit in the file itself)
-    problems.push({ kind: 'Broken', text: `${m} has no ${m.split('/').pop()!.replace(/\.cs$/, '.Designer.cs')} next to it, which is how Entity Framework finds a migration: it will never run, and the code that needs its changes will fail. Re-create it with \`dotnet ef migrations add\`.` })
-  // an app that calls Database.Migrate() at startup applies new migrations itself
-  const selfMigrates = [...after].some(([p, t]) => p.endsWith('.cs') && /\.Database\.Migrate(Async)?\s*\(/.test(t))
-  if (newEf.length) ship.push(selfMigrates
-    ? `${list(newEf.map(m => m.split('/').pop()!.replace(/\.cs$/, '')))} will change your live database by itself the next time the app starts (it calls Database.Migrate). Back up first; if it fails, the app won't start.`
-    : `Apply ${list(newEf.map(m => m.split('/').pop()!.replace(/\.cs$/, '')))} to your live database before the new code goes live (\`dotnet ef database update\`), or the parts that use it will fail.`)
+  const toApply = newEf.filter(m => !crashes.has(m)).map(efName)
+  if (toApply.length) ship.push(selfMigrates
+    ? `${list(toApply)} will change your live database by itself the next time the app starts (it calls Database.Migrate). Back up first; if it fails, the app won't start.`
+    : `Apply ${list(toApply)} to your live database before the new code goes live (\`dotnet ef database update\`), or the parts that use it will fail.`)
   if ([...B.csModels, ...A.csModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newEf.length)
     ship.push('Update your database: run `dotnet ef migrations add <Name>`, then `dotnet ef database update` (also on your live site). The tables changed, but no migration was created.')
   // appsettings.json is in the code: a real key or password written there is visible to anyone who can see the project
