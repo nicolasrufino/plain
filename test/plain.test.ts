@@ -132,3 +132,44 @@ for (const e of ['loads data from your server and updates bookings on your serve
   assert.ok(ui.replace(/\s+/g, ' ').includes(e), `ui missing: ${e}\n${ui}`)   // ignore line wrapping
 for (const e of ['with', 'Paid', 'register part', 'Saving']) assert.ok(!new RegExp(`sections for.*${e}|${e} part|"${e}`).test(ui), `ui should not say: ${e}\n${ui}`)
 console.log('ok (helpers, forms, public routes, browser secrets)')
+
+// Review findings (2026-10-28), each one a scenario that used to be wrong.
+const card = (before: Record<string, string>, after: Record<string, string>) =>
+  report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+const exp = { 'package.json': '{"dependencies":{"express":"4"}}' }
+const ordersRouter = "import { Router } from 'express'\nconst router = Router()\nrouter.post('/', async (req, res) => { await prisma.order.create({}) })\nexport default router\n"
+const idx = (body: string) => `import express from 'express'\nimport orders from './orders'\nimport authRoutes from './authRoutes'\nimport { requireAuth } from './mw'\nconst app = express()\n${body}\n`
+const cases: [string, Record<string, string>, Record<string, string>, string[], string[]][] = [
+  ['login check removed from a mount (router file unchanged)',
+    { ...exp, 'server/orders.ts': ordersRouter, 'server/index.ts': idx("app.use('/api/orders', requireAuth, orders)") },
+    { ...exp, 'server/orders.ts': ordersRouter, 'server/index.ts': idx("app.use('/api/orders', orders)") },
+    ['⚠ Anyone can use the orders part of your server without logging in.', 'no longer requires login'], []],
+  ['session setup is not a login check', {},
+    { ...exp, 'server/orders.ts': ordersRouter, 'server/authRoutes.ts': "import { Router } from 'express'\nconst router = Router()\nrouter.post('/login', async (req, res) => {})\nexport default router\n",
+      'server/index.ts': idx("app.use(session({ secret: 'x' }))\napp.use(passport.session())\napp.use(authRoutes)\napp.use('/api/orders', orders)") },
+    ['⚠ Anyone can use the orders part'], []],
+  ['app-wide check before a mount, and a check scoped to a path', {},
+    { ...exp, 'server/orders.ts': ordersRouter, 'server/index.ts': idx("app.use(requireAuth)\napp.use('/api/orders', orders)\napp.use('/api/admin', requireAuth)\napp.post('/api/admin/refund', async (req, res) => { await prisma.order.update({}) })") },
+    ['saves new orders and requires login ✓', 'updates orders and requires login ✓'], ['Anyone']],
+  ['router made and mounted in the same file; route() chains', {},
+    { ...exp, 'server/index.ts': "import express from 'express'\nconst app = express()\nconst admin = express.Router()\nadmin.post('/coupons', async (req, res) => { await prisma.coupon.create({}) })\napp.use('/api/admin', requireAdmin, admin)\napp.route('/api/orders').get(async (req, res) => {}).post(async (req, res) => { await prisma.order.create({}) })\n" },
+    ['/api/admin/coupons', 'saves new coupons and requires login ✓', '⚠ Anyone can use the orders part', 'lists orders and saves new ones'], ['coupons part']],
+  ['webhooks are public anywhere in the address; admin actions never are', {},
+    { 'app/api/webhooks/stripe/route.ts': 'export async function POST() { await prisma.order.update({}) }\n',
+      'app/api/admin/users/[id]/verify/route.ts': 'export async function POST() { await prisma.user.update({}) }\n' },
+    ['⚠ Anyone can use the admin user verify part'], ['webhooks stripe part']],
+  ['Next.js routes include what their imports do', {},
+    { 'app/api/things/route.ts': "import { refund } from '../../../server/orders'\nexport async function GET() { await refund() }\n", 'server/orders.ts': 'export async function refund() { await prisma.payment.update({}) }\n' },
+    ['⚠ Anyone can use the things part'], []],
+  ['React Router: wrapper removed, pathless guarded layout, index route',
+    { 'src/App.tsx': "import Admin from './Admin'\nexport const r = [{ path: '/admin', element: <RequireAuth><Admin /></RequireAuth> }]\n", 'src/Admin.tsx': 'export default function Admin() { return <h1>Admin</h1> }\n' },
+    { 'src/App.tsx': "import Admin from './Admin'\nimport Home from './Home'\nimport Account from './Account'\nexport const r = [{ path: '/admin', element: <Admin /> }, { index: true, element: <Home /> }, { element: <RequireAuth />, children: [{ path: '/account', element: <Account /> }] }]\n",
+      'src/Admin.tsx': 'export default function Admin() { return <h1>Admin</h1> }\n', 'src/Home.tsx': 'export default function Home() { return <h1>Hi</h1> }\n', 'src/Account.tsx': 'export default function Account() { return <h1>You</h1> }\n' },
+    ['⚠ Anyone can open the admin page without logging in.', 'The admin page no longer requires login.', 'The home page is new', 'The account page is new, titled "You". It only shows information: nothing on it lets you change anything. You have to log in'], ['open the account page']],
+]
+for (const [name, before, after, has, hasNot] of cases) {
+  const c = card(before, after)
+  for (const e of has) assert.ok(c.includes(e), `${name}: missing "${e}"\n${c}`)
+  for (const e of hasNot) assert.ok(!c.includes(e), `${name}: should not say "${e}"\n${c}`)
+}
+console.log(`ok (${cases.length} review scenarios)`)

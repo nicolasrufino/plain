@@ -1,131 +1,93 @@
 # Architecture
 
+plain compares two snapshots of your app and describes the difference in plain English.
+Every sentence is a fixed template filled with facts read from the code. Nothing is generated
+by a model, so the same change always gets the same card.
+
 ```
-source code (TS, Python, C, F#, ...)
-      │  1. parse         tree-sitter (one library, ~100+ grammars)
+two snapshots (git refs, or the files on disk)
+      │  1. facts per file      what each file does: addresses, database calls, login checks, ...
       ▼
-language syntax tree
-      │  2. lower         one small adapter per language
+facts per file
+      │  2. facts per app       which file is which page or server address, what the database stores
       ▼
-core tree             ← shared across all languages
-      │  3. recognize     pattern rules: loop + accumulator → Sum, ...
+the app before + the app after
+      │  3. compare             what's new, removed or changed; what's risky; what's unfinished
       ▼
-core tree, with summaries
-      │  4. render        sentence templates, one set per output language
+changes + problems
+      │  4. English             fixed sentence templates
       ▼
-English (or Spanish, Japanese, ...)
+the card
 ```
 
-Only step 2 is specific to each language. Steps 3 and 4 are written once and shared by every language.
+All of it is in [src/plain.ts](../src/plain.ts). [src/session.ts](../src/session.ts) adds the
+per-prompt snapshots and `plain recap`; [src/cli.ts](../src/cli.ts) is the command line and the
+Claude Code hooks.
 
-## 1. Parse
+## 1. Facts per file
 
-Use [tree-sitter](https://tree-sitter.github.io/) for every language. It's one API with mature
-grammars, it handles broken code gracefully (important when someone is in the middle of an
-edit), and it runs as WASM, so the same code works in Node, the browser, and VS Code.
+`fileFacts(path, text)` parses one file with the TypeScript compiler and collects:
 
-A language-specific parser (the TypeScript compiler API, FCS for F#) is only worth adding when
-we need **types**, for example "a list of numbers xs". That's a v2 concern.
-
-## 2. Lower: language tree → core tree
-
-Each adapter maps its language's syntax nodes to a small shared set of nodes. Anything it can't
-map becomes `Unknown`, which keeps the original code text.
-
-### Core nodes (draft)
-
-**Structure:** `Module`, `Function(name, params, body)`, `Type(name, fields)`
-
-**Statements:**
-| Node | Example English |
+| Fact | Read from (examples) |
 |---|---|
-| `Let(name, value, mutable)` | Set t to 0. / Define t as 0. |
-| `Update(target, op, value)` | Add x to t. |
-| `If(test, then, else)` | If x is greater than limit: … Otherwise: … |
-| `Match(subject, cases)` | Depending on what shape is: … |
-| `Loop(kind, var, source, body)` | For each x in xs: … / Repeat while … |
-| `Return(value)` | Return t. |
-| `Call(fn, args)` | Print t. / Append x to list. |
-| `Break`, `Continue`, `Throw(value)`, `Try(body, handlers)` | |
-| `Unknown(source)` | *(not explained: `<code>`)* |
+| Server addresses | Next.js `app/**/route.ts` and `pages/api/*`; Express-style `router.post('/x', requireAuth, handler)` |
+| Mounts | `app.use('/api/admin', requireAuth, adminRouter)`, `app.use('/api/x', require('./x'))` |
+| Pages | Next.js `app/**/page.tsx` and `pages/*`; React Router `<Route path element>` and `{ path, element }` |
+| Login checks | calls like `auth()`, guard middleware (`requireAuth`, `verifyToken`), wrappers like `<RequireAuth>` |
+| Database | `prisma.<table>.<call>` and `db.<table>.<call>`: which tables are read, which are written and how |
+| Talks to the server | `fetch('/api/x', { method })`, `axios.post('/x')`, and your own helpers like `api('/x')` |
+| On screen | headings, buttons, boxes (named by their label), forms, links |
+| Outside services | imports (`stripe`, `openai`, `resend`, ...) and calls on their clients |
+| Loose ends | `TODO`s, empty `catch`, `any`, functions that return made-up data |
 
-**Expressions:** `Name`, `Literal`, `BinOp`, `Compare`, `Logic`, `Not`, `Index`, `Field`,
-`Call`, `Lambda`, `ListLit`, `Range`
+A route handler's facts belong to its address, not to the whole file. That way a public `GET`
+and an unprotected admin `DELETE` in the same file are judged separately.
 
-**Collection operations**, the high-level vocabulary:
-| Node | TS | Python | F# | English |
-|---|---|---|---|---|
-| `Filter(src, pred)` | `.filter` | `[x for x in s if p]` | `List.filter` | every x in s that … |
-| `Map(src, fn)` | `.map` | `[f(x) for x in s]` | `List.map` | f of each x in s |
-| `Sum(src)` | `.reduce((a,b)=>a+b,0)` | `sum()` | `List.sum` | the total of … |
-| `Count(src)` | `.length` after filter | `len()` | `List.length` | how many … |
-| `Find(src, pred)` | `.find` | `next(...)` | `List.tryFind` | the first x in s that … |
-| `Any` / `All` | `.some` / `.every` | `any()` / `all()` | `List.exists` / `forall` | whether any / every … |
-| `Sort(src, key)` | `.sort` | `sorted()` | `List.sortBy` | s sorted by … |
+## 2. Facts per app
 
-This vocabulary is why one set of English templates works for every language. A Python list
-comprehension and an F# pipeline become the same nodes.
+`appFacts(snapshot)` connects the files:
 
-Every node carries a **source span** (file, start, end), so editors can link each sentence back
-to its code.
+- **Routes.** Each page and server address is matched to the file (or, for Express, the
+  `file#/address` unit) that handles it. Mount prefixes and guards are followed up the chain.
+- **Pages include their components.** A page also does what the components it imports do.
+- **Helpers are resolved.** `api('/bookings')` becomes `/api/bookings` when `api` wraps
+  `` fetch(`/api${path}`) ``.
+- **The database** comes from `schema.prisma`; migrations from `prisma/migrations`.
+- **Env vars** come from the code and from every `.env.example`; packages from every `package.json`.
 
-## 3. Recognize: turning patterns into summaries
+## 3. Compare and 4. English
 
-Rules that rewrite a group of core nodes into one higher-level node, keeping the original
-nodes as children so people can drill down:
+`analyze(before, after)` finds what's new, removed and changed. Then it checks for problems:
 
-```
-Let(t, 0); Loop(each x in xs){ If(p){ Update(t, +, x) } }
-  ⇒  Let(t, Sum(Filter(xs, p)))      "t is the total of every x in xs that …"
-```
+- **Missing login checks.** An address that changes data has no login check. It's flagged as
+  ⚠ if the address or table sounds sensitive (admin, orders, payments, ...), and as a "thing to
+  decide" otherwise. Addresses that must be public (login, register, webhooks, ...) are never
+  flagged.
+- **Broken.** A function was deleted but other code still uses it.
+- **Unasked.** Code changed that doesn't match what you asked for. This one is a guess, and the
+  card says so.
+- **Before you ship.** Data that will be deleted, migrations to run, new env vars and new
+  packages.
 
-Starter rules: accumulate into `Sum`, `Count`, `Max` and `Min`; collect into a list as
-`Filter` or `Map`; return early inside a loop as `Find`, `Any` or `All`; swap via a temporary
-variable as `Swap`.
+`render()` turns these into the card. The wording is in one place, so it stays consistent.
 
-Rules have to be **sound**: a rule fires only when the rewrite means exactly the same thing
-(for example, the accumulator isn't touched anywhere else in the loop). If we're not sure, it
-doesn't fire, and the reader gets the line-by-line version.
+## Adding a stack
 
-## 4. Render
+Each stack is one more set of fact extractors feeding the same app model. See
+[languages.md](languages.md) for what each stack needs and the order we're adding them in.
+The process is the same every time:
 
-Templates turn core nodes into sentences. Output modes:
-
-- `lines`: one sentence per statement, indented the way the code is (what the prototype does)
-- `summary`: just the function-level summaries, as a paragraph
-- `side-by-side`: each code line paired with its English (for the editor and learning mode)
-- `json`: the core tree plus sentences and spans, for tools to use
-
-Templates are kept as data, separate from code, so translating them into another spoken
-language doesn't require code changes.
-
-## Strict mode
-
-If any `Unknown` node is produced, exit with a non-zero code and list the spans. In CI this
-works as a lint: "every line of this file can be explained." It also defines an LLM-friendly
-subset of each language.
-
-## Packaging (proposed)
-
-The tool is written in **TypeScript**, so it runs on Node, in the browser, and in VS Code
-using the same tree-sitter WASM grammars, and it ships through npm.
-
-```
-packages/
-  core/          core tree types, recognize rules, renderer, templates
-  lang-ts/       one adapter per language: lowering plus tests
-  lang-python/
-  lang-c/
-  lang-fsharp/
-  cli/           npx plain explain file.ts [--strict] [--mode summary]
-  vscode/        hover and side-by-side view
-```
-
-None of this is built yet. The folders get created when their code is written.
+1. **Research.** Find out what people actually build with the stack: where its addresses, login
+   checks and database calls live, and what AI agents most often get wrong in it.
+2. **Fixtures.** Write tests with planted problems in [test/plain.test.ts](../test/plain.test.ts).
+3. **A real app.** Have an agent build a realistic app in that stack in `examples/`. Run
+   `node test/demos.ts` before and after each change, and read every difference.
+4. **Trials.** Personas ask the agent for features. Compare plain's card, the agent's own
+   explanation, and the truth from reading the code ([trials.md](trials.md)).
 
 ## Testing
 
-Snapshot tests: `fixtures/<lang>/<name>.<ext>` → expected `.txt`.
-Cross-language fixtures are the strongest check: the same algorithm written in TS, Python, C
-and F# should produce **the same English**. When they don't, there's a bug in one of the
-language adapters.
+- `npm test` runs the fixtures: one app per stack with planted problems, and asserts every one
+  is named.
+- `node test/demos.ts <dir>` writes plain's card for every branch of the local demo apps. Run
+  it before and after a change and `diff -r` the two folders.

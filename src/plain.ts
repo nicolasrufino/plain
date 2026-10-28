@@ -46,8 +46,8 @@ type FileFacts = {
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
-  handlers: { method: string; path: string; guard: boolean; handler?: string; facts: FileFacts }[]  // Express-style routes
-  mounts: { path: string; target: string; guard: boolean }[]                  // app.use('/api/x', router | require('./x'))
+  handlers: { server: string; method: string; path: string; guard: boolean; handler?: string; facts: FileFacts }[]  // Express-style routes
+  mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean }[]  // app.use('/api/x', [guards], router | require('./x'))
   pages: { path: string; comp: string; guard: boolean }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
   wrappers: Map<string, string>                                               // fetch helpers and their address prefix: api() -> '/api'
@@ -60,6 +60,7 @@ const isExported = (n: ts.Node) =>
 const HTTP = /^(get|post|put|patch|delete)$/
 const SERVER = /^(express(\.Router)?|Router|fastify|Fastify|new Hono|require\(['"]express['"]\)(\.Router)?)\(/   // what makes a variable a server/router
 const GUARD = /auth|admin|protect|login|logged|token|jwt|session|private/i   // server middleware that checks who you are
+const NOT_GUARD = /(^|\.)session\(|passport\.(initialize|session)|cookie|csrf|cors|helmet|(routes?|router)$/i   // sets up sessions or mounts routes; checks nothing
 const PAGE_GUARD = /auth|protect|private|require|guard|signedin|loggedin/i   // client wrapper that does
 const empty = (printed = ''): FileFacts => ({
   fns: new Map(), used: new Set(), jsx: new Set(), services: new Set(), tables: new Set(), ops: new Set(),
@@ -103,6 +104,10 @@ export function fileFacts(path: string, text: string): FileFacts {
 // Facts from one subtree: a whole file, one function, or one route handler.
 function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   const servers = new Set<string>(), guarded = new Set<string>()
+  const isGuard = (a: ts.Node) => !fnLike(a) && GUARD.test(a.getText(sf)) && !NOT_GUARD.test(a.getText(sf))
+  const addHandler = (server: string, method: string, path: string, mw: readonly ts.Expression[], h: ts.Expression) =>
+    f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard),
+      handler: ts.isIdentifier(h) ? h.text : undefined, facts: fnLike(h) ? collect(sf, h, empty(printer.printNode(ts.EmitHint.Unspecified, h, sf))) : empty(h.getText(sf)) })
   const labelFor = new Map<string, string>(), boxes: { id?: string; type: string; v?: string; aria: boolean }[] = []
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
     : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
@@ -123,16 +128,20 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       } else if (ts.isPropertyAccessExpression(callee)) {
         const parts = callee.getText(sf).replace(/\s|\?/g, '').split('.')
         const obj = parts.slice(0, -1).join('.'), last = parts.at(-1)!, args = n.arguments
-        const isGuard = (a: ts.Node) => !fnLike(a) && GUARD.test(a.getText(sf))
+        const chain = obj.match(/^([\w$]+)\.route\((['"`])([^'"`]+)\2\)/)   // app.route('/x').get(h).post(h)
         if (servers.has(obj) && last === 'use') {
           const t = args.at(-1)!, spec = ts.isCallExpression(t) && t.expression.getText(sf) === 'require' ? str(t.arguments[0]) : undefined
-          if (arg?.startsWith('/') && (ts.isIdentifier(t) || spec)) f.mounts.push({ path: arg, target: spec ?? t.getText(sf), guard: args.slice(1, -1).some(isGuard) })
+          // app.use('/api/x', thing): a router, or a login check for everything under /api/x. appFacts decides by looking at the file.
+          if (arg?.startsWith('/') && (ts.isIdentifier(t) || spec)) f.mounts.push({ server: obj, path: arg, target: spec ?? t.getText(sf),
+            guard: guarded.has(obj) || args.slice(1, -1).some(isGuard), guardLike: args.length === 2 && !spec && isGuard(t) })
           else if (!arg && args.some(isGuard)) guarded.add(obj)
         } else if (servers.has(obj) && HTTP.test(last) && arg?.startsWith('/') && args.length > 1) {
-          const h = args.at(-1)!
-          f.handlers.push({ method: last.toUpperCase(), path: arg, guard: guarded.has(obj) || args.slice(1, -1).some(isGuard),
-            handler: ts.isIdentifier(h) ? h.text : undefined, facts: fnLike(h) ? collect(sf, h, empty(printer.printNode(ts.EmitHint.Unspecified, h, sf))) : empty(h.getText(sf)) })
+          addHandler(obj, last, arg, args.slice(1, -1), args.at(-1)!)
           return   // the handler's facts belong to the route, not to the whole file
+        } else if (chain && servers.has(chain[1]) && HTTP.test(last) && args.length) {
+          addHandler(chain[1], last, chain[3], args.slice(0, -1), args.at(-1)!)
+          visit(callee.expression)   // the earlier .get(h) in the chain
+          return
         } else if (HTTP.test(last) && arg?.startsWith('/') && !servers.has(obj)) f.calls.push({ name: obj, path: arg.split('?')[0], method: last.toUpperCase(), prop: true })   // axios.get('/api/x')
         if (/^(prisma|db)$/.test(parts[0]) && parts.length === 3 && !parts[1].startsWith('$')) {
           f.tables.add(cap(parts[1]))
@@ -209,6 +218,11 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     ts.forEachChild(n, visit)
   }
   visit(root)
+  // A router made and mounted in the same file: const admin = Router(); admin.post('/x'); app.use('/api/admin', requireAdmin, admin)
+  for (let i = 0; i < 5; i++) for (const m of f.mounts.filter(m => servers.has(m.target))) {
+    for (const h of f.handlers) if (h.server === m.target) { h.path = m.path.replace(/\/$/, '') + (h.path === '/' ? '' : h.path); h.guard ||= m.guard; h.server = m.server }
+    f.mounts.splice(f.mounts.indexOf(m), 1)
+  }
   for (const b of boxes) {
     const v = (b.aria ? b.v : b.id && labelFor.get(b.id)) || b.v
     if (/^(email|password)$/.test(b.type) && !b.aria) f.ui.add(`field ${b.type}`)
@@ -233,9 +247,9 @@ function routeLike(n: ts.Node, sf: ts.SourceFile): { path?: string; index: boole
     }
   } else if (ts.isObjectLiteralExpression(n)) {
     const prop = (k: string) => n.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(sf) === k) as ts.PropertyAssignment | undefined
-    const p = prop('path')?.initializer
-    if (!p || !ts.isStringLiteral(p) || !(prop('element') || prop('Component') || prop('component') || prop('children'))) return null
-    path = p.text; index = !!prop('index'); el = prop('element')?.initializer ?? prop('Component')?.initializer ?? prop('component')?.initializer
+    const p = prop('path')?.initializer, elp = prop('element') ?? prop('Component') ?? prop('component')
+    if (p ? !ts.isStringLiteral(p) || !(elp || prop('children')) : !elp || !(prop('index') || prop('children'))) return null   // layout and index routes have no path
+    path = p && ts.isStringLiteral(p) ? p.text : undefined; index = !!prop('index'); el = elp?.initializer
   } else return null
   const names = el && (ts.isJsxExpression(el) || ts.isJsxElement(el) || ts.isJsxSelfClosingElement(el)) ? tags(el) : el ? [el.getText(sf).replace(/[{}\s]/g, '')] : []
   const comp = names.filter(t => /^[A-Z]/.test(t) && !PAGE_GUARD.test(t) && !/^(Navigate|Suspense|Outlet|Fragment)$/.test(t)).at(-1)
@@ -315,12 +329,18 @@ export function appFacts(snap: Snap) {
   }
   // Express-style servers: each address becomes its own unit "file#/api/x", with the facts of its handlers.
   const mounts = new Map<string, { path: string; guard: boolean; from: string }>()
-  for (const [p, f] of files) for (const m of f.mounts) { const q = m.target.startsWith('.') ? resolve(p, m.target) : target(p, m.target); if (q) mounts.set(q, { ...m, from: p }) }
+  const guards: { from: string; path: string }[] = []
+  for (const [p, f] of files) for (const m of f.mounts) {
+    const q = m.target.startsWith('.') ? resolve(p, m.target) : target(p, m.target), file = q && files.get(q)
+    if (file && (file.handlers.length || file.mounts.length)) mounts.set(q!, { ...m, from: p })   // it declares routes: a router
+    else if (m.guardLike) guards.push({ from: p, path: m.path })                                  // otherwise it's a login check
+  }
   const prefix = (p: string, seen = new Set<string>()): { path: string; guard: boolean } => {
     const m = mounts.get(p); if (!m || seen.has(p)) return { path: '', guard: false }
     const up = prefix(m.from, seen.add(p))
     return { path: up.path.replace(/\/$/, '') + m.path, guard: up.guard || m.guard }
   }
+  const guardedPaths = guards.map(g => prefix(g.from).path.replace(/\/$/, '') + g.path)
   for (const [p, f] of [...files]) {
     const pre = f.handlers.length ? prefix(p) : null
     for (const h of f.handlers) {
@@ -332,7 +352,7 @@ export function appFacts(snap: Snap) {
       unit.fns.set(h.method, hf.printed)
       unit.printed += `\n${h.method} ${hf.printed}`
       // Logged in if every handler that changes something checks (or, with none, every handler does).
-      const writes = h.method !== 'GET', guard = pre!.guard || h.guard || hf.auth
+      const writes = h.method !== 'GET', guard = pre!.guard || h.guard || hf.auth || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
       const u = unit as FileFacts & { w?: boolean[]; r?: boolean[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
@@ -346,12 +366,14 @@ export function appFacts(snap: Snap) {
       if (!q || seen.has(q) || /(^|\/)lib\//.test(q)) continue
       seen.add(q)
       const c = files.get(q)!
-      for (const k of ['ui', 'fetches', 'links', 'outside', 'tables', 'written'] as const) for (const x of c[k]) into[k].add(x)
+      for (const k of ['ui', 'fetches', 'links', 'outside', 'tables', 'written', 'ops'] as const) for (const x of c[k]) into[k].add(x)
       into.headings.push(...c.headings); into.forms += c.forms
       fold(q, into, seen)
     }
   }
-  for (const p of files.keys()) if (routes.get(p)?.kind === 'page') fold(p, files.get(p)!, new Set([p]))
+  for (const p of files.keys()) if (routes.has(p) && !p.includes('#')) fold(p, files.get(p)!, new Set([p]))
+  // Whether a page or address checks login is part of what it is: losing the check counts as a change.
+  for (const k of routes.keys()) files.get(k)!.printed += `\n[login: ${files.get(k)!.auth}]`
   const schemaPath = [...snap.keys()].find(p => p.endsWith('schema.prisma'))
   return {
     files, routes, models: models(schemaPath && snap.get(schemaPath)),
@@ -428,7 +450,9 @@ export type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: s
 // ponytail: name-based guess at what's sensitive; a config file can override it later
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
 // Addresses that have to work before you're logged in (or are called by other services): never "missing a login check".
-const PUBLIC = /^(login|log in|register|signup|sign up|signin|sign in|logout|log out|forgot password|reset password|verify|verify email|webhooks?|health|callback|oauth)$/
+// Webhooks and sign-in callbacks anywhere in the address; login pages only as the last part, and never under admin.
+const PUBLIC = /^(login|log in|register|signup|sign up|signin|sign in|logout|log out|forgot password|reset password|verify|verify email|health)$/
+const isPublic = (url: string) => !/admin/i.test(url) && (named(url).some(s => /\b(webhooks?|callback|oauth)\b/.test(s)) || PUBLIC.test(named(url).at(-1) ?? ''))
 
 export type Analysis = ReturnType<typeof analyze>
 export const report = (before: Snap, after: Snap, opts: { ref: string; asked?: string; color?: boolean }) => render(analyze(before, after, opts))
@@ -444,8 +468,9 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     if (NOISE.test(p) || (a && b && a.printed === b.printed)) noise.push(p)
     else real.push(p)
   }
-  // Express routes are units inside a file ("file#/api/x"): count one as changed only if its own handlers changed.
-  for (const k of new Set([...A.files.keys(), ...B.files.keys()])) if (k.includes('#') && A.files.get(k)?.printed !== B.files.get(k)?.printed) real.push(k)
+  // Pages and addresses can change without their file changing: an Express route ("file#/api/x") inside a bigger file,
+  // or a login check added or removed where the route is declared (a mount, a <RequireAuth> wrapper).
+  for (const k of new Set([...A.routes.keys(), ...B.routes.keys()])) if (!real.includes(k) && A.files.get(k)?.printed !== B.files.get(k)?.printed) real.push(k)
   const usersOf = (name: string, self: string) =>
     [...B.files].filter(([p, f]) => p !== self && (f.used.has(name) || f.jsx.has(name))).map(([p]) => placeName(p))
   const mainTable = (f: FileFacts, url: string) =>
@@ -513,10 +538,11 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     const name = placeName(p)
     const text = !a
       ? (r.kind === 'page' ? newPage(name, b, clauses) : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
-      : clauses.length ? `${cap(name)} now ${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : `${cap(name)} had small behind-the-scenes changes.`
+      : (a.auth && !b.auth ? `${cap(name)} no longer requires login.${clauses.length ? ' It also' : ''}` : !a.auth && b.auth ? `${cap(name)} now requires login ✓${clauses.length ? ' It also' : ''}` : '')
+        + (clauses.length ? `${a.auth !== b.auth ? ' now ' : `${cap(name)} now `}${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : a.auth !== b.auth ? '' : `${cap(name)} had small behind-the-scenes changes.`)
     changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰' : ''), detail: r.url, name: r.kind === 'page' ? pageName(r.url) + (!a && b.headings.find(h => h.startsWith('h1:')) ? ` ("${b.headings.find(h => h.startsWith('h1:'))!.slice(3)}")` : '') : named(r.url).join(' ') || 'main', money: b.money })
 
-    if (!b.auth && (!a || a.auth) && !PUBLIC.test(named(r.url).at(-1) ?? '')) {
+    if (!b.auth && (!a || a.auth) && !isPublic(r.url)) {
       const writes = b.written.size || METHODS.slice(1).some(m => b.fns.has(m))
       if (r.kind === 'page' && /admin|dashboard|account/.test(r.url))
         problems.push({ kind: 'Unsafe', text: `Anyone can open ${name} without logging in.` })

@@ -39,7 +39,7 @@ BEFORE YOU SHIP
   1. Update your database: run `npx prisma migrate dev`.
 ```
 
-**No AI inside.** plain reads your code with fixed rules (the TypeScript compiler), so it can't
+**No AI inside.** plain reads your code with fixed rules (using the TypeScript compiler), so it can't
 make things up, costs nothing to run, and says the same thing every time. It's an independent
 check on what the agent did, not the agent grading its own work.
 
@@ -61,9 +61,18 @@ staged files. The session log lives in `.git/plain-session.jsonl`.
 
 ## Works on
 
-**Next.js apps (App Router), best with Prisma.** plain understands pages, server routes
-(`app/api`), the Prisma database schema, login checks, Stripe and other outside services, and
-environment variables. On other projects it won't break, but it won't have much to say yet.
+| Your app uses | plain understands |
+|---|---|
+| **Next.js** (App Router or `pages/`) | pages, server routes, login checks |
+| **Node servers** (Express, Fastify, Hono) | every route and the address it's mounted at, login middleware |
+| **React** with React Router (Vite, Create React App) | pages, login wrappers, what each page asks the server for |
+| **Prisma** | your database tables, and changes that delete data |
+| **Stripe**, OpenAI, Resend and other services | when your app starts using them, and the code that charges money |
+
+**Coming next:** Supabase (and its Row Level Security, where most Lovable and Bolt data leaks
+happen), then TanStack Start and Python. [Why this order, and what each one needs](docs/languages.md).
+
+On other projects plain won't break, but it won't have much to say yet.
 
 ## Use it from the terminal
 
@@ -92,22 +101,26 @@ vibe coders and compared to just asking the agent "explain what you did".
 - [Scenario](docs/scenario.md): one feature, from building to reviewing
 - [Review research](docs/review-research.md): the review bottleneck, what exists, the gap
 - [Code-to-English research](docs/research.md): line-level English and prior work
-- [Architecture](docs/architecture.md): parsing, the shared core tree, and English output
-- [Languages](docs/languages.md): TypeScript, Python, C, F#
+- [Architecture](docs/architecture.md): how plain reads a change and writes the card, and how a stack is added
+- [Stacks](docs/languages.md): what plain reads in each stack, what it warns about, and why
 
 ## Roadmap
 
 - Fewer false alarms, more money/login/data risks caught ([backlog](docs/trials.md))
 - A GitHub Action that posts the summary on every PR
-- More frameworks (Express, Supabase, Django) and languages (Python, C, F#)
+- More stacks: Supabase, TanStack Start, Python, then Rails, Laravel and Go ([order and why](docs/languages.md))
 - Zoom into a function and read it line by line in English ([prototype](prototype/))
 
 ## Development
 
 ```sh
 npm install
-npm test
+npm test                      # fixtures with planted problems, one per stack
+node test/demos.ts /tmp/a     # plain's card for every branch of the demo apps in examples/
 ```
+
+How a new stack gets added (research, fixtures, a real app, trials) is in
+[docs/architecture.md](docs/architecture.md#adding-a-stack).
 
 ## License
 
