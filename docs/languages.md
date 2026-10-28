@@ -10,13 +10,14 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | Node servers: Express (Fastify, Hono written the same way) | ✅ Supported |
 | React with React Router (Vite, Create React App) | ✅ Supported |
 | Prisma (database) | ✅ Supported |
+| Drizzle (database) | ✅ Supported |
 | **Supabase** (tables, Row Level Security, edge functions) | ✅ Supported |
 | Stripe, OpenAI, Anthropic, Resend, Twilio (outside services) | ✅ Recognized |
 | **TanStack Start** (Lovable's default since May 2026) | ✅ Supported |
 | **Python: FastAPI, Flask** (SQLAlchemy, SQLModel) | ✅ Supported |
 | **Python: Django** (`urls.py`, views, Django REST Framework) | ✅ Supported |
-| 4. Vue / Nuxt, SvelteKit | 🔜 Next |
-| 5. Angular | Planned |
+| **Vue / Nuxt, SvelteKit** | ✅ Supported |
+| 5. Angular | 🔜 Next |
 | 6. C#: ASP.NET Core | Planned |
 | 7. Java: Spring Boot | Planned |
 | 8. Laravel (PHP), Ruby on Rails, Go | Later |
@@ -369,21 +370,88 @@ happens there. plain joins them, so the card names the address and the facts com
 - **Not yet:** Django templates (what pages say), and `csrf_exempt` applied in `urls.py` or
   with `method_decorator`.
 
-## Vue / Nuxt and SvelteKit (planned)
+## Vue / Nuxt and SvelteKit ✅
 
-- **Nuxt:**
-  - Pages come from `pages/`.
-  - Server code lives in `server/api/*.ts` (`defineEventHandler`). A file named
-    `orders.post.ts` only accepts POST.
-  - `server/middleware` runs on every request, so a login check there covers everything.
-- **SvelteKit:**
-  - `+page.svelte` is a page.
-  - `+page.server.ts` holds the data loading and form `actions`.
-  - `+server.ts` exports `GET` and `POST`.
-  - `hooks.server.ts` can check login for every request.
-- **Close to what plain already does:** both work like Next.js file routes plus TypeScript.
-  `.vue` and `.svelte` files need their `<script>` part pulled out first, using the official
-  `@vue/compiler-sfc` and `svelte/compiler`.
+Both are file-routed like Next.js, so plain reads them the same way: each page and each server
+address is a unit, with the facts of its own code. Bolt generates both
+([Bolt: supported technologies][bolt-tech]).
+
+- **`.vue` and `.svelte` files:** plain keeps the `<script>` part as is and turns the template
+  into JSX: directives (`v-if`, `@click`, `:prop`, `on:click`, `bind:`) are dropped, `{{ x }}`
+  becomes `{x}`, Svelte's `{#if}`/`{#each}` blocks are unwrapped. Then the React rules read
+  what the page says, its buttons, forms and links. No compiler is added. If the converted
+  template doesn't parse cleanly, plain keeps only the script's facts: fewer facts, never
+  wrong ones.
+- **What counts as a login check** (both frameworks), read from the code's structure, not its
+  words:
+  - an `if` that tests the logged-in user (`!locals.user`, `!session?.user`, `!loggedIn.value`,
+    `user?.role !== 'admin'`) and stops: a redirect, `navigateTo`, a 401/403, or (inside a
+    handler, action or load) a `return`; or a helper named for it (`requireUserSession`,
+    `requireUser`, `requireAdmin`, …);
+  - not a looked-up row (`if (!user) throw 404`), a form field (`!body.user`), a 400, or
+    `user && user.role !== 'admin'` (anonymous visitors pass that);
+  - not when another condition is ANDed in that plain can't place (`to.meta.requiresAuth &&
+    …`, `method !== 'GET' && …`): it might cover anything, so plain assumes it covers nothing;
+  - in a hook or middleware, an early `return` before the check lets those requests through
+    (`if (!sessionCookie) return resolve(event)` means anonymous visitors never reach it).
+
+### Nuxt
+
+- **Pages:** `pages/orders/[id].vue` is `/orders/[id]` (also `app/pages/` in Nuxt 4);
+  `[...slug]` is a catch-all, `(group)` folders add nothing.
+- **Server:** `server/api/orders.post.ts` is POST `/api/orders`; `server/routes/` has no
+  `/api` prefix. A file without a method suffix answers every method, so plain calls it POST if
+  it reads a body or changes data ([Nuxt: server][nuxt-server]).
+- **Talks to the server:** `$fetch`, `useFetch`, `useLazyFetch`; links: `<NuxtLink to>`,
+  `navigateTo()`.
+- **Login checks that protect data:**
+  - in the handler: `requireUserSession(event)` (nuxt-auth-utils) on its own, or
+    `getUserSession`, `serverSupabaseUser`, `getServerSession`, `event.context.user` followed
+    by a `throw createError({ statusCode: 401 })`;
+  - in `server/middleware/`: the same check covers every server route, or only the paths it
+    tests (`pathname.startsWith('/api/admin')`).
+- **Login checks that only hide pages:** route middleware (`middleware/auth.ts` used through
+  `definePageMeta({ middleware: 'auth' })`, or `*.global.ts`). It runs in the Vue part of the
+  app and never protects `server/api` ([Nuxt: middleware][nuxt-mw]). A page can say "log in"
+  while its API is open; plain checks each one separately.
+
+### Drizzle (any JavaScript stack)
+
+Drizzle is the other common database library next to Prisma. SvelteKit's own CLI offers it as an
+add-on (`npx sv add drizzle`, [SvelteKit CLI][sv-drizzle]), and NuxtHub's database layer is
+built on it ([NuxtHub][nuxthub-db]).
+
+- **Tables:** `export const orders = pgTable('orders', { ... })` (also `sqliteTable`,
+  `mysqlTable`): the columns, and links from `.references(() => users.id)`.
+- **Reads and writes:** `db.insert(orders)`, `db.update(orders)`, `db.delete(orders)`,
+  `db.select().from(orders)`, `db.query.orders.findMany()`, and the same on a transaction `tx`.
+- **Before you ship:** a new migration in `drizzle/` gets "apply it before the new code goes live
+  (`npx drizzle-kit migrate`)". Changed tables with no migration get `drizzle-kit generate`, or
+  `drizzle-kit push` for apps that don't keep migration files.
+
+### SvelteKit
+
+- **Pages:** `src/routes/(app)/orders/[id=integer]/+page.svelte` is `/orders/[id]`. What
+  its `load` functions read is what the page shows.
+- **Server:** `+server.ts` exports one handler per method. Form `actions` in
+  `+page.server.ts` are POSTs to the page's own address; `<form method="POST">` on the page
+  sends to them ([SvelteKit: form actions][kit-actions]).
+- **Login checks, and what each one covers:**
+  - `hooks.server.ts` (`handle`) runs before everything: pages, form actions and `+server.ts`.
+    A check there covers the paths (`url.pathname.startsWith('/admin')`) or route groups
+    (`event.route.id?.startsWith('/(app)')`) it tests.
+  - A `+layout.server.ts` load that redirects keeps people out of the pages under it, and
+    that's all. **Form actions run before any load function, and `+server.ts` never runs one**
+    ([SvelteKit: form actions][kit-actions], [loading data][kit-load]). So a page that asks
+    for login can have a form anyone can submit. plain says exactly that when it happens.
+  - A page's own `+page.server.ts` load runs without the layout's check unless it calls
+    `await parent()` first: its data can be fetched directly. plain warns when that load reads
+    the database or an outside service.
+  - Each method in `+server.ts` is checked on its own: a check in `GET` doesn't cover `DELETE`.
+  - Inside an action or handler: `locals.user` / `locals.session` / `locals.auth()` /
+    `safeGetSession()` followed by `redirect`, `error(401)` or `fail(401)`.
+- **Env vars:** `import { STRIPE_SECRET_KEY } from '$env/static/private'`, and `env.X` from
+  `$env/dynamic/private`.
 
 ## Angular (planned)
 
@@ -504,3 +572,9 @@ Research done 2026-10. Vendor reports are marked.
 [dj-http]: https://docs.djangoproject.com/en/5.1/topics/http/decorators/
 [dj-auth]: https://docs.djangoproject.com/en/5.1/topics/auth/default/#limiting-access-to-logged-in-users
 [dj-51]: https://docs.djangoproject.com/en/5.1/ref/middleware/#django.contrib.auth.middleware.LoginRequiredMiddleware
+[nuxt-server]: https://nuxt.com/docs/4.x/directory-structure/server
+[nuxt-mw]: https://nuxt.com/docs/4.x/directory-structure/app/middleware
+[kit-actions]: https://svelte.dev/docs/kit/form-actions
+[kit-load]: https://svelte.dev/docs/kit/load#Implications-for-authentication
+[sv-drizzle]: https://svelte.dev/docs/cli/drizzle
+[nuxthub-db]: https://hub.nuxt.com/docs/features/database

@@ -20,9 +20,15 @@ changes + problems
 the card
 ```
 
-All of it is in [src/plain.ts](../src/plain.ts). [src/session.ts](../src/session.ts) adds the
-per-prompt snapshots and `plain recap`; [src/cli.ts](../src/cli.ts) is the command line and the
-Claude Code hooks.
+Most of it is in [src/plain.ts](../src/plain.ts). Per language or format:
+
+- [src/python.ts](../src/python.ts): Python files (FastAPI, Flask, Django) with tree-sitter.
+- [src/supabase.ts](../src/supabase.ts): SQL migrations with the real Postgres parser.
+- [src/sfc.ts](../src/sfc.ts): `.vue` and `.svelte` files turned into TSX, and Nuxt / SvelteKit
+  file routes.
+
+[src/session.ts](../src/session.ts) adds the per-prompt snapshots and `plain recap`;
+[src/cli.ts](../src/cli.ts) is the command line and the Claude Code hooks.
 
 ## 1. Facts per file
 

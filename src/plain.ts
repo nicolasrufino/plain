@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
+import { sfcToTsx, nuxtRoute, svelteRoute } from './sfc.ts'
 
 export type Snap = Map<string, string>
 
@@ -48,7 +49,7 @@ const HOSTS: Record<string, string> = {
 const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
-const CODE = /\.([cm]?[jt]sx?|py)$/
+const CODE = /\.([cm]?[jt]sx?|py|vue|svelte)$/
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
 
@@ -58,6 +59,9 @@ export type FileFacts = {
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
   texts: Set<string>; refuses: Set<string>; envReq: Set<string>; exports: Set<string>   // words on screen ("[price]" for a formatted price); "no" messages (4xx); env vars without a fallback
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
+  authStop: boolean; authReturn: boolean   // turns away people who aren't logged in (see loginGroups); authReturn: the same check ending in a return
+  exportAuth?: boolean                    // Nuxt: the default-exported handler itself checks login
+  authIfs: { g: string; at: number; fn: number }[]; skipIfs: { c: string; at: number; fn: number }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
   handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
@@ -82,32 +86,99 @@ const empty = (printed = ''): FileFacts => ({
   outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(), headings: [], forms: 0,
   binds: new Map(), locals: new Map(), handlers: [], mounts: [], pages: [], calls: [], wrappers: new Map(),
   texts: new Set(), refuses: new Set(), envReq: new Set(), exports: new Set(),
-  serverFns: new Map(), serverRoute: false, serverGuard: false, pageGuard: false, middleware: new Map(),
+  serverFns: new Map(), serverRoute: false, serverGuard: false, pageGuard: false, middleware: new Map(), authStop: false, authReturn: false, authIfs: [], skipIfs: [],
 })
 // Code that can turn someone away: throw, redirect, a 401/403, "unauthorized"
 const STOPS = /\bthrow\b|redirect\s*\(|\b40[13]\b|unauthori[sz]ed|forbidden/i
+// ---------- login checks, read from the code's structure ----------
+// A login check: an `if` whose condition tests the logged-in user (`!locals.user`, `!session?.user`, `!loggedIn.value`,
+// `user?.role !== 'admin'`, `user == null`), ANDed only with path tests, and whose branch turns people away: a 401/403, a redirect,
+// navigateTo / abortNavigation, an error about logging in, or (in a handler, action or load, not in a hook) a return.
+// Not: a field of a form or body (`!body.user`), a 404/400, `user && user.role !== 'admin'` (anonymous visitors pass), any other
+// ANDed condition (`to.meta.requiresAuth && ...`, `method !== 'GET' && ...`: plain can't tell what that covers).
+const LOGIN_REF = /^(?:\(?\s*await\s+)?(?:[\w$]+(?:\??\.[\w$]+|\(\))*\??\.)?(user|session|loggedIn|isLoggedIn|isAuthenticated|authenticated|currentUser|claims|auth)(?:\(\))?\)?(?:\.value)?$/
+const NOT_LOGIN = /\b(body|data|form|formData|input|params|query|payload|values|args|result|row|record|item|order|req\.body)\??\./
+export const PATH_TEST = /pathname|route\.id|event\.path|to\.path|to\.fullPath|url\.path|getRequestURL/
+const strip = (e: ts.Expression): ts.Expression => ts.isParenthesizedExpression(e) || ts.isAwaitExpression(e) || ts.isNonNullExpression(e) ? strip(e.expression) : e
+const isLoginRef = (e: ts.Expression, sf: ts.SourceFile) => { const t = strip(e).getText(sf).replace(/\s/g, ''); return LOGIN_REF.test(t) && !NOT_LOGIN.test(t) }
+const isNegLogin = (e0: ts.Expression, sf: ts.SourceFile): boolean => {
+  const e = strip(e0)
+  if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) {
+    const o = strip(e.operand)
+    return isLoginRef(o, sf) || (ts.isPropertyAccessExpression(o) || ts.isCallExpression(o)) && isLoginRef(ts.isCallExpression(o) ? o.expression : o.expression, sf)   // !user?.isAdmin
+  }
+  if (ts.isBinaryExpression(e)) {
+    const op = e.operatorToken.kind, K = ts.SyntaxKind
+    if ((op === K.EqualsEqualsToken || op === K.EqualsEqualsEqualsToken) && /^(null|undefined|false)$/.test(e.right.getText(sf))) return isLoginRef(e.left, sf)
+    // user?.role !== 'admin': a missing user has no role either
+    if (op === K.ExclamationEqualsEqualsToken || op === K.ExclamationEqualsToken) { const l = strip(e.left); return ts.isPropertyAccessExpression(l) && isLoginRef(l.expression, sf) }
+  }
+  return false
+}
+const flat = (e: ts.Expression, op: ts.SyntaxKind): ts.Expression[] => { const s = strip(e); return ts.isBinaryExpression(s) && s.operatorToken.kind === op ? [...flat(s.left, op), ...flat(s.right, op)] : [s] }
+// The AND-groups of an OR condition that make it a login check; each group's path tests (joined) say where it applies ('' = everywhere).
+// a handler, action or load that checks login on every call: a check not tucked under another condition, or a return-style one
+export const handlerChecks = (g?: FileFacts) => !!g && (g.authIfs.some(x => !x.g) || g.authReturn)
+export function loginGroups(cond: ts.Expression, sf: ts.SourceFile): string[] {
+  const out: string[] = []
+  for (const or of flat(cond, ts.SyntaxKind.BarBarToken)) {
+    const ands = flat(or, ts.SyntaxKind.AmpersandAmpersandToken), others = ands.filter(a => !isNegLogin(a, sf))
+    if (others.length < ands.length && others.every(a => PATH_TEST.test(a.getText(sf)))) out.push(others.map(a => a.getText(sf)).join(' && '))
+  }
+  return out
+}
+// the branch really stops: a redirect, navigateTo / abortNavigation, SvelteKit's error(401) (it throws), or a throw about logging in / 401 / 403
+const hardStop = (t: string) => /redirect\s*\(|sendRedirect\s*\(|navigateTo\s*\(|abortNavigation\s*\(|\berror\s*\(\s*40[13]/i.test(t) || /\bthrow\b/.test(t) && /\b40[13]\b|unauthori[sz]ed|forbidden|log ?in|sign ?in|auth/i.test(t)
+  || /\breturn\b/.test(t) && /status(Code)?\s*:\s*40[13]|\bResponse\([^)]*40[13]/.test(t)   // return new Response('Unauthorized', { status: 401 })
+const RETURNS = /^\s*\{?\s*return\b/
+const REQUIRE_LOGIN = /^(requireUser|requireUserSession|requireAdmin|requireAuth|requireAuthentication|requireLogin|requireLoggedIn|requireSession|requireStaff|requireRole|ensureLoggedIn|ensureAuthenticated|ensureAuth|ensureAdmin|ensureUser)$/
 const fnLike = (n?: ts.Node) => !!n && (ts.isArrowFunction(n) || ts.isFunctionExpression(n))
 // `process.env.PORT || 3001` has a real default; `|| ''` or `?? undefined` only quiets TypeScript, the value is still needed
 const hasDefault = (n: ts.Node) => ts.isBinaryExpression(n.parent) && n.parent.left === n && /^(\|\||\?\?)$/.test(n.parent.operatorToken.getText())
   && !/^(''|""|``|null|undefined)$/.test(n.parent.right.getText().trim())
 
+// A .vue / .svelte file: its script and its template as TSX. If the template didn't come out as clean TSX, keep only the script's facts:
+// fewer facts, never wrong ones (a stray quote could otherwise put code on the card as "visible text").
+function sfcFacts(path: string, text: string): FileFacts {
+  const tsx = sfcToTsx(path, text)
+  const errors = (ts.createSourceFile(path, tsx, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX) as ts.SourceFile & { parseDiagnostics?: unknown[] }).parseDiagnostics?.length ?? 0
+  return fileFacts(path, errors ? sfcToTsx(path, text, false) : tsx)
+}
+
 export function fileFacts(path: string, text: string): FileFacts {
   const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true,
-    /tsx$/.test(path) ? ts.ScriptKind.TSX : /\.[cm]?ts$/.test(path) ? ts.ScriptKind.TS : ts.ScriptKind.JSX)
+    /(tsx|\.vue|\.svelte)$/.test(path) ? ts.ScriptKind.TSX : /\.[cm]?ts$/.test(path) ? ts.ScriptKind.TS : ts.ScriptKind.JSX)
   const f = collect(sf, sf, empty(printer.printFile(sf)))
   f.todos = text.match(/\/\/\s*(TODO|FIXME|HACK)\b[^\n]*/g)?.map(t => t.replace(/^\/\/\s*/, '')) ?? []
   const addFn = (name: string, node: ts.Node) => {
     f.fns.set(name, printer.printNode(ts.EmitHint.Unspecified, node, sf))
     if (/^(get|fetch|load|list)[A-Z]/.test(name) && returnsLiteralOnly(node)) f.hardcoded.push(name)
   }
+  // SvelteKit form actions: export const actions = { default: async ({ request, locals }) => ..., create: ... } satisfies Actions.
+  // Each one is a POST to its page; plain.ts gives them the page's address.
+  for (const st of sf.statements) if (isExported(st) && ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) {
+    let init = d.initializer
+    while (init && (ts.isSatisfiesExpression(init) || ts.isAsExpression(init) || ts.isParenthesizedExpression(init))) init = init.expression
+    if (ts.isIdentifier(d.name) && d.name.text === 'actions' && init && ts.isObjectLiteralExpression(init))
+      for (const q of init.properties) {
+        const fn = ts.isPropertyAssignment(q) ? q.initializer : ts.isMethodDeclaration(q) ? q : undefined
+        if (fn && q.name) f.handlers.push({ server: '@actions', method: 'POST', path: q.name.getText(sf), guard: false, mw: [],
+          facts: collect(sf, fn, empty(printer.printNode(ts.EmitHint.Unspecified, fn, sf))) })
+      }
+  }
+  // Nuxt: export default defineEventHandler(async (event) => { ... }): the handler's own check, not a helper elsewhere in the file
+  for (const st of sf.statements) if (ts.isExportAssignment(st)) { const g = collect(sf, st.expression, empty('')); f.exportAuth = handlerChecks(g) }
+  if ([...f.binds].some(([k, m]) => k === 'env' && /^\$env\/dynamic\//.test(m))) for (const m of text.matchAll(/\benv\.([A-Z][A-Z0-9_]+)/g)) { f.env.add(m[1]); f.envReq.add(m[1]) }
   for (const st of sf.statements) {
     if (isExported(st) && ts.isVariableStatement(st))   // export const POST = withErrors(async () => ...)
       for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name) && METHODS.includes(d.name.text) && d.initializer && ts.isCallExpression(d.initializer))
         f.fns.set(d.name.text, printer.printNode(ts.EmitHint.Unspecified, d.initializer, sf))
     if (isExported(st)) for (const d of ts.isVariableStatement(st) ? st.declarationList.declarations : [st as ts.DeclarationStatement])
       if (d.name && ts.isIdentifier(d.name)) f.exports.add(d.name.text)
+    // (export const load = (async () => ...) satisfies PageServerLoad: unwrapped)
+    const unwrap = (e?: ts.Expression): ts.Expression | undefined => e && (ts.isSatisfiesExpression(e) || ts.isAsExpression(e) || ts.isParenthesizedExpression(e)) ? unwrap(e.expression) : e
     const fns: [string, ts.Node][] = ts.isFunctionDeclaration(st) && st.name ? [[st.name.text, st]]
-      : ts.isVariableStatement(st) ? st.declarationList.declarations.filter(d => ts.isIdentifier(d.name) && fnLike(d.initializer)).map(d => [(d.name as ts.Identifier).text, d.initializer!])
+      : ts.isVariableStatement(st) ? st.declarationList.declarations.filter(d => ts.isIdentifier(d.name) && fnLike(unwrap(d.initializer))).map(d => [(d.name as ts.Identifier).text, unwrap(d.initializer)!])
       : []
     for (const [name, node] of fns) {
       f.locals.set(name, collect(sf, node, empty(printer.printNode(ts.EmitHint.Unspecified, node, sf))))
@@ -145,7 +216,69 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   const labelFor = new Map<string, string>(), boxes: { id?: string; type: string; v?: string; aria: boolean }[] = []
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
     : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
+  // Where a check sits decides whether it runs for the request, and in time:
+  //  - inside a callback, an inner function, a catch, an else branch or a switch case: not on every request -> unread (null)
+  //  - in handleFetch / handleError: not the request's own hook -> null
+  //  - after resolve(event) or after a write: the request already ran -> null
+  // Otherwise: the conditions of the ifs around it (a check inside `if (path.startsWith('/api/admin'))` applies there only;
+  // a non-path condition around it makes it unreadable, covering nothing), and the function it's in (skips only apply within it).
+  const WRITE_CALL = /\bresolve\s*\(|\.(create|createMany|update|updateMany|upsert|delete|deleteMany|insert|destroy|save)\s*\(/
+  const fnLikeNode = (c: ts.Node) => ts.isFunctionDeclaration(c) || ts.isFunctionExpression(c) || ts.isArrowFunction(c) || ts.isMethodDeclaration(c)
+  const context = (n: ts.Node): { conds: string[]; fn: number } | null => {
+    const conds: string[] = []
+    let fns = 0, fn: ts.Node | undefined
+    for (let c: ts.Node = n; c.parent && c !== root; c = c.parent) {
+      const p = c.parent
+      if (ts.isIfStatement(p) && c === p.thenStatement)
+        conds.push(...flat(p.expression, ts.SyntaxKind.AmpersandAmpersandToken).map(x => PATH_TEST.test(x.getText(sf)) ? x.getText(sf) : 'pathname /* unread */'))
+      if (ts.isIfStatement(p) && c === p.elseStatement || ts.isCatchClause(p) || ts.isCaseClause(p) || ts.isDefaultClause(p)) return null
+      if (fnLikeNode(p) && p !== root) { fns++; fn ??= p }
+      if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name) && /^handle(Fetch|Error|ServerError)$/.test(p.name.text) || ts.isFunctionDeclaration(p) && /^handle(Fetch|Error|ServerError)$/.test(p.name?.text ?? '')) return null
+    }
+    // the handler itself (root) or one top-level function (handle, a load, an authGuard passed to sequence) is fine; a function inside that isn't
+    if (fns > (fnLikeNode(root) ? 0 : 1)) return null   // (a file, or defineEventHandler(<the handler>): one level in)
+    if (ts.isSourceFile(root) && fns === 0) return null   // module-level code runs once at startup, not per request
+    const body = fn ?? root, before = sf.text.slice(body.getStart(sf), n.getStart(sf))
+    if (WRITE_CALL.test(before.slice(before.indexOf('{') + 1))) return null
+    return { conds, fn: body.getStart(sf) }
+  }
+  // the branch's own statements (not ifs nested inside it): what the branch itself does when the condition holds
+  const own = (s: ts.Statement) => (ts.isBlock(s) ? [...s.statements] : [s]).filter(x => !ts.isIfStatement(x) && !ts.isForStatement(x) && !ts.isForOfStatement(x) && !ts.isWhileStatement(x) && !ts.isTryStatement(x) && !ts.isSwitchStatement(x)).map(x => x.getText(sf)).join('\n')
+  // `session` / `user` from something that isn't a login (stripe.checkout.sessions.retrieve(...), prisma.user.findUnique(...)) isn't a login check
+  const declOf = new Map<string, string>()
+  const declVisit = (x: ts.Node): void => { if (ts.isVariableDeclaration(x) && x.initializer) for (const id of ts.isIdentifier(x.name) ? [x.name] : ts.isObjectBindingPattern(x.name) ? x.name.elements.map(e => e.name).filter(ts.isIdentifier) : []) declOf.set(id.text, x.initializer.getText(sf)); ts.forEachChild(x, declVisit) }
+  declVisit(root)
+  const NOT_AUTH_SOURCE = /\bstripe\b|\bprisma\.|\bdb\.|\bfetch\(|\$fetch\(|\.from\(|\.retrieve\(|\.find(Unique|First|Many)\w*\(|\.select\(|\bquery\(/
+  const authSourced = (cond: ts.Expression) => { const roots = [...cond.getText(sf).matchAll(/!?\s*\(?\s*(?:await\s+)?([A-Za-z_$][\w$]*)/g)].map(m => m[1])
+    return !roots.some(r => /^(user|session|currentUser|claims|auth)$/.test(r) && NOT_AUTH_SOURCE.test(declOf.get(r) ?? '')) }
   const visit = (n: ts.Node) => {
+    // A real login check: an `if` that tests the logged-in user and stops inside that branch, or a require*() helper that does it.
+    if (ts.isIfStatement(n)) {
+      const groups = authSourced(n.expression) ? loginGroups(n.expression, sf) : []
+      const positive = isLoginRef(n.expression, sf) && authSourced(n.expression) && n.elseStatement   // if (locals.user) { ... } else { redirect(...) }
+      const branchNode = groups.length ? n.thenStatement : positive ? n.elseStatement! : undefined
+      const branch = branchNode ? own(branchNode) : '', ctx = branch ? context(n) : null
+      // SvelteKit hides admin pages with a 404 too: error(404) under `!locals.user` turns people away
+      const stops = hardStop(branch) || /\berror\s*\(\s*404/.test(branch) && /\blocals\./.test(n.expression.getText(sf))
+      if (ctx && stops) { f.authStop = true; f.authIfs.push(...(groups.length ? groups : ['']).map(g => ({ g: [g, ...ctx.conds].filter(Boolean).join(' && '), at: n.getStart(sf), fn: ctx.fn }))) }
+      else if (ctx && RETURNS.test(branch)) {
+        // in a handler a return-style check stops the request; in a hook or middleware it lets anonymous visitors through: a skip for them
+        f.authReturn = true; f.skipIfs.push({ c: groups.length ? groups.join(' || ') || 'true' : 'true', at: n.getStart(sf), fn: ctx.fn })
+      }
+      // an early return that lets requests through before any check (`if (pathname === '/health') return ...`, `if (!sessionId) return resolve(event)`):
+      // those requests skip the check. Nuxt's `if (import.meta.server) return` is no skip: the middleware runs again in the browser.
+      else if (!groups.length && !positive && /\breturn\b/.test(n.thenStatement.getText(sf)) && !/import\.meta\.(server|client)/.test(n.expression.getText(sf)) && !hardStop(own(n.thenStatement))) {
+        const c = context(n); if (c) f.skipIfs.push({ c: n.expression.getText(sf), at: n.getStart(sf), fn: c.fn })
+      }
+    }
+    // locals.user ?? redirect(303, '/login'), user || error(401)
+    if (ts.isBinaryExpression(n) && /^(\?\?|\|\|)$/.test(n.operatorToken.getText(sf)) && isLoginRef(n.left, sf) && hardStop(n.right.getText(sf))) {
+      const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn }) }
+    }
+    // requireUserSession(event): everywhere, or only where the ifs around it say
+    if (ts.isCallExpression(n) && REQUIRE_LOGIN.test(n.expression.getText(sf).split('.').at(-1)!)) {
+      const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn }) }
+    }
     // TanStack Start server action: const book = createServerFn({ method: 'POST' }).middleware([auth]).validator(...).handler(async () => ...)
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && /^createServerFn\b/.test(n.initializer.getText(sf))) {
       let method = 'GET', h: ts.Expression | undefined
@@ -189,17 +322,19 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       if (ts.isIdentifier(callee)) {
         f.used.add(callee.text)
         if (AUTH.has(callee.text)) f.auth = true
-        if (callee.text === 'fetch' && arg?.startsWith('/')) f.fetches.add(`${method} ${arg.split('?')[0]}`)
+        // fetch, and Nuxt's $fetch / useFetch('/api/x', { method: 'POST' })
+        if (/^(fetch|\$fetch|useFetch|useLazyFetch)$/.test(callee.text) && arg?.startsWith('/')) f.fetches.add(`${method} ${arg.split('?')[0]}`)
         const host = callee.text === 'fetch' && HOSTS[arg?.match(/^https?:\/\/([^/]+)/)?.[1] ?? '']
         if (host) { f.services.add(host); f.outside.add(`${host}: ${EMAIL.has(host) ? 'emails.send' : 'request'}`) }
-        else if (callee.text === 'navigate' && arg?.startsWith('/')) f.links.add(arg)
+        else if (/^(navigate|navigateTo|goto)$/.test(callee.text) && arg?.startsWith('/')) f.links.add(arg)   // React Router, Nuxt, SvelteKit
         else if (/^(require|get|read|must)?_?env(ironment)?(_?var(iable)?)?$/i.test(callee.text) && arg && /^[A-Z][A-Z0-9_]*(_|KEY|SECRET|URL|TOKEN)[A-Z0-9_]*$/.test(arg) && arg !== 'NODE_ENV') {
           f.env.add(arg); if (n.arguments.length === 1) f.envReq.add(arg)   // requireEnv('STRIPE_KEY'); env('X', 'default') has a default
         }
         else if (arg?.startsWith('/') && callee.text !== 'require') f.calls.push({ name: callee.text, path: arg.split('?')[0], method, prop: false })
         if (callee.text === 'require' && arg) { f.imports.push(arg); if (SERVICES[arg]) f.services.add(SERVICES[arg]) }
       } else if (ts.isPropertyAccessExpression(callee)) {
-        const parts = callee.getText(sf).replace(/\s|\?/g, '').split('.')
+        // getStripe().checkout.sessions.create(...) is stripe.checkout.sessions.create(...)
+        const parts = callee.getText(sf).replace(/\s|\?/g, '').replace(/^(?:get|use)(Stripe|Openai|OpenAI|Resend|Anthropic|Supabase)\(\)/, (_, c: string) => c.toLowerCase()).split('.')
         const obj = parts.slice(0, -1).join('.'), last = parts.at(-1)!, args = n.arguments
         const chain = obj.match(/^([\w$]+)\.route\((['"`])([^'"`]+)\2\)/)   // app.route('/x').get(h).post(h)
         if (servers.has(obj) && last === 'use') {
@@ -238,10 +373,16 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
           if (!hasDefault(n)) f.envReq.add(arg)
         }
         if (/^(getUser|getSession|getClaims)$/.test(last) && /auth$/.test(obj)) f.sbAuth = true   // supabase.auth.getUser()
-        if (/^(prisma|db)$/.test(parts[0]) && parts.length === 3 && !parts[1].startsWith('$') && !parts[1].includes('(')) {
+        if (/^(prisma|db|tx|trx)$/.test(parts[0]) && parts.length === 3 && !parts[1].startsWith('$') && !parts[1].includes('(')) {
           f.tables.add(cap(parts[1]))
           if (WRITES.test(parts[2])) { f.writes = true; f.written.add(cap(parts[1])); f.ops.add(parts[2].replace(/Many$/, '').replace('upsert', 'create')) }
         }
+        // Drizzle: db.insert(orders).values(...), db.update(orders).set(...), db.delete(orders), db.select().from(orders), db.query.orders.findMany()
+        // (also in a transaction: tx.insert(...)); the table is the schema variable, ordersTable -> orders
+        const dz = /^(db|tx|trx|database)$/i.test(obj) && /^(insert|update|delete|from)$/.test(last) && n.arguments[0] && ts.isIdentifier(n.arguments[0]) ? n.arguments[0].text.replace(/Table$/, '') : undefined
+        if (dz && last !== 'from') { f.tables.add(dz); f.written.add(dz); f.writes = true; f.ops.add(last === 'insert' ? 'create' : last) }
+        else if (dz || last === 'from' && /^(db|tx)\.select\(/.test(obj) && n.arguments[0] && ts.isIdentifier(n.arguments[0])) f.tables.add((n.arguments[0] as ts.Identifier).text.replace(/Table$/, ''))
+        if (/^(db|tx)$/.test(parts[0]) && parts[1] === 'query' && parts.length === 4) f.tables.add(parts[2].replace(/Table$/, ''))
         if (parts[0] === 'stripe' && parts.at(-1) === 'create') f.money = true
         if (CLIENTS[parts[0]] && parts.length > 1 && !parts.some(x => x.includes('('))) f.outside.add(`${CLIENTS[parts[0]]}: ${parts.slice(1).join('.')}`)
         if (parts.at(-1) === 'push' && /router/.test(parts[0]) && str(n.arguments[0])?.startsWith('/')) f.links.add(str(n.arguments[0])!)
@@ -309,6 +450,9 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const mod = n.moduleSpecifier.text
       f.imports.push(mod)
       if (SERVICES[pkgName(mod)]) f.services.add(SERVICES[pkgName(mod)])
+      // SvelteKit: import { STRIPE_SECRET_KEY } from '$env/static/private' needs that variable (env.X from $env/dynamic/* is read in fileFacts)
+      if (/^\$env\/static\/(private|public)$/.test(mod) && n.importClause?.namedBindings && ts.isNamedImports(n.importClause.namedBindings))
+        for (const el of n.importClause.namedBindings.elements) { const k = (el.propertyName ?? el.name).text; f.env.add(k); f.envReq.add(k) }
       const c = n.importClause
       if (c?.name) { f.used.add(c.name.text); f.binds.set(c.name.text, mod) }
       if (c?.namedBindings && ts.isNamedImports(c.namedBindings))
@@ -316,7 +460,14 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     }
     if (ts.isJsxAttribute(n) && n.initializer) {
       const v = str(n.initializer), name = n.name.getText(sf)
-      if (v && name === 'href' && v.startsWith('/')) f.links.add(v)
+      // <a href>; Vue's <NuxtLink to> / <RouterLink to> (React Router's <Link to> stays out: those cards never listed it)
+      const tag = ts.isJsxAttributes(n.parent) && (ts.isJsxOpeningElement(n.parent.parent) || ts.isJsxSelfClosingElement(n.parent.parent)) ? n.parent.parent.tagName.getText(sf) : ''
+      if (v && (name === 'href' || name === 'to' && /^(NuxtLink|RouterLink|nuxt-link|router-link)$/.test(tag)) && v.startsWith('/')) f.links.add(v.replace(/#.*$/, '') || '/')   // /#tutors is the home page
+      // a SvelteKit <form method="POST" action="?/create">: sends to its own page's form actions (the page's address, filled in later)
+      if (name === 'method' && v?.toUpperCase() === 'POST' && ts.isJsxAttributes(n.parent) && ts.isJsxOpeningElement(n.parent.parent) && n.parent.parent.tagName.getText(sf) === 'form') {
+        const action = n.parent.properties.find(q => ts.isJsxAttribute(q) && q.name.getText(sf) === 'action') as ts.JsxAttribute | undefined, a = action?.initializer && str(action.initializer)
+        f.fetches.add(`POST ${a && a.startsWith('/') ? a.split('?')[0] : '@self'}`)
+      }
     }
     // Visible text of an element, minus the choices of a dropdown (a <label> around a <select> is just its name).
     const textOf = (el: ts.JsxElement): string => el.children.map(c => ts.isJsxText(c) ? c.text
@@ -463,7 +614,7 @@ const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.
 export function appFacts(snap: Snap) {
   const files = new Map<string, FileFacts>()
   for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/')) {
-    try { const f = p.endsWith('.py') ? pyFacts(p, t, empty) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
+    try { const f = p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
   }
   // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
   const resolve = (from: string, spec: string): string | undefined => {
@@ -524,6 +675,112 @@ export function appFacts(snap: Snap) {
       }
     }
   }
+  const svelteUrls = new Map<string, string>()   // SvelteKit pages: their <form method="POST"> sends to this address
+  // Where a hook's or middleware's login check applies: each checking `if` covers what its path tests allow, and an earlier
+  // `if (<path test>) return ...` lets those addresses through unchecked. Tests: startsWith, ===, !==, ['/a', '/b'].includes(path),
+  // each possibly negated; a path or route-id test plain can't read makes that `if` cover nothing (never a false ✓).
+  const PATH_RE = 'pathname|event\\.path|to\\.path|to\\.fullPath|url\\.path|getRequestURL\\(event\\)\\.pathname'
+  const test = (t: string) => {   // one AND-group of path tests -> (url, id) => boolean, or undefined if it can't be read
+    if (/\|\||!\s*\(/.test(t)) return undefined   // !(a || b) and mixed ors: not read
+    const preds: ((url: string, id: string) => boolean)[] = []
+    let rest = t
+    for (const m of t.matchAll(new RegExp(`(!\\s*)?[\\w.?()]*?(${PATH_RE}|route\\.id\\??)\\s*(\\.startsWith\\(|===?|!==?)\\s*['"\`](\\/[^'"\`]*)['"\`]\\)?`, 'g'))) {
+      const [all, neg, kind, op, v] = m, onId = kind.startsWith('route')
+      const under = (x: string) => x === v || x.startsWith(v.replace(/\/$/, '') + '/') || v.endsWith('/') && x.startsWith(v) || onId && x.startsWith(v)
+      // a negated startsWith excludes by characters, as JavaScript does ('/api/public-export'.startsWith('/api/public')); a plain one includes by segment
+      const base = op.startsWith('.') ? (neg ? (x: string) => x.startsWith(v) : under) : op.startsWith('!') ? (x: string) => x !== v : (x: string) => x === v
+      preds.push((url, id) => !!neg !== base(onId ? id : url)); rest = rest.replace(all, '')
+    }
+    for (const m of t.matchAll(new RegExp(`(!\\s*)?\\[([^\\]]*)\\]\\.includes\\(\\s*[\\w.?()]*?(?:${PATH_RE})\\s*\\)`, 'g'))) {
+      const list = [...m[2].matchAll(/['"`](\/[^'"`]*)['"`]/g)].map(x => x[1]); preds.push(url => !!m[1] !== list.includes(url)); rest = rest.replace(m[0], '')
+    }
+    if (PATH_TEST.test(rest)) return undefined   // some path test left unread
+    return (url: string, id: string) => preds.every(p => p(url, id))
+  }
+  const coverage = (f?: FileFacts) => {
+    if (!f?.authStop) return () => false
+    // a skip is an OR of AND-groups; one plain can't read (or that isn't about the path) might let anything through
+    const skips = f.skipIfs.map(({ c, at, fn }) => { const groups = c === 'true' ? [() => true] : c.split('||').map(g => test(g)); return { at, fn, hits: groups.some(g => !g) ? () => true : (url: string, id: string) => groups.some(g => g!(url, id)) } })
+    // each check covers its own scope, minus what an earlier early return in the same function lets through
+    const checks = f.authIfs.map(({ g, at, fn }) => { const t = g ? test(g) : () => true; return (url: string, id: string) => !!t && t(url, id) && !skips.some(s => s.fn === fn && s.at < at && s.hits(url, id)) })
+    return (url: string, id = url) => checks.some(c => c(url, id))
+  }
+  // Nuxt. Route middleware (middleware/auth.ts, auth.global.ts) turns people away from pages but runs in the Vue part of the app:
+  // it never protects server/api. Server middleware with a login check covers every server route, or the paths it tests.
+  if ('nuxt' in deps_) {
+    const mw = new Map<string, { global: boolean; covers: (url: string) => boolean }>()
+    for (const [p, f] of files) { const m = p.match(/^(?:app\/)?middleware\/([\w-]+?)(\.global)?\.[cm]?[jt]s$/); if (m) mw.set(m[1], { global: !!m[2], covers: coverage(f) }) }
+    // @sidebase/nuxt-auth: its own middleware, on every page with globalAppMiddleware enabled (except definePageMeta({ auth: false }))
+    const sidebase = '@sidebase/nuxt-auth' in deps_
+    const sbGlobal = sidebase && [...snap].some(([p, t]) => /(^|\/)nuxt\.config\.[cm]?[jt]s$/.test(p) && /globalAppMiddleware\s*:\s*(true\b|\{(?![^}]*isEnabled\s*:\s*false))/.test(t.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '')))
+    if (sidebase) mw.set('sidebase-auth', { global: false, covers: () => true })
+    const serverGuards = [...files].filter(([p]) => /^server\/middleware\//.test(p)).map(([, f]) => coverage(f))
+    const pageFiles = new Map([...files.keys()].flatMap(p => { const r = nuxtRoute(p); return r?.kind === 'page' ? [[p, r] as const] : [] }))
+    const ownGuard = (p: string, url: string) => {
+      const f = files.get(p)!, meta = f.printed.match(/definePageMeta\(\s*\{[\s\S]*?\}\s*\)/)?.[0] ?? ''
+      const names = (meta.match(/middleware\s*:\s*(\[[^\]]*\]|['"`][\w-]+['"`])/)?.[1] ?? '').match(/['"`]([\w-]+)['"`]/g)?.map(x => x.slice(1, -1)) ?? []
+      // an inline middleware counts when it sends people who aren't logged in somewhere
+      const inline = /middleware\s*:[\s\S]*?if\s*\(\s*!\s*[\w.]*?(loggedIn|user|session)(\.value)?\s*\)\s*\{?\s*(return\s+)?(navigateTo|abortNavigation)\s*\(/.test(meta)
+      return names.some(n => mw.get(n)?.covers(url)) || inline || sbGlobal && !/\bauth\s*:\s*(false\b|\{[^}]*unauthenticatedOnly\s*:\s*true)/.test(meta) || [...mw.values()].some(m => m.global && m.covers(url))
+    }
+    for (const [p, f] of [...files]) {
+      const r = nuxtRoute(p); if (!r) continue
+      if (r.kind === 'page') {
+        routes.set(p, { kind: 'page', url: r.url }); browserPages.add(p)
+        // a parent page (pages/admin.vue around pages/admin/users.vue) runs its middleware for the child too
+        const parents = [...pageFiles.keys()].filter(q => q !== p && p.startsWith(q.replace(/\.vue$/, '/')))
+        f.auth = ownGuard(p, r.url) || parents.some(q => ownGuard(q, r.url))
+      } else {
+        // no method in the name: it answers every method; call it POST if it reads a body or changes data
+        const method = r.method ?? (f.writes || /\breadBody\(|readValidatedBody\(|readMultipartFormData\(|readFormData\(/.test(f.printed) ? 'POST' : 'GET')
+        f.fns.set(method, f.printed)
+        routes.set(p, { kind: 'endpoint', url: r.url })
+        // defineEventHandler({ onRequest: [requireAuth], handler }) runs the check first
+        const onRequest = (f.printed.match(/onRequest\s*:\s*(\[[^\]]*\]|[\w.]+)/)?.[1] ?? '').match(/\w+/g)?.some(x => REQUIRE_LOGIN.test(x)) ?? false
+        f.auth = !!f.exportAuth || onRequest || serverGuards.some(g => g(r.url))
+      }
+    }
+  }
+  // SvelteKit. hooks.server.ts runs before everything (pages, form actions, +server.ts); a login check there covers the paths or route
+  // groups it tests. A layout load that redirects keeps people out of the pages under it, but form actions run before any load and
+  // +server.ts never runs one: those need their own check. A page's own server load runs without the layout's check unless it awaits
+  // parent() first (client-side navigation fetches its data alone).
+  if ('@sveltejs/kit' in deps_) {
+    const covered = coverage([...files].find(([p]) => /^src\/hooks\.server\.[jt]s$/.test(p))?.[1])
+    const sv = new Map([...files.keys()].flatMap(p => { const r = svelteRoute(p); return r ? [[p, r] as const] : [] }))
+    // a layout or page load only keeps people out by throwing (redirect / error); one that returns { user: null } lets the page render
+    const loadStops = (g?: FileFacts) => !!g && g.authIfs.some(x => !x.g)
+    const layoutGuards = [...sv].filter(([p, r]) => r.file === 'layout' && !p.endsWith('.svelte') && loadStops(loadOf(p))).map(([, r]) => r.id)
+    function loadOf(p: string) { return files.get(p)?.locals.get('load') }
+    const checks = handlerChecks
+    for (const [p, r] of sv) {
+      const f = files.get(p)!, dir = p.slice(0, p.lastIndexOf('/') + 1)
+      if (r.file === 'page') {
+        routes.set(p, { kind: 'page', url: r.url }); browserPages.add(p); svelteUrls.set(p, r.url)
+        // what its load functions read is what the page shows
+        // (and a change to them is a change to the page)
+        for (const q of [`${dir}+page.server.ts`, `${dir}+page.server.js`, `${dir}+page.ts`, `${dir}+page.js`]) { const l = loadOf(q); if (l) { for (const t of l.tables) f.tables.add(t); f.printed += `\n[load] ${l.printed}` } }
+        const serverLoad = [`${dir}+page.server.ts`, `${dir}+page.server.js`].map(loadOf).find(Boolean)
+        const g = f as FileFacts & { layoutLogin?: boolean; dataOpen?: boolean }
+        g.layoutLogin = layoutGuards.some(id => r.id === id || r.id.startsWith(id.replace(/\/$/, '') + '/') || id === '/')
+        f.auth = covered(r.url, r.id) || loadStops(serverLoad) || g.layoutLogin
+        // the layout keeps people out of the page, but its own load hands its data to anyone who asks for it directly
+        g.dataOpen = g.layoutLogin && !covered(r.url, r.id) && !!serverLoad && !loadStops(serverLoad) && !/await\s+(\w+\.)?parent\s*\(/.test(serverLoad.printed)
+          && (serverLoad.tables.size > 0 || serverLoad.outside.size > 0 || serverLoad.fetches.size > 0)
+      }
+      if (r.file === 'pageServer') for (const h of f.handlers.filter(h => h.server === '@actions')) {
+        h.guard = checks(h.facts) || covered(r.url, r.id); h.server = ''; h.path = r.url
+      }
+      if (r.file === 'server') {
+        routes.set(p, { kind: 'endpoint', url: r.url })
+        // each method on its own: a check in GET doesn't cover DELETE
+        const ms = METHODS.filter(m => f.fns.has(m)), writes = ms.filter(m => m !== 'GET')
+        f.auth = covered(r.url, r.id) || (writes.length ? writes : ms).length > 0 && (writes.length ? writes : ms).every(m => checks(f.locals.get(m)))
+      }
+    }
+  }
+  // form actions outside SvelteKit aren't routes
+  for (const f of files.values()) f.handlers = f.handlers.filter(h => h.server !== '@actions')
   // TanStack server actions: calling one (createBooking({ data }), useServerFn(createBooking)) talks to the server.
   for (const [p, f] of files) for (const x of f.used) {
     const q = f.serverFns.has(x) ? p : target(p, x), m = q && files.get(q)?.serverFns.get(x)
@@ -707,6 +964,8 @@ export function appFacts(snap: Snap) {
     }
   }
   for (const p of files.keys()) if (routes.has(p) && !p.includes('#')) fold(p, files.get(p)!, new Set([p]), routes.get(p)!.kind === 'page')
+  // <form method="POST"> sends to its own page: SvelteKit's form actions (also from a child component, folded in above); elsewhere it says nothing
+  for (const [p, f] of files) for (const x of [...f.fetches]) if (x.endsWith(' @self')) { f.fetches.delete(x); if (svelteUrls.has(p)) f.fetches.add(`POST ${svelteUrls.get(p)}`) }
   // Reading the session in the browser redirects nobody; on a server (edge function, Next.js) it's a real check.
   for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k)) files.get(k)!.auth = true
   // Whether a page or address checks login is part of what it is: losing the check counts as a change.
@@ -715,10 +974,24 @@ export function appFacts(snap: Snap) {
   const db = readDb([...snap].filter(([p]) => isMigration(p)))
   const all = models(schemaPath && snap.get(schemaPath))
   for (const [t, tb] of db.tables) all.set(t, [...tb.cols, ...[...tb.refs.values()].map(r => `→${singular(r)}`)])
+  // Drizzle schema: export const orders = pgTable('orders', { id: serial('id').primaryKey(), userId: integer('user_id').references(() => users.id) })
+  const dzModels = new Set<string>()
+  for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/') && /\b(pg|sqlite|mysql)Table\s*\(/.test(t))
+    for (const m of t.matchAll(/export\s+const\s+(\w+)\s*=\s*(?:pg|sqlite|mysql)Table\s*\(\s*['"`]\w+['"`]\s*,\s*\{/g)) {
+      let i = m.index! + m[0].length, depth = 1, body = ''
+      for (; i < t.length && depth; i++) { const ch = t[i]; depth += ch === '{' || ch === '(' || ch === '[' ? 1 : ch === '}' || ch === ')' || ch === ']' ? -1 : 0; if (depth) body += depth === 1 ? ch : ch === '\n' ? ' ' : ch }
+      const name = m[1].replace(/Table$/, ''), fields: string[] = []
+      // top-level keys only (nested objects were flattened onto one line above)
+      for (const line of body.split(/,\s*\n|\n/)) { const k = line.match(/^\s*(\w+)\s*:\s*(.*)$/); if (!k) continue
+        const ref = k[2].match(/references\(\s*\(\)\s*=>\s*(\w+)\./)?.[1]; fields.push(ref ? `→${singular(ref.replace(/Table$/, ''))}` : k[1]) }
+      all.set(name, fields); dzModels.add(name)
+    }
   const pyModels = new Set<string>()
   for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath, pyModels,
+    files, routes, db, models: all, schemaPath, pyModels, dzModels,
+    // drizzle-kit generate writes drizzle/0001_x.sql (or the `out` folder next to meta/_journal.json)
+    dzMigrations: [...snap.keys()].filter(p => /\.sql$/.test(p) && !isMigration(p) && !/prisma\/migrations\//.test(p) && (/(^|\/)drizzle\//.test(p) || snap.has(p.replace(/[^/]+$/, 'meta/_journal.json')))),
     pyMigrations: [...snap.keys()].filter(p => /(^|\/)(migrations\/versions|alembic\/versions|migrations)\/[^/]+\.py$/.test(p) && !p.endsWith('__init__.py')),
     envExample: envKeys([...snap].filter(([p]) => /(^|\/)\.env\.example$/.test(p)).map(([, t]) => t).join('\n')), deps: deps_,
     migrations: [...snap.keys()].filter(p => /prisma\/migrations\/.+\.sql$/.test(p)), sqlMigrations: [...snap.keys()].filter(isMigration),
@@ -826,8 +1099,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const endpoint = (path: string) => [...B.files].find(([p]) => { const r = route(p); return r?.kind === 'endpoint' && norm(r.url) === norm(path) })
   const fetchPhrase = (x: string) => {
     const method = x.slice(0, x.indexOf(' ')), path = x.slice(x.indexOf(' ') + 1), e = endpoint(path), r = e && route(e[0])!
-    const t = e && mainTable(e[1], r!.url), noun = t ? things(t) : 'data'
     const sends = method === '?' ? !!e?.[1].fns.has('POST') && !e[1].fns.has('GET') : method !== 'GET'
+    // sending: what that address writes, when it writes one thing (a booking form on a tutor's page sends bookings, not tutors)
+    const t = e && (sends && e[1].written.size === 1 ? [...e[1].written][0] : mainTable(e[1], r!.url)), noun = t ? things(t) : 'data'
     if (e?.[1].money) return 'starts a payment 💰'
     return method === 'PUT' || method === 'PATCH' ? `updates ${noun} on your server` : method === 'DELETE' ? `deletes ${noun} on your server`
       : sends ? `sends ${noun} to your server` : `loads ${noun} from your server`
@@ -888,7 +1162,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         if (b.fns.has('DELETE')) can.push(`deletes ${noun}`)
         clauses.push(...new Set(can))
         if (b.money) clauses.push('charges customers 💰')
-        if (b.auth) clauses.push('requires login ✓')
+        if (b.auth && !isPublic(r.url)) clauses.push('requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
         else if (!b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url)) clauses.push('works without logging in')   // read-only; changing ones get a warning instead
       } else {
         // what it now does to them: an address that gains update and delete doesn't "save" anything new
@@ -909,10 +1183,14 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         + (clauses.length ? `${a.auth !== b.auth ? ' now ' : `${cap(name)} now `}${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : a.auth !== b.auth ? '' : `${cap(name)} changed in a way plain can't describe yet.${b.money ? '' : ' Ask the agent what it does differently.'}`)
     changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰 Make a test payment before you ship.' : ''), detail: r.url, name: r.kind === 'page' ? pageName(r.url) + (!a && b.headings.find(h => h.startsWith('h1:')) ? ` ("${b.headings.find(h => h.startsWith('h1:'))!.slice(3)}")` : '') : named(r.url).join(' ') || 'main', money: b.money, vague: !!a && !clauses.length && a.auth === b.auth && !b.money })
 
+    // SvelteKit: the layout asks for login, but this page's own server load doesn't wait for it (no `await parent()`), so its data can be
+    // fetched without logging in (client-side navigation and __data.json skip the layout's load)
+    if (r.kind === 'page' && (b as FileFacts & { dataOpen?: boolean }).dataOpen && !(a as FileFacts & { dataOpen?: boolean } | undefined)?.dataOpen)
+      problems.push({ kind: 'Unsafe', text: `${cap(name)}'s data can be read without logging in. Its layout asks for login, but the page loads its own data without waiting for that check. Check locals.user in the page's load (or call \`await parent()\` first), or check in hooks.server.ts.` })
     // New, lost its login check, or started changing data without one
     const changesData = (f?: FileFacts) => !!f && (f.written.size > 0 || METHODS.slice(1).some(m => f.fns.has(m)))
     if (!b.auth && (!a || a.auth || !changesData(a) && changesData(b)) && !isPublic(r.url)) {
-      const writes = changesData(b)
+      const writes = changesData(b), before_ = problems.length
       if (r.kind === 'page' && /admin|dashboard|account/.test(r.url))
         problems.push({ kind: 'Unsafe', text: `Anyone can open ${name} without logging in.` })
       else if (r.kind === 'endpoint' && /(^|\/)admin(\/|$)/.test(r.url) && (writes || b.tables.size))   // admin data, even just to read
@@ -923,6 +1201,11 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
         problems.push({ kind: 'Check', text: `Anyone can ${b.ops.has('create') || !b.ops.size ? 'post' : 'change'} ${noun} without logging in, and nothing limits spam or fake ${noun}. That's normal for things like sign-ups or reviews, but make sure it's what you want.` })
       }
+      // SvelteKit: the page asks for login (its layout or load checks), but form actions run before any load function, so that check never
+      // stops them. Say why, or the "You have to log in" on the page reads as if the form were safe too.
+      const page = p.split('#')[0].replace(/\+page\.server\.[cm]?[jt]s$/, '+page.svelte')
+      if (problems.length > before_ && page !== p.split('#')[0] && (B.files.get(page) as FileFacts & { layoutLogin?: boolean } | undefined)?.layoutLogin)
+        problems.at(-1)!.text += ' The page asks for login, but its form actions run before that check, so they need their own (check locals.user in the action, or in hooks.server.ts).'
     }
   }
 
@@ -943,7 +1226,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Check', text: `You asked to "${verb}", but nothing new lets you change anything: ${list(newViewOnly.map(placeName))} only ${newViewOnly.length > 1 ? 'show' : 'shows'} information. If you wanted buttons to act on things (like refunding or cancelling orders), ask for that. (This is a guess.)` })
 
   // files that aren't code
-  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\//.test(p))
+  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p))
   {
     const media = (t = '') => new Set(t.match(/@media[^{]*max-width[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g) ?? [])
     const phones = /\.(css|scss)$/.test(p) && [...media(after.get(p))].some(m => !media(before.get(p)).has(m))
@@ -981,6 +1264,15 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     ship.push(`Update your database: ${dir ? `in ${dir}, ` : ''}run \`npx prisma migrate dev${flag}\` (on your live site: \`npx prisma migrate deploy${flag}\`). The database's structure changed, but no migration was created.${added.length ? ` Until you do, anything that uses ${list(added.map(things))} will fail.` : ''}`)
   }
   for (const m of newMigrations) if (/\bDROP\b/i.test(after.get(m) ?? '')) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+  // Drizzle: a changed schema needs a migration (or `drizzle-kit push` for apps that don't keep migration files)
+  const newDz = B.dzMigrations.filter(m => !A.dzMigrations.includes(m))
+  if ([...B.dzModels, ...A.dzModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newDz.length)
+    ship.push(B.dzMigrations.length ? 'Update your database: run `npx drizzle-kit generate`, then `npx drizzle-kit migrate` (also on your live site). The tables changed, but no migration was created.'
+      : 'Update your database: run `npx drizzle-kit push` (also against your live database). The tables changed, and until then the parts that use them will fail.')
+  for (const m of newDz) {
+    if (/\bDROP\b/i.test(after.get(m) ?? '')) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+    ship.push(`Apply ${m} to your live database before the new code goes live (\`npx drizzle-kit migrate\`), or the parts that use it will fail.`)
+  }
   // Supabase: new migrations, what they destroy (removed tables and columns are already listed above), and who the rules let in.
   for (const m of B.sqlMigrations.filter(m => !A.sqlMigrations.includes(m))) {
     const bad = (B.db.destructive.get(m) ?? []).filter(x => !/^deletes the \S+ (column|table)/.test(x))
@@ -1109,7 +1401,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // afterPaid: unpaid-only cancels in a def that first checks the payment (payment_status, Session.retrieve)
   const pyCancels = (t = '') => {
     const out = { pending: 0, paid: 0, afterPaid: 0 }
-    for (const d of t.replace(/#[^\n]*/g, '').replace(/("""|''')[\s\S]*?\1/g, '').split(/\n(?=[ \t]*(?:async\s+)?def\s)/)) {
+    // (except blocks dropped: cleanup after something failed)
+    for (const d of t.replace(/#[^\n]*/g, '').replace(/("""|''')[\s\S]*?\1/g, '').replace(/^([ \t]*)except\b[^\n]*:\n(?:\1[ \t]+[^\n]*\n?)*/gm, '').split(/\n(?=[ \t]*(?:async\s+)?def\s)/)) {
       if (/session\.expired/.test(d) || !/\.a?(update|bulk_update|save)\(/.test(d)) continue
       let depth = 0, flat = ''; for (const ch of d) { depth += '([{'.includes(ch) ? 1 : ')]}'.includes(ch) ? -1 : 0; flat += ch === '\n' && depth > 0 ? ' ' : ch }
       const lines = flat.split('\n').filter(l => /\.status\s*=(?!=)[^\n]*cancel|update\([^)]*\bstatus\s*=\s*[^,)]*cancel/i.test(l))
@@ -1142,9 +1435,15 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // Cancelling unpaid orders: Python per def and statement (pyCancels above); elsewhere per statement
   const CANCEL = /['"`]cancell?ed['"`]|\.cancell?ed\b/i
   // code reacting to Stripe's "payment page expired" has no open page left to close (Python: pyCancels skips those defs)
-  const pendingCancels = (p: string, x: typeof B, text?: string) => { const f = x.files.get(p)
+  // error handlers clean up after a payment page that never got made (catch / except): nothing is left open to pay on
+  const noCatch = (t: string) => { let out = '', i = 0
+    for (const m of t.matchAll(/\bcatch\s*(?:\([^)]*\))?\s*\{/g)) { if (m.index! < i) continue; let j = m.index! + m[0].length, d = 1
+      for (; j < t.length && d; j++) d += t[j] === '{' ? 1 : t[j] === '}' ? -1 : 0
+      out += t.slice(i, m.index); i = j }
+    return out + t.slice(i) }
+  const pendingCancels = (p: string, x: typeof B, text?: string) => { const f = x.files.get(p), printed = noCatch(f?.printed ?? '')
     return !f ? { n: 0, paid: 0 } : p.endsWith('.py') ? { n: pyCancels(text).pending, paid: pyCancels(text).afterPaid } : /session\.expired/.test(f.printed) ? { n: 0, paid: 0 }
-      : { n: [...f.printed.matchAll(new RegExp(CANCEL.source, 'gi'))].map(m => stmtAt(f.printed, m.index!)).filter(t => isWrite(t) && pendingOnly(t)).length,
+      : { n: [...printed.matchAll(new RegExp(CANCEL.source, 'gi'))].map(m => stmtAt(printed, m.index!)).filter(t => isWrite(t) && pendingOnly(t)).length,
           paid: /payment_status|sessions\.retrieve|Session\.retrieve/.test(f.printed) ? 1 : 0 } }
   const usesCheckout = [...B.files.values()].some(f => [...f.outside].some(o => o.startsWith('Stripe: checkout.sessions')))
   const cancelFiles = real.filter(p => !p.includes('#') && !isTest(p) && pendingCancels(p, B, after.get(p)).n > pendingCancels(p, A, before.get(p)).n)

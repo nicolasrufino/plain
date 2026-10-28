@@ -870,3 +870,191 @@ class OrderCreate(LoginRequiredMixin, CreateView):
     assert.equal(report(new Map(Object.entries(site({}))), new Map(Object.entries(site({ 'shop/x.py': 'def f():\n    return 1\n' }))), { ref: 'main', agentSaid: said }).includes("didn't run or test"), fires, `review 11: "${said}"`)
   console.log('ok (review 11)')
 }
+
+// Nuxt: pages, server routes by file name and method, login checks that protect data (handlers, server middleware) vs ones that only hide pages.
+{
+  const base = { 'package.json': '{"dependencies":{"nuxt":"^3.13.0","nuxt-auth-utils":"^0.5.0","@prisma/client":"5"}}',
+    'prisma/schema.prisma': 'model Order {\n  id Int @id\n  total Int\n}\n',
+    'app/middleware/auth.ts': "export default defineNuxtRouteMiddleware(() => {\n  const { loggedIn } = useUserSession()\n  if (!loggedIn.value) return navigateTo('/login')\n})\n",
+    'app/pages/index.vue': '<template><h1>Welcome</h1></template>\n' }
+  const page = (meta: string) => `<script setup lang="ts">\n${meta}const { data } = await useFetch('/api/orders')\nasync function add() { await $fetch('/api/orders', { method: 'POST', body: {} }) }\n</script>\n<template>\n  <h1>Your orders</h1>\n  <p v-if="!data">Nothing yet.</p>\n  <button @click="add" :disabled="busy">New order</button>\n  <NuxtLink to="/account">Account</NuxtLink>\n</template>\n`
+  const c1 = card(base, { ...base,
+    'app/pages/orders/index.vue': page("definePageMeta({ middleware: 'auth' })\n"),
+    'server/api/orders.get.ts': "export default defineEventHandler(async (event) => {\n  const { user } = await requireUserSession(event)\n  return prisma.order.findMany({ where: { userId: user.id } })\n})\n",
+    'server/api/orders.post.ts': "export default defineEventHandler(async (event) => {\n  const body = await readBody(event)\n  return prisma.order.create({ data: body })\n})\n",
+    'server/api/refund.ts': "export default defineEventHandler(async (event) => {\n  const session = await getUserSession(event)\n  const body = await readBody(event)\n  await prisma.order.update({ where: { id: body.id }, data: { total: 0 } })\n})\n" })
+  for (const e of ['The orders page is new, titled "Your orders". It has a "New order" button, loads orders from your server, sends orders to your server and links to the account page. You have to log in to open it ✓ /orders',
+    'lists orders and requires login ✓. /api/orders', '⚠ Anyone can use the orders part of your server without logging in.', '⚠ Anyone can use the refund part of your server without logging in.'])
+    assert.ok(c1.includes(e), `nuxt missing "${e}"\n${c1}`)
+  // server middleware with a login check covers the paths it tests; a global route middleware hides pages only
+  const c2 = card(base, { ...base,
+    'server/middleware/admin.ts': "export default defineEventHandler(async (event) => {\n  if (getRequestURL(event).pathname.startsWith('/api/admin')) {\n    const { user } = await requireUserSession(event)\n    if (!user.isAdmin) throw createError({ statusCode: 403 })\n  }\n})\n",
+    'server/api/admin/orders/[id].delete.ts': "export default defineEventHandler(async (event) => {\n  await prisma.order.delete({ where: { id: Number(getRouterParam(event, 'id')) } })\n})\n",
+    'server/api/coupons/[...slug].post.ts': "export default defineEventHandler(async (event) => {\n  await prisma.order.update({ where: { id: 1 }, data: { total: 1 } })\n})\n",
+    'app/middleware/admin.global.ts': "export default defineNuxtRouteMiddleware((to) => {\n  if (to.path.startsWith('/admin') && !useUserSession().loggedIn.value) return navigateTo('/login')\n})\n",
+    'app/pages/admin/index.vue': '<template><h1>Admin</h1></template>\n', 'pages/about.vue': '<template><h1>About</h1></template>\n' })
+  for (const e of ['deletes orders and requires login ✓. /api/admin/orders/[id]', '/api/coupons/[slug]', 'You have to log in to open it ✓ /admin'])
+    assert.ok(c2.includes(e), `nuxt 2 missing "${e}"\n${c2}`)
+  assert.ok(!c2.includes('admin order part') && !/about page[^.]*log in/i.test(c2), `nuxt 2\n${c2}`)
+  console.log('ok (nuxt)')
+}
+
+// SvelteKit: +page.svelte, form actions, +server.ts; hooks.server.ts covers everything it tests, a layout guard only pages.
+{
+  const base = { 'package.json': '{"devDependencies":{"@sveltejs/kit":"^2.8.0","svelte":"^5.0.0"},"dependencies":{"@prisma/client":"5"}}',
+    'prisma/schema.prisma': 'model Order {\n  id Int @id\n  total Int\n}\n', 'src/routes/+page.svelte': '<h1>Home</h1>\n',
+    'src/routes/(app)/+layout.server.ts': "import { redirect } from '@sveltejs/kit'\nexport const load = async ({ locals }) => {\n  if (!locals.user) redirect(303, '/login')\n  return { user: locals.user }\n}\n" }
+  const orders = (action: string) => ({
+    'src/routes/(app)/orders/+page.svelte': `<script lang="ts">\n  let { data } = $props()\n</script>\n<h1>Orders</h1>\n{#if data.orders.length === 0}<p>No orders yet.</p>{/if}\n<form method="POST" action="?/create"><input name="total"><button>Add order</button></form>\n{#each data.orders as o}<p>{o.total}</p>{/each}\n`,
+    'src/routes/(app)/orders/+page.server.ts': `import { fail, error } from '@sveltejs/kit'\nimport { STRIPE_SECRET_KEY } from '$env/static/private'\nexport const load = async ({ locals }) => ({ orders: await prisma.order.findMany() })\nexport const actions = {\n  create: async ({ request, locals }) => {\n${action}    const data = await request.formData()\n    await prisma.order.create({ data: { total: Number(data.get('total')) } })\n  },\n} satisfies Actions\n` })
+  const c1 = card(base, { ...base, ...orders(''),
+    'src/routes/api/orders/[id=integer]/+server.ts': "import { json, error } from '@sveltejs/kit'\nexport const DELETE: RequestHandler = async ({ params, locals }) => {\n  if (!locals.user) error(401, 'Log in first')\n  await prisma.order.delete({ where: { id: Number(params.id) } })\n  return json({ ok: true })\n}\n" })
+  // the layout asks for login, but the page's own load doesn't wait for it, and form actions run before any load
+  for (const e of ['The orders page is new, titled "Orders". It has a box for "total" and an "Add order" button, shows orders and sends orders to your server. You have to log in to open it ✓ /orders',
+    "⚠ The orders page's data can be read without logging in. Its layout asks for login, but the page loads its own data without waiting for that check",
+    '⚠ Anyone can use the orders part of your server without logging in. The page asks for login, but its form actions run before that check', 'deletes orders and requires login ✓. /api/orders/[id]', 'Add STRIPE_SECRET_KEY'])
+    assert.ok(c1.includes(e), `sveltekit missing "${e}"\n${c1}`)
+  // a load that awaits parent() first is covered by the layout
+  const waits = orders('')
+  waits['src/routes/(app)/orders/+page.server.ts'] = waits['src/routes/(app)/orders/+page.server.ts'].replace('async ({ locals }) => ({ orders', 'async ({ parent }) => ({ _: await parent(), orders')
+  const c3 = card(base, { ...base, ...waits })
+  assert.ok(c3.includes('You have to log in to open it ✓ /orders') && !c3.includes("data can be read"), `sveltekit parent()\n${c3}`)
+  assert.ok(!card(base, { ...base, ...orders("    if (!locals.user) return fail(401, { message: 'Log in' })\n") }).includes('Anyone can use'), 'sveltekit: the action checks')
+  // hooks.server.ts by route group or path covers actions and +server.ts too
+  for (const hook of ["  if (event.route.id?.startsWith('/(app)') && !event.locals.user) redirect(303, '/login')\n", "  if (event.url.pathname.startsWith('/orders') && !event.locals.user) redirect(303, '/login')\n"]) {
+    const h = { 'src/hooks.server.ts': `import { redirect } from '@sveltejs/kit'\nexport const handle = async ({ event, resolve }) => {\n  event.locals.user = await getUser(event.cookies)\n${hook}  return resolve(event)\n}\n` }
+    const c = card({ ...base, ...h }, { ...base, ...h, ...orders('') })
+    assert.ok(!c.includes('⚠') && c.includes('saves new orders and requires login ✓'), `sveltekit hook\n${c}`)
+  }
+  console.log('ok (sveltekit)')
+}
+
+// Drizzle: tables from the schema, reads and writes, and migrations (generate + migrate, or push).
+{
+  const base = { 'package.json': '{"dependencies":{"drizzle-orm":"0.36.0","next":"15"},"devDependencies":{"drizzle-kit":"0.28.0"}}',
+    'src/db/schema.ts': "import { pgTable, serial, integer, text } from 'drizzle-orm/pg-core'\nexport const users = pgTable('users', {\n  id: serial('id').primaryKey(),\n  email: text('email').notNull(),\n})\n",
+    'drizzle/0000_init.sql': 'CREATE TABLE "users" ("id" serial PRIMARY KEY, "email" text NOT NULL);\n', 'drizzle/meta/_journal.json': '{}' }
+  const schema = base['src/db/schema.ts'] + "export const ordersTable = pgTable('orders', {\n  id: serial('id').primaryKey(),\n  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),\n  totalCents: integer('total_cents').notNull(),\n})\n"
+  const route = "import { db } from '@/db'\nimport { ordersTable } from '@/db/schema'\nexport async function POST(req: Request) {\n  await db.insert(ordersTable).values({ totalCents: 100 })\n}\nexport async function GET() {\n  return db.select().from(ordersTable)\n}\n"
+  const c1 = card(base, { ...base, 'src/db/schema.ts': schema, 'app/api/orders/route.ts': route })
+  for (const e of ['Your database now stores orders: total. Each one belongs to a user.', 'lists orders and saves new ones', 'npx drizzle-kit generate'])
+    assert.ok(c1.includes(e), `drizzle missing "${e}"\n${c1}`)
+  const c2 = card(base, { ...base, 'src/db/schema.ts': schema, 'app/api/orders/route.ts': route, 'drizzle/0001_orders.sql': 'CREATE TABLE "orders" ("id" serial);\n', 'drizzle/meta/0001_snapshot.json': '{}' })
+  assert.ok(c2.includes('Apply drizzle/0001_orders.sql to your live database before the new code goes live (`npx drizzle-kit migrate`)') && !c2.includes('snapshot') && !c2.includes('drizzle-kit generate'), `drizzle 2\n${c2}`)
+  console.log('ok (drizzle)')
+}
+
+// Review 12 (2026-10-28): Nuxt and SvelteKit login checks that look like checks but aren't, and ones that are.
+{
+  const kit = { 'package.json': '{"devDependencies":{"@sveltejs/kit":"^2.8.0"},"dependencies":{"@prisma/client":"5"}}' }
+  const nuxt = { 'package.json': '{"dependencies":{"nuxt":"^3.13.0","@prisma/client":"5"}}' }
+  const r = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries(files)))
+    return [...a.routes].map(([k, x]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : 'open'}`).sort().join(' | ') }
+  const post = "export default defineEventHandler(async (event) => {\n  await prisma.order.create({ data: await readBody(event) })\n})\n"
+  const server = (body: string) => `export const POST = async ({ locals, request }) => {\n${body}  await prisma.order.create({ data: {} })\n  return new Response('ok')\n}\n`
+  const hook = (body: string) => ({ 'src/hooks.server.ts': `export const handle = async ({ event, resolve }) => {\n  event.locals.user = await getUser(event)\n${body}  return resolve(event)\n}\n` })
+  const cases: [string, Record<string, string>, string][] = [
+    // reading the session next to an unrelated throw or redirect isn't a check
+    ['redirect after saving', { ...kit, 'src/routes/api/orders/+server.ts': server("  const o = await prisma.order.findFirst({ where: { userId: locals.user?.id } })\n  if (!o) throw redirect(303, '/orders')\n") }, '/api/orders open'],
+    ['getUserSession + a 400', { ...nuxt, 'server/api/orders.post.ts': "export default defineEventHandler(async (event) => {\n  const session = await getUserSession(event)\n  const body = await readBody(event)\n  if (!body.total) throw createError({ statusCode: 400 })\n  await prisma.order.create({ data: body })\n})\n" }, '/api/orders open'],
+    // a helper that checks, and the object syntax
+    ['requireAdmin helper', { ...nuxt, 'server/api/orders.post.ts': post.replace('async (event) => {\n', 'async (event) => {\n  await requireAdmin(event)\n') }, '/api/orders login'],
+    ['onRequest', { ...nuxt, 'server/api/orders.post.ts': "export default defineEventHandler({ onRequest: [requireAuth], handler: async (event) => {\n  await prisma.order.create({ data: {} })\n} })\n" }, '/api/orders login'],
+    // path tests: exact, an array, none at all, negated, an early return
+    ['hook: === one path', { ...kit, ...hook("  if (event.url.pathname === '/admin' && !event.locals.user) redirect(303, '/login')\n"), 'src/routes/api/orders/+server.ts': server('') }, '/api/orders open'],
+    ['hook: a list it loops over', { ...kit, ...hook("  if (PROTECTED.some(p => event.url.pathname.startsWith(p)) && !event.locals.user) redirect(303, '/login')\n"), 'src/routes/api/orders/+server.ts': server('') }, '/api/orders open'],
+    ['hook: a www redirect only', { ...kit, ...hook("  if (event.url.hostname.startsWith('www.')) redirect(301, 'https://x.com')\n"), 'src/routes/api/orders/+server.ts': server('') }, '/api/orders open'],
+    ['hook: everything but /login', { ...kit, ...hook("  if (!event.url.pathname.startsWith('/login') && !event.locals.user) redirect(303, '/login')\n"), 'src/routes/api/orders/+server.ts': server('') }, '/api/orders login'],
+    ['server middleware: skip public, then require', { ...nuxt, 'server/middleware/auth.ts': "export default defineEventHandler(async (event) => {\n  if (!event.path.startsWith('/api/') || event.path.startsWith('/api/_auth')) return\n  await requireUserSession(event)\n})\n", 'server/api/orders.post.ts': post }, '/api/orders login'],
+    ['server middleware: === one path', { ...nuxt, 'server/middleware/auth.ts': "export default defineEventHandler(async (event) => {\n  if (event.path === '/api/admin/stats') await requireUserSession(event)\n})\n", 'server/api/orders.post.ts': post }, '/api/orders open'],
+    // pages: a parent page's middleware; @sidebase/nuxt-auth global middleware with an opt-out
+    ['nested page', { ...nuxt, 'app/middleware/auth.ts': "export default defineNuxtRouteMiddleware(() => {\n  if (!useUserSession().loggedIn.value) return navigateTo('/login')\n})\n",
+      'app/pages/admin.vue': "<script setup>\ndefinePageMeta({ middleware: 'auth' })\n</script>\n<template><NuxtPage /></template>\n", 'app/pages/admin/users.vue': '<template><h2>Users</h2></template>\n' }, '/admin login | /admin/users login'],
+    ['sidebase global', { 'package.json': '{"dependencies":{"nuxt":"^3.13.0","@sidebase/nuxt-auth":"^0.9.0"}}', 'nuxt.config.ts': "export default defineNuxtConfig({ auth: { globalAppMiddleware: true } })\n",
+      'app/pages/dashboard.vue': '<template><h1>Dashboard</h1></template>\n', 'app/pages/pricing.vue': "<script setup>\ndefinePageMeta({ auth: false })\n</script>\n<template><h1>Pricing</h1></template>\n" }, '/dashboard login | /pricing open'],
+  ]
+  for (const [name, files, want] of cases) assert.equal(r(files), want, `review 12: ${name}`)
+  // a Svelte attribute with a template literal doesn't swallow the rest of the page
+  const c = card(kit, { ...kit, 'src/routes/orders/+page.svelte': '<h1>Orders</h1>\n{#each data.orders as o}<a href={`/orders/${o.id}`}>Open</a>{/each}\n<button>More</button>\n<a href="/account">Account</a>\n' })
+  assert.ok(c.includes('"More" button') && c.includes('links to the account page'), `review 12: template literal\n${c}`)
+  console.log('ok (review 12)')
+}
+
+// Review 13 (2026-10-28): login checks read from the code's structure: what the `if` tests, how it stops, where it applies.
+{
+  const kit = { 'package.json': '{"devDependencies":{"@sveltejs/kit":"^2.8.0"},"dependencies":{"@prisma/client":"5"}}' }
+  const nuxt = { 'package.json': '{"dependencies":{"nuxt":"^3.13.0","@prisma/client":"5"}}' }
+  const r = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries(files)))
+    return [...a.routes].map(([k, x]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : 'open'}`).sort().join(' | ') }
+  const nx = (check: string) => ({ ...nuxt, 'server/api/messages.post.ts': `export default defineEventHandler(async (event) => {\n  const body = await readBody(event)\n  const user = await prisma.user.findUnique({ where: { id: body.toUserId } })\n${check}\n  await prisma.message.create({ data: body })\n})\n` })
+  const hook = (body: string) => ({ ...kit, 'src/hooks.server.ts': `export const handle = async ({ event, resolve }) => {\n${body}\n  return resolve(event)\n}\n`,
+    'src/routes/api/orders/+server.ts': "export const POST = async () => {\n  await prisma.order.create({ data: {} })\n  return new Response('ok')\n}\n", 'src/routes/(app)/dashboard/+page.svelte': '<h1>Dash</h1>\n' })
+  const mw = (body: string) => ({ ...nuxt, 'app/middleware/auth.global.ts': `export default defineNuxtRouteMiddleware((to) => {\n  const user = useSupabaseUser()\n${body}\n})\n`, 'app/pages/account.vue': '<template><h1>Account</h1></template>\n' })
+  const cases: [string, Record<string, string>, string][] = [
+    // a looked-up row, a body field, a 400, a log line with "403" in it: none is a login check
+    ['404 for a missing recipient', nx('  if (!user) throw createError({ statusCode: 404 })'), '/api/messages open'],
+    ['body.user', nx('  if (!body.user) throw createError({ statusCode: 400 })'), '/api/messages open'],
+    ['user && role', nx('  if (user && user.role !== "admin") throw createError({ statusCode: 403 })'), '/api/messages open'],
+    ['a log that mentions 403', nx("  if (!user) { await prisma.log.create({ data: { msg: 'anon', status: 403 } }) }"), '/api/messages open'],
+    ['ensureUserExists', nx('  await ensureUserExists(body.email)'), '/api/messages open'],
+    ['real: session + 401', { ...nuxt, 'server/api/messages.post.ts': "export default defineEventHandler(async (event) => {\n  const session = await getUserSession(event)\n  if (!session.user) throw createError({ statusCode: 401 })\n  await prisma.message.create({ data: {} })\n})\n" }, '/api/messages login'],
+    // per method: a check in GET doesn't cover DELETE
+    ['GET checks, DELETE not', { ...kit, 'src/routes/api/orders/[id]/+server.ts': "export const GET = async ({ locals }) => {\n  if (!locals.user) error(401)\n  return json(await prisma.order.findMany())\n}\nexport const DELETE = async ({ params }) => {\n  await prisma.order.delete({ where: { id: params.id } })\n  return new Response()\n}\n" }, '/api/orders/[id] open'],
+    // other conditions ANDed in: plain can't tell what they cover
+    ['opt-in meta', mw("  if (to.meta.requiresAuth && !user.value) return navigateTo('/login')"), '/account open'],
+    ['only non-GET', hook("  if (event.request.method !== 'GET' && !event.locals.user) error(401)"), '/api/orders open | /dashboard open'],
+    ['an early pass-through on the session cookie', hook("  if (!event.cookies.get('sid')) return resolve(event)\n  if (event.url.pathname.startsWith('/api') && !event.locals.user) error(401)"), '/api/orders open | /dashboard open'],
+    ['an early skip that isn\'t about the path', mw("  if (to.meta.public) return\n  if (!user.value) return navigateTo('/login')"), '/account open'],
+    // !==, includes lists, a /health early response, a nested path check
+    ['everything but /login', mw("  if (!user.value && to.path !== '/login') return navigateTo('/login')"), '/account login'],
+    ['except a list', mw("  if (!['/login', '/about'].includes(to.path) && !user.value) return navigateTo('/login')"), '/account login'],
+    ['/health then a global check', hook("  if (event.url.pathname === '/health') return new Response('ok')\n  if (!event.locals.user) redirect(303, '/login')"), '/api/orders login | /dashboard login'],
+    ['nested under a path', { ...nuxt, 'server/middleware/admin.ts': "export default defineEventHandler(async (event) => {\n  if (event.path.startsWith('/api/admin')) {\n    const session = await getUserSession(event)\n    if (!session.user) throw createError({ statusCode: 401 })\n  }\n})\n",
+      'server/api/orders.post.ts': "export default defineEventHandler(async () => { await prisma.order.create({ data: {} }) })\n", 'server/api/admin/stats.get.ts': "export default defineEventHandler(async () => prisma.order.findMany())\n" }, '/api/admin/stats login | /api/orders open'],
+    // a check that returns or sits in an else branch is still a check (in a handler)
+    ['return fail(401)', { ...kit, 'src/routes/api/orders/+server.ts': "export const POST = async ({ locals }) => {\n  if (!locals.user) return json({ error: 'Log in' }, { status: 401 })\n  await prisma.order.create({ data: {} })\n  return new Response()\n}\n" }, '/api/orders login'],
+    ['else branch', { ...kit, 'src/routes/api/orders/+server.ts': "export const POST = async ({ locals }) => {\n  if (locals.user) {\n    await prisma.order.create({ data: {} })\n  } else {\n    error(401)\n  }\n  return new Response()\n}\n" }, '/api/orders login'],
+    // sidebase: a commented-out or disabled global middleware protects nothing
+    ['sidebase disabled', { 'package.json': '{"dependencies":{"nuxt":"3","@sidebase/nuxt-auth":"0.9"}}', 'nuxt.config.ts': "export default defineNuxtConfig({ auth: { globalAppMiddleware: { isEnabled: false } } })\n", 'app/pages/dashboard.vue': '<template><h1>D</h1></template>\n' }, '/dashboard open'],
+  ]
+  for (const [name, files, want] of cases) assert.equal(r(files), want, `review 13: ${name}`)
+  // a load written with `satisfies` is still read; a guarded layout keeps people out of the page, but not its own load's data
+  const lay = { ...kit, 'src/routes/(app)/+layout.server.ts': "export const load = async ({ locals }) => {\n  if (!locals.user) redirect(303, '/login')\n}\n", 'src/routes/(app)/orders/+page.svelte': '<h1>Orders</h1>\n' }
+  const c = card(lay, { ...lay, 'src/routes/(app)/orders/+page.server.ts': 'export const load = (async () => ({ orders: await prisma.order.findMany() })) satisfies PageServerLoad\n' })
+  assert.ok(c.includes("data can be read without logging in") && c.includes('shows orders') && !c.includes('Anyone can open'), `review 13: satisfies\n${c}`)
+  // Prisma inside a transaction; Stripe through a getStripe() helper
+  const c2 = card({ 'package.json': '{"dependencies":{"next":"15"}}' }, { 'package.json': '{"dependencies":{"next":"15"}}', 'app/api/book/route.ts': "export async function POST() {\n  await prisma.$transaction(async (tx) => { await tx.booking.create({ data: {} }) })\n  await getStripe().checkout.sessions.create({ mode: 'payment' })\n}\n" })
+  assert.ok(c2.includes('saves new bookings') && c2.includes('charges customers 💰'), `review 13: tx + getStripe\n${c2}`)
+  console.log('ok (review 13)')
+}
+
+// Review 14 (2026-10-28): a check only counts where it runs for the request, in time, on the logged-in user.
+{
+  const kit = { 'package.json': '{"devDependencies":{"@sveltejs/kit":"^2.8.0"},"dependencies":{"@prisma/client":"5"}}' }
+  const nuxt = { 'package.json': '{"dependencies":{"nuxt":"^3.13.0","@prisma/client":"5"}}' }
+  const r = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries(files)))
+    return [...a.routes].map(([k, x]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : 'open'}`).sort().join(' | ') }
+  const del = "export const DELETE = async () => {\n  await prisma.user.deleteMany()\n  return new Response()\n}\n"
+  const hook = (body: string) => ({ ...kit, 'src/hooks.server.ts': `export const handle = async ({ event, resolve }) => {\n${body}\n  return resolve(event)\n}\n`, 'src/routes/admin/users/+server.ts': del })
+  const cases: [string, Record<string, string>, string][] = [
+    ['anonymous visitors returned early, then a role check', hook("  if (!event.locals.user) return resolve(event)\n  if (event.url.pathname.startsWith('/admin') && event.locals.user.role !== 'admin') redirect(303, '/')"), '/admin/users open'],
+    ['a check after resolve()', { ...kit, 'src/hooks.server.ts': "export const handle = async ({ event, resolve }) => {\n  const response = await resolve(event)\n  if (!event.locals.user) redirect(303, '/login')\n  return response\n}\n", 'src/routes/admin/users/+server.ts': del }, '/admin/users open'],
+    ['a check in a callback', hook("  ['a'].forEach(() => { if (!event.locals.user) redirect(303, '/login') })"), '/admin/users open'],
+    ['a check in a catch', hook("  try { await x() } catch { if (!event.locals.user) redirect(303, '/login') }"), '/admin/users open'],
+    ['handleFetch is not the request hook', { ...kit, 'src/hooks.server.ts': "export const handleFetch = async ({ event, request, fetch }) => {\n  if (!event.locals.user) error(401)\n  return fetch(request)\n}\n", 'src/routes/admin/users/+server.ts': del }, '/admin/users open'],
+    ['a config check at the top of the file', { ...kit, 'src/hooks.server.ts': "if (!config.auth) throw new Error('auth config missing')\nexport const handle = async ({ event, resolve }) => resolve(event)\n", 'src/routes/admin/users/+server.ts': del }, '/admin/users open'],
+    ['!startsWith excludes by characters', hook("  if (!event.locals.user && !event.url.pathname.startsWith('/admin/u')) redirect(303, '/login')"), '/admin/users open'],
+    ['401 response from a hook', hook("  if (event.url.pathname.startsWith('/admin') && !event.locals.user) return new Response('Unauthorized', { status: 401 })"), '/admin/users login'],
+    // a Stripe session isn't a login; a check after the write is too late
+    ['a stripe session', { ...kit, 'src/routes/api/x/+server.ts': "export const POST = async ({ url }) => {\n  const session = await stripe.checkout.sessions.retrieve(url.searchParams.get('id'))\n  if (!session) redirect(303, '/cart')\n  await prisma.order.create({ data: {} })\n  return new Response()\n}\n" }, '/api/x open'],
+    ['a check after the delete', { ...kit, 'src/routes/api/x/+server.ts': "export const POST = async ({ locals }) => {\n  await prisma.order.deleteMany()\n  if (!locals.user) error(401)\n  return new Response()\n}\n" }, '/api/x open'],
+    // a layout that returns { user: null } keeps nobody out; Supabase SSR's template still protects /private
+    ['layout returns user: null', { ...kit, 'src/routes/+layout.server.ts': "export const load = async ({ locals }) => {\n  if (!locals.user) return { user: null }\n  return { user: locals.user }\n}\n", 'src/routes/billing/+page.svelte': '<h1>Billing</h1>\n' }, '/billing open'],
+    ['Supabase SSR template', { ...kit, 'src/hooks.server.ts': "const supabase = async ({ event, resolve }) => {\n  event.locals.safeGetSession = async () => {\n    const { data: { session } } = await event.locals.supabase.auth.getSession()\n    if (!session) return { session: null, user: null }\n    const { data: { user }, error } = await event.locals.supabase.auth.getUser()\n    if (error) return { session: null, user: null }\n    return { session, user }\n  }\n  return resolve(event)\n}\nconst authGuard = async ({ event, resolve }) => {\n  const { session, user } = await event.locals.safeGetSession()\n  event.locals.session = session\n  if (!event.locals.session && event.url.pathname.startsWith('/private')) redirect(303, '/auth')\n  return resolve(event)\n}\nexport const handle = sequence(supabase, authGuard)\n",
+      'src/routes/private/notes/+server.ts': del }, '/private/notes login'],
+    // Nuxt: an onboarding redirect for logged-in users isn't a login check
+    ['inline onboarding middleware', { ...nuxt, 'app/pages/settings.vue': "<script setup>\ndefinePageMeta({ middleware: [() => { const { user } = useUserSession(); if (user.value && !user.value.onboarded) return navigateTo('/onboarding') }] })\n</script>\n<template><h1>Settings</h1></template>\n" }, '/settings open'],
+  ]
+  for (const [name, files, want] of cases) assert.equal(r(files), want, `review 14: ${name}`)
+  console.log('ok (review 14)')
+}
