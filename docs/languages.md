@@ -14,8 +14,8 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | Stripe, OpenAI, Anthropic, Resend, Twilio (outside services) | ✅ Recognized |
 | **TanStack Start** (Lovable's default since May 2026) | ✅ Supported |
 | **Python: FastAPI, Flask** (SQLAlchemy, SQLModel) | ✅ Supported |
-| 3. Python: Django (`urls.py`, views, DRF) | 🔜 Next (its ORM and models already work) |
-| 4. Vue / Nuxt, SvelteKit | Planned |
+| **Python: Django** (`urls.py`, views, Django REST Framework) | ✅ Supported |
+| 4. Vue / Nuxt, SvelteKit | 🔜 Next |
 | 5. Angular | Planned |
 | 6. C#: ASP.NET Core | Planned |
 | 7. Java: Spring Boot | Planned |
@@ -243,7 +243,7 @@ Lovable's default for new apps since May 2026, usually with Supabase.
 - **Any stack:** server code that an admin page calls is treated as admin-only. A missing
   login check there is ⚠, whatever the code is called.
 
-## Python: FastAPI and Flask ✅ (Django 🔜)
+## Python: FastAPI, Flask and Django ✅
 
 - **Addresses:**
   - FastAPI: `@app.get('/x/{id}')` and `@router.post(...)` on `FastAPI()` / `APIRouter(prefix=...)`.
@@ -294,10 +294,80 @@ Lovable's default for new apps since May 2026, usually with Supabase.
     the first error.
   - tree-sitter-python (MIT, 0.5 MB, in `vendor/`) loads in about 8 ms, handles `match`,
     `type` aliases and modern f-strings, and keeps going past syntax errors.
-- **Django, next:** routes in `urls.py` (`path()`, `include()`); methods come from the view;
-  DRF routers create several addresses from one line. Login checks: `@login_required`,
-  `LoginRequiredMixin`, `permission_classes`, and `DEFAULT_PERMISSION_CLASSES`. Without that
-  setting, DRF allows everyone, which plain should say.
+
+## Django ✅
+
+Django splits a route in two: `urls.py` says the address, and a view in `views.py` says what
+happens there. plain joins them, so the card names the address and the facts come from the view.
+
+- **Addresses:**
+  - It starts from each `urls.py` that no other one includes (the project's root), then
+    follows `include('shop.urls')`, `include(shop_urls)` and namespaced
+    `include(('shop.urls', 'shop'))` down.
+  - Views are found however they're imported: `from . import views`, `from .views import X`,
+    a `views/` package that re-exports from `__init__.py`, or `from .views import *`.
+  - `path('orders/<int:pk>/', ...)` and `re_path(r'^orders/(?P<pk>\d+)/$', ...)` both become
+    `/orders/[pk]`.
+  - `admin/` (Django's own admin site) is skipped. It has its own login.
+  - DRF routers: `router.register('orders', OrderViewSet)` makes `/orders` (list, create)
+    and `/orders/[pk]` (read, update, delete), plus one address per `@action`
+    ([DRF routers][drf-routers]). The router can live in its own file, and
+    `http_method_names` or `as_view({'get': 'list'})` narrow what it answers.
+- **Which methods a view answers** ([Django: view decorators][dj-http]):
+  - `@require_POST`, `@require_GET`, `@require_http_methods([...])`, `@api_view([...])`.
+  - Class views: their own `get` / `post` / … methods, plus what the base class adds:
+    `CreateView` saves, `UpdateView` updates, `DeleteView` deletes; DRF's
+    `ListCreateAPIView`, `ModelViewSet`, its mixins, and so on. The database part comes
+    from `model = Order` or `queryset = Order.objects...`.
+  - A plain function view answers every method. If it checks `request.method`, plain uses
+    those; otherwise it's a POST if it changes data, a GET if not.
+  - `CreateView` and `FormView` also answer GET, but only to show an empty form, so plain
+    leaves that out.
+- **Login checks:**
+  - `@login_required`, `@permission_required`, `@user_passes_test`,
+    `@staff_member_required`, or `login_required(views.x)` in `urls.py`
+    ([Django auth][dj-auth]).
+  - `LoginRequiredMixin` and the other `*RequiredMixin`s, or
+    `@method_decorator(login_required, name='dispatch')` (also with a list of decorators).
+    With `name='get'`, only GET needs login: POST is still open, and plain says so.
+  - Base classes are followed, also across files: a view built on your own
+    `OwnerOnlyMixin(LoginRequiredMixin)` or `AuthedViewSet` gets their login checks and
+    their routes.
+  - In the view: `if not request.user.is_authenticated:` followed by a redirect to login,
+    `raise PermissionDenied`, `HttpResponseForbidden()` or a 401/403 status.
+  - Django 5.1's `LoginRequiredMiddleware` makes every view need login, except
+    `@login_not_required` ones ([Django 5.1][dj-51]). It doesn't cover DRF views: DRF 3.16
+    exempts them, so their own permissions decide.
+- **Django REST Framework permissions** ([DRF permissions][drf-perm]). This is the one most
+  worth getting right:
+  - **With no setting, DRF lets everyone in** (`AllowAny`). So a new API view that changes
+    data gets ⚠ unless something checks login.
+  - `DEFAULT_PERMISSION_CLASSES` in `REST_FRAMEWORK` settings applies to every DRF view
+    without its own `permission_classes`.
+  - `IsAuthenticated`, `IsAdminUser` and `DjangoModelPermissions` mean login is required.
+  - `IsAuthenticatedOrReadOnly` means login is required only to change things.
+  - `AllowAny` (or `[]`) on a view overrides the settings and lets everyone in.
+  - `IsAuthenticated | ReadOnly` lets anyone read (either one is enough); `~IsAuthenticated`
+    is never a login check.
+  - `get_permissions()`: plain follows its branches on `self.action` and on
+    `request.method` / `SAFE_METHODS`, a `permission_classes_by_action` map, and
+    `super().get_permissions()`. A branch it can't read (two conditions, a list held in a
+    variable) is skipped, so the result leans toward a warning, never a false ✓.
+  - `as_view(permission_classes=[AllowAny])` in `urls.py` overrides the class's own.
+  - Custom classes count by name (`IsAdmin…`, `IsStaff…`). `IsOwnerOrReadOnly` on its own
+    is **not** a login check: DRF only asks it about existing rows, so anyone can still
+    create one.
+- **What a view does** includes the helper functions it calls (`create_order()` in
+  `services.py`), `order.save()` / `order.delete()`, and query chains split over lines.
+  This applies to FastAPI and Flask routes too.
+- **Before you ship:** a new migration file gets "apply it to your live database before the
+  new code goes live (`python manage.py migrate`)". Changed models with no migration get
+  `makemigrations`.
+- **Email:** Django's `send_mail()` / `EmailMessage` count as "emails people".
+- **Already there from the Python support:** the Django ORM, models, `makemigrations`,
+  `DEBUG = True`, a `SECRET_KEY` in the code, `@csrf_exempt`, `.raw(f"...")`.
+- **Not yet:** Django templates (what pages say), and `csrf_exempt` applied in `urls.py` or
+  with `method_decorator`.
 
 ## Vue / Nuxt and SvelteKit (planned)
 
@@ -428,3 +498,9 @@ Research done 2026-10. Vendor reports are marked.
 [bolt-tech]: https://support.bolt.new/building/supported-technologies
 [aspnet]: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/secure-data
 [spring-authz]: https://docs.spring.io/spring-security/reference/servlet/authorization/authorize-http-requests.html
+
+[drf-perm]: https://www.django-rest-framework.org/api-guide/permissions/
+[drf-routers]: https://www.django-rest-framework.org/api-guide/routers/
+[dj-http]: https://docs.djangoproject.com/en/5.1/topics/http/decorators/
+[dj-auth]: https://docs.djangoproject.com/en/5.1/topics/auth/default/#limiting-access-to-logged-in-users
+[dj-51]: https://docs.djangoproject.com/en/5.1/ref/middleware/#django.contrib.auth.middleware.LoginRequiredMiddleware

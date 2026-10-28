@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
-import { pyFacts, type PyFacts } from './python.ts'
+import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
 
 export type Snap = Map<string, string>
 
@@ -479,7 +479,10 @@ export function appFacts(snap: Snap) {
     const dots = mod.match(/^\.*/)![0].length, rest = mod.slice(dots).replace(/\./g, '/')
     const base = dots ? join(from, ...Array(dots).fill('..')) : ''
     const tries = [rest, rest.split('/').slice(0, -1).join('/')].filter(Boolean).flatMap(r => [`${r}.py`, `${r}/__init__.py`].map(x => dots ? join(base, x) : x))
-    return tries.map(x => files.has(x) ? x : dots ? undefined : [...files.keys()].find(k => k.endsWith('/' + x))).find(Boolean)
+    // two apps with the same module name (shop/urls.py, legacy/shop/urls.py): the one closest to the importing file
+    const near = (x: string) => [...files.keys()].filter(k => k.endsWith('/' + x)).sort((a, b) => shared(b) - shared(a) || a.length - b.length)[0]
+    const shared = (k: string) => { let i = 0; while (i < k.length && k[i] === from[i]) i++; return i }
+    return tries.map(x => files.has(x) ? x : dots ? undefined : near(x)).find(Boolean)
   }
   const target = (p: string, name: string) => { const m = files.get(p)!.binds.get(name); return m ? resolve(p, m) : undefined }
 
@@ -570,6 +573,96 @@ export function appFacts(snap: Snap) {
     return { url: (P.path + (P.override ? '' : own.replace(/\/$/, '')) + h.path).replace(/(.)\/$/, '$1') || '/',
       guard: P.guard || g || pyAppGuard || h.mw.some(a => pyAliases.get(a)) }
   }
+  // Python: a route also does what the functions it calls do (create_order() in services.py), following them down.
+  // Only real calls: create_order(...) or services.create_order(...) on an imported module, never ctx.update(...) or cache.delete(...).
+  const pyFold = (p: string, hf: FileFacts, into: FileFacts, seen: Set<string>) => {
+    const f = files.get(p)!
+    for (const u of hf.used) {
+      const m = u.match(/^call:(?:(\w+)\.)?(\w+)$/); if (!m) continue
+      // services.create_order(): only when `services` is a module (from shop import services), not a thing inside one (from app.cache import cache)
+      const isModule = (q?: string) => { const path = f.binds.get(mod!)!.slice(3).replace(/^\.+/, '').replace(/\./g, '/'); return !!q && (q.endsWith(`${path}.py`) || q.endsWith(`${path}/__init__.py`)) }
+      const [, mod, fn] = m, q = mod ? (f.binds.has(mod) && isModule(target(p, mod)) ? target(p, mod) : undefined) : f.locals.has(fn) ? p : f.binds.has(fn) ? target(p, fn) : undefined
+      const name = mod || f.locals.has(fn) ? fn : f.binds.get(fn)?.split('.').at(-1) ?? fn, g = q && files.get(q)?.locals.get(name)
+      if (!g || seen.has(`${q}::${name}`)) continue
+      seen.add(`${q}::${name}`)
+      for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'refuses'] as const) for (const y of g[k]) into[k].add(y)
+      into.money ||= g.money; into.writes ||= g.writes
+      pyFold(q!, g, into, seen)
+    }
+  }
+  // Django: walk urlpatterns down from each urls.py nobody includes. Every view becomes a route in the file that defines it.
+  const djOf = (p?: string) => p ? (files.get(p) as PyFacts | undefined)?.dj : undefined
+  const djFiles = [...files].filter(([p]) => p.endsWith('.py') && djOf(p)).map(([p]) => [p, djOf(p)!] as const)
+  const djDrf = djFiles.map(([, d]) => d.drf).find(x => x !== undefined) ?? false, djLoginMw = djFiles.some(([, d]) => d.loginMw)
+  const djInclude = (p: string, inc: string) => resolve(p, `py:${inc}`) ?? target(p, inc.split('.')[0])
+  type Found = { file: string; name: string; guard?: boolean; actions?: Record<string, string>; pc?: string }
+  // a name in a module: defined there, assigned there (wipe = Wipe.as_view()), imported into it (views/__init__.py re-exports), or from a `from x import *`
+  const djFind = (p: string | undefined, name: string, seen = new Set<string>()): Found | undefined => {
+    const d = djOf(p); if (!d || seen.has(`${p}::${name}`)) return undefined
+    seen.add(`${p}::${name}`)
+    const al = d.aliases.get(name)
+    if (d.views.has(name) || d.classes.has(name) || d.routers.has(name)) return { file: p!, name, guard: al?.view === name && al.guard }   // wipe = login_required(wipe)
+    if (al) { const r = djRef(p!, al.view, seen); return r && { ...r, guard: r.guard || al.guard, actions: r.actions ?? al.actions, pc: r.pc ?? al.pc } }
+    const b = files.get(p!)!.binds.get(name)
+    if (b) { const q = target(p!, name); if (q && q !== p) return djFind(q, b.split('.').at(-1)!, seen) }
+    for (const st of d.stars) { const r = djFind(resolve(p!, `py:${st}.x`), name, seen); if (r) return r }
+  }
+  const djRef = (p: string, ref: string, seen?: Set<string>) => { const [head, ...rest] = ref.split('.')
+    return rest.length ? djFind(target(p, head) ?? (djOf(p)?.classes.has(head) ? p : undefined), rest.at(-1)!, seen) : djFind(p, head, seen) }
+  // A class and its base classes in Python's order (depth first, a shared base after every class that uses it), followed through imports.
+  // bases: the names from outside the app (ModelViewSet, LoginRequiredMixin, ...) in that order; a base imported from rest_framework counts as DRF.
+  // ponytail: "last occurrence wins" depth-first order; matches C3 for diamonds, not for every pathological hierarchy
+  const djChain = (p: string, name: string) => {
+    const order: { key: string; cls?: DjClass; ext?: string }[] = []
+    const walk = (p: string, name: string, stack: Set<string>) => {
+      const c = djOf(p)?.classes.get(name), key = `${p}::${name}`
+      if (!c || stack.has(key)) return
+      order.push({ key, cls: c })
+      for (const b of c.bases) {
+        const r = djRef(p, b)
+        if (r && djOf(r.file)?.classes.has(r.name)) { walk(r.file, r.name, new Set([...stack, key])); continue }
+        const from = files.get(p)!.binds.get(b.split('.')[0]) ?? ''
+        const ext = b.split('.').at(-1)!   // TokenViewBase from rest_framework_simplejwt is a DRF view too
+        order.push({ key: b, ext: /rest_framework/.test(from) && !/APIView$|ViewSet$|Mixin$/.test(ext) ? 'APIView' : ext })
+      }
+    }
+    walk(p, name, new Set())
+    const last = order.filter((x, i) => !order.slice(i + 1).some(y => y.key === x.key))
+    return { chain: last.flatMap(x => x.cls ? [x.cls] : []), bases: last.flatMap(x => x.ext ? [x.ext] : []) }
+  }
+  const djRouter = (p: string, inc: string) => { const r = /^\w+\.urls$/.test(inc) && djFind(p, inc.split('.')[0]); return r ? { file: r.file, regs: djOf(r.file)!.routers.get(r.name) } : undefined }
+  const djIncluded = new Set(djFiles.flatMap(([p, d]) => d.urls.flatMap(u => u.include && !djRouter(p, u.include)?.regs ? [djInclude(p, u.include)] : [])))
+  // <int:pk>, (?P<pk>\d+) -> [pk]; an unnamed group (\d+) -> [id]; (?:new|edit) -> new; regex marks dropped
+  const djUrl = (s: string) => ('/' + s.replace(/\(\?P<(\w+)>[^)]*\)/g, '[$1]').replace(/\(\?:([^)|]*)[^)]*\)/g, '$1').replace(/<(?:\w+:)?(\w+)>/g, '[$1]').replace(/\((?!\?)[^)]*\)/g, '[id]')
+    .replace(/\/\?/g, '/').replace(/[\^$?\\]/g, '')).replace(/\/+/g, '/')
+  const djView = (p: string, ref: string, url: string, guard: boolean, viewset: boolean, u: { actions?: Record<string, string>; pc?: string } = {}) => {
+    const r = djRef(p, ref); if (!r) return
+    const d = djOf(r.file)!, actions = u.actions ?? r.actions, pc = u.pc ?? r.pc
+    // as_view(permission_classes=[AllowAny]) sets it on the instance: it wins over the class's own, not over a login mixin
+    let routes = d.views.get(r.name) ?? (() => { const { chain, bases } = djChain(r.file, r.name)
+      return djClassRoutes(pc ? [{ bases: [], pc, md: new Set(), open: false, defs: [], rest: empty() }, ...chain] : chain, bases, () => empty()) })()
+    if (actions) routes = Object.entries(actions).flatMap(([m, a]) => { const x = routes.find(x => x.act === a); return x ? [{ ...x, method: m, sub: '' }] : [] })   // as_view({'get': 'list'})
+    for (const x of routes) if (viewset || x.sub === '') {
+      // a function view with no method check: POST if it (or a helper it calls) changes data
+      let method = x.method
+      if (method === 'ANY') { const t = empty(); pyFold(r.file, x.facts, t, new Set()); method = x.facts.writes || x.facts.money || x.facts.outside.size || t.writes || t.written.size || t.money || t.outside.size ? 'POST' : 'GET' }
+      const own = x.guard
+      const g = own === undefined ? (x.drf ? (djDrf === 'writes' ? method !== 'GET' : djDrf) : false) : own === 'writes' ? method !== 'GET' : own
+      // LoginRequiredMiddleware skips @login_not_required views, and DRF views (DRF 3.16+ exempts them: its own permissions decide)
+      files.get(r.file)!.handlers.push({ server: '', method, path: djUrl(url + (viewset ? x.sub + '/' : '')), guard: guard || !!r.guard || g || djLoginMw && !x.open && !x.drf, mw: [], facts: x.facts })
+    }
+  }
+  const djWalk = (p: string, pre: string, guard: boolean, seen: Set<string>) => {
+    if (seen.has(p)) return
+    for (const u of djOf(p)!.urls) {
+      const router = u.include && djRouter(p, u.include)
+      if (router && router.regs) for (const r of router.regs) djView(router.file, r.view, pre + u.path + (u.path && !u.path.endsWith('/') ? '/' : '') + r.prefix, guard, true)
+      else if (u.include) { const q = djInclude(p, u.include); if (q && djOf(q)) djWalk(q, pre + u.path, guard || u.guard, new Set([...seen, p])) }
+      else if (u.view) djView(p, u.view, pre + u.path, guard || u.guard, false, u)
+    }
+  }
+  for (const [p, d] of djFiles) if (d.urls.length && !djIncluded.has(p)) djWalk(p, '', false, new Set())
+
   for (const [p, f] of [...files]) {
     const pre = f.handlers.length ? prefix(p) : null
     for (const h of f.handlers) {
@@ -580,6 +673,7 @@ export function appFacts(snap: Snap) {
       const hf = h.handler ? f.locals.get(h.handler) ?? (target(p, h.handler) ? files.get(target(p, h.handler)!)?.locals.get(h.handler) : undefined) ?? h.facts : h.facts
       for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'fetches', 'refuses'] as const) for (const x of hf[k]) unit[k].add(x)
       unit.money ||= hf.money
+      if (p.endsWith('.py')) pyFold(p, hf, unit, new Set())
       unit.fns.set(h.method, hf.printed)
       unit.printed += `\n${h.method} ${hf.printed}`
       // Logged in if every handler that changes something checks (or, with none, every handler does).
@@ -656,7 +750,7 @@ function outsidePhrase(o: string) {
   const [svc, chain] = o.split(': ')
   if (chain === 'checkout.sessions.create') return `starts a ${svc} checkout`
   if (chain === 'webhooks.constructEvent') return `checks that messages really come from ${svc} ✓`
-  if (EMAIL.has(svc) && /emails?\.send|send/.test(chain)) return `emails people through ${svc}`
+  if (EMAIL.has(svc) && /emails?\.send|send/.test(chain)) return svc === 'email' ? 'emails people' : `emails people through ${svc}`
   if (chain === 'request') return `calls ${svc}`
   const parts = chain.split('.'), verb = parts.at(-1)!, what = singular(words(parts.at(-2) ?? ''))
   return VERBS[verb] ? `asks ${svc} to ${VERBS[verb]} ${verb === 'list' ? pluralize(what) : `a ${what}`}` : `calls ${svc} (${chain})`
@@ -790,7 +884,10 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         if (b.auth) clauses.push('requires login ✓')
         else if (!b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url)) clauses.push('works without logging in')   // read-only; changing ones get a warning instead
       } else {
-        for (const x of newOnly(a.written, b.written)) clauses.push(`saves ${things(x)}`)
+        // what it now does to them: an address that gains update and delete doesn't "save" anything new
+        // (ops aren't kept per table, so only when it writes to that one table alone)
+        const verbs = b.written.size > 1 ? [] : ([['create', 'saves'], ['update', 'updates'], ['delete', 'deletes']] as const).filter(([o]) => b.ops.has(o) && (!a.ops.has(o) || !a.written.size)).map(([, v]) => v)
+        for (const x of newOnly(a.written, b.written)) clauses.push(`${list(verbs.length ? [...verbs] : ['saves'])} ${things(x)}`)
         for (const x of newOnly(a.tables, b.tables).filter(x => !b.written.has(x))) clauses.push(`reads ${things(x)}`)
         if (!a.money && b.money) clauses.push('charges customers 💰')
         // only when there are more ways to say no than before: a reworded message isn't a new rule
@@ -905,6 +1002,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     ship.push('django' in B.deps
       ? 'Update your database: run `python manage.py makemigrations`, then `python manage.py migrate` (also on your live site). The models changed, but no migration was created.'
       : 'Update your database: create a migration (`alembic revision --autogenerate`, or `flask db migrate` with Flask-Migrate) and apply it (`alembic upgrade head` / `flask db upgrade`), also on your live site. The models changed, but no migration was created.')
+  // a migration the new code depends on: until it runs on the live database, those parts fail
+  if (newPyMigrations.length) ship.push(`Apply ${list(newPyMigrations)} to your live database before the new code goes live (${'django' in B.deps ? '`python manage.py migrate`'
+    : '`alembic upgrade head`, or `flask db upgrade` with Flask-Migrate'}), or the parts that use it will fail.`)
   for (const m of newPyMigrations) {
     const up = (after.get(m) ?? '').split(/def downgrade|def backwards/)[0]
     if (/op\.drop_(table|column)|RemoveField|DeleteModel|\bDROP\b/.test(up)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)

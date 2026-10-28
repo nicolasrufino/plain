@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { report, snapshot, tanstackRoute } from '../src/plain.ts'
+import { report, snapshot, tanstackRoute, appFacts } from '../src/plain.ts'
 import { recapCli } from '../src/session.ts'
 import { readDb, findings } from '../src/supabase.ts'
 
@@ -534,4 +534,237 @@ def checkout(user = Depends(get_current_user)):
   assert.ok(!ask("add a footer but don't touch src/auth.ts").includes('as you asked'))
   assert.equal(ask('edit src/auth.ts, then src/auth.ts again').match(/as you asked/g)?.length, 1)
   console.log('ok (review 6)')
+}
+
+// Django: urls.py down through include(), function and class views, DRF routers, and who the settings let in.
+{
+  const dj = { 'requirements.txt': 'Django==5.1\ndjangorestframework==3.15\n',
+    'mysite/urls.py': "from django.contrib import admin\nfrom django.urls import path, include\nurlpatterns = [\n    path('admin/', admin.site.urls),\n    path('', include('shop.urls')),\n    path('api/', include('api.urls')),\n]\n",
+    'shop/models.py': "from django.db import models\nclass Order(models.Model):\n    total = models.IntegerField()\nclass Coupon(models.Model):\n    code = models.CharField(max_length=20)\n",
+    'api/urls.py': "from django.urls import path, include\nfrom rest_framework.routers import DefaultRouter\nfrom .views import OrderViewSet\nrouter = DefaultRouter()\nrouter.register(r'orders', OrderViewSet)\nurlpatterns = [path('', include(router.urls))]\n",
+    'api/views.py': "from rest_framework import viewsets\nfrom shop.models import Order\nclass OrderViewSet(viewsets.ReadOnlyModelViewSet):\n    queryset = Order.objects.all()\n" }
+  const shop = (urls: string, views: string) => ({ 'shop/urls.py': `from django.urls import path, re_path\nfrom django.contrib.auth.decorators import login_required\nfrom . import views\nurlpatterns = [\n${urls}]\n`,
+    'shop/views.py': `from django.shortcuts import render, redirect\nfrom django.views import View\nfrom .models import Order, Coupon\n${views}` })
+  const base = { ...dj, ...shop("    path('orders/', views.order_list),\n", "def order_list(request):\n    return render(request, 'orders.html', {'orders': Order.objects.all()})\n") }
+  const viewset = "from rest_framework import viewsets, permissions\nfrom rest_framework.decorators import action\nfrom shop.models import Order\nclass OrderViewSet(viewsets.ModelViewSet):\n    queryset = Order.objects.all()\n    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])\n    def refund(self, request, pk=None):\n        Order.objects.filter(pk=pk).update(status='refunded')\n"
+  // DRF lets everyone in unless settings say otherwise: a viewset that starts changing data is open
+  const c1 = card(base, { ...base, 'api/views.py': viewset,
+    ...shop(`    path('orders/', views.order_list),
+    path('orders/<int:pk>/cancel/', views.cancel_order),
+    re_path(r'^coupons/(?P<code>\\w+)/$', views.CouponView.as_view()),
+    path('account/', login_required(views.account)),
+    path('orders/new/', views.OrderCreate.as_view()),
+`, `from django.views.decorators.http import require_POST
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views.generic import CreateView
+def order_list(request):
+    return render(request, 'orders.html', {'orders': Order.objects.all()})
+
+@require_POST
+def cancel_order(request, pk):
+    Order.objects.filter(pk=pk).delete()
+    return redirect('orders')
+
+class CouponView(View):
+    def get(self, request, code):
+        return JsonResponse({'ok': Coupon.objects.filter(code=code).exists()})
+    def post(self, request, code):
+        if not request.user.is_staff:
+            return JsonResponse({'error': 'no'}, status=403)
+        Coupon.objects.create(code=code)
+
+def account(request):
+    return render(request, 'account.html')
+
+class OrderCreate(LoginRequiredMixin, CreateView):
+    model = Order
+    fields = ['total']
+`) })
+  for (const e of ['⚠ Anyone can use the orders part of your server without logging in.', '⚠ Anyone can use the order part of your server without logging in.',
+    '⚠ Anyone can use the order cancel part', 'New server code that deletes orders. /orders/[pk]/cancel', 'lists coupons, saves new ones and requires login ✓. /coupons/[code]',
+    'requires login ✓. /account', 'saves new orders and requires login ✓. /orders/new', 'updates orders and requires login ✓. /api/orders/[pk]/refund',
+    'now saves orders. /api/orders', 'now updates and deletes orders. /api/orders/[pk]'])
+    assert.ok(c1.includes(e), `django missing "${e}"\n${c1}`)
+  for (const e of ['admin part', 'lists orders, saves']) assert.ok(!c1.includes(e), `django should not say "${e}"\n${c1}`)
+  // the same viewset when settings require login for every DRF view (or only for changes)
+  const settings = (classes: string) => ({ 'mysite/settings.py': `REST_FRAMEWORK = {\n    'DEFAULT_PERMISSION_CLASSES': [\n        ${classes},\n    ],\n}\n` })
+  const c2 = card({ ...base, ...settings("'rest_framework.permissions.IsAuthenticated'") }, { ...base, ...settings("'rest_framework.permissions.IsAuthenticated'"), 'api/views.py': viewset })
+  assert.ok(!c2.includes('⚠'), `django settings login\n${c2}`)
+  const c3 = card({ ...base, ...settings("'rest_framework.permissions.IsAuthenticatedOrReadOnly'") }, { ...base, ...settings("'rest_framework.permissions.IsAuthenticatedOrReadOnly'"), 'api/views.py': viewset })
+  assert.ok(!c3.includes('⚠'), `django settings read-only\n${c3}`)
+  // AllowAny on the class overrides the settings; IsOwnerOrReadOnly alone isn't a login check (anyone can still create)
+  for (const pc of ['permissions.AllowAny', 'IsOwnerOrReadOnly']) {
+    const c = card({ ...base, ...settings("'rest_framework.permissions.IsAuthenticated'") }, { ...base, ...settings("'rest_framework.permissions.IsAuthenticated'"),
+      'api/views.py': viewset.replace('    queryset', `    permission_classes = [${pc}]\n    queryset`) })
+    assert.ok(c.includes('⚠ Anyone can use the orders part'), `django ${pc}\n${c}`)
+  }
+  // Django 5.1 LoginRequiredMiddleware: every view needs login, except @login_not_required
+  const mw = { 'mysite/settings.py': "MIDDLEWARE = [\n    'django.contrib.auth.middleware.AuthenticationMiddleware',\n    'django.contrib.auth.middleware.LoginRequiredMiddleware',\n]\n" }
+  const c4 = card({ ...base, ...mw }, { ...base, ...mw, ...shop("    path('orders/', views.order_list),\n    path('orders/<int:pk>/cancel/', views.cancel_order),\n    path('signup/', views.signup),\n",
+    "from django.contrib.auth.decorators import login_not_required\ndef order_list(request):\n    return render(request, 'orders.html', {'orders': Order.objects.all()})\ndef cancel_order(request, pk):\n    Order.objects.filter(pk=pk).delete()\n@login_not_required\ndef signup(request):\n    if request.method == 'POST':\n        User.objects.create(email=request.POST['email'])\n") })
+  assert.ok(c4.includes('deletes orders and requires login ✓') && /saves new ones\. \/signup/.test(c4), `django middleware\n${c4}`)   // signup is public on purpose: no ✓, no ⚠
+  // losing a login check is a change, even with the view untouched; @api_view with no permission falls back to the settings
+  const acct = (wrap: boolean) => ({ ...base, ...shop(`    path('orders/', views.order_list),\n    path('wipe/', ${wrap ? 'login_required(views.wipe)' : 'views.wipe'}),\n`,
+    "def order_list(request):\n    return render(request, 'orders.html', {'orders': Order.objects.all()})\ndef wipe(request):\n    Order.objects.all().delete()\n") })
+  const c5 = card(acct(true), acct(false))
+  assert.ok(c5.includes('⚠ Anyone can use the wipe part'), `django lost login\n${c5}`)
+  const c6 = card(base, { ...base, 'api/urls.py': "from django.urls import path\nfrom api import views\nurlpatterns = [path('refund/<int:pk>/', views.refund)]\n",
+    'api/views.py': "from rest_framework.decorators import api_view\n@api_view(['POST'])\ndef refund(request, pk):\n    Order.objects.filter(pk=pk).update(status='refunded')\n" })
+  assert.ok(c6.includes('⚠ Anyone can use the refund part'), `django api_view\n${c6}`)
+  console.log('ok (django)')
+}
+
+// Review 7 (2026-10-28): Django and DRF, each one a confirmed false ✓, false ⚠ or missed route.
+{
+  const site = (extra: Record<string, string>) => ({ 'requirements.txt': 'Django==5.1\ndjangorestframework==3.16\n',
+    'mysite/urls.py': "from django.urls import path, include\nurlpatterns = [\n    path('', include('shop.urls')),\n    path('api/', include('api.urls')),\n]\n",
+    'shop/models.py': "from django.db import models\nclass Order(models.Model):\n    total = models.IntegerField()\n", ...extra })
+  const r = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries(site(files))))
+    return [...a.routes].filter(([, x]) => x.kind === 'endpoint').map(([k, x]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : 'open'} ${[...a.files.get(k)!.fns.keys()].join(',')}`).sort().join(' | ') }
+  const vs = "from rest_framework import viewsets, permissions\nfrom shop.models import Order\n"
+  const router = (reg = "router.register(r'orders', OrderViewSet)", tail = 'urlpatterns = [path(\'\', include(router.urls))]') =>
+    `from django.urls import path, include\nfrom rest_framework.routers import DefaultRouter\nfrom .views import OrderViewSet\nrouter = DefaultRouter()\n${reg}\n${tail}\n`
+  const shopUrls = (u: string) => `from django.urls import path\nfrom django.contrib.auth.decorators import login_required, permission_required, user_passes_test\nfrom . import views\nurlpatterns = [${u}]\n`
+  const wipeView = (deco: string, cls = 'View') => `from django.views import View\nfrom django.utils.decorators import method_decorator\nfrom django.contrib.auth.decorators import login_required\nfrom django.views.decorators.cache import never_cache\ndecorators = [never_cache, login_required]\n${deco}class Wipe(${cls}):\n    def get(self, request):\n        return None\n    def post(self, request):\n        Order.objects.all().delete()\n`
+  const cases: [string, Record<string, string>, string][] = [
+    // DRF 3.16 exempts its views from LoginRequiredMiddleware
+    ['login middleware does not cover DRF', { 'mysite/settings.py': "MIDDLEWARE = ['django.contrib.auth.middleware.LoginRequiredMiddleware']\n", 'api/urls.py': router(), 'api/views.py': vs + 'class OrderViewSet(viewsets.ModelViewSet):\n    queryset = Order.objects.all()\n' },
+      '/api/orders open GET,POST | /api/orders/[pk] open GET,PUT,PATCH,DELETE'],
+    // a non-DRF mixin doesn't make a Django view follow DRF settings
+    ['django mixin is not DRF', { 'mysite/settings.py': "REST_FRAMEWORK = {'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated']}\n",
+      'shop/urls.py': shopUrls("path('orders/<int:pk>/edit/', views.OrderUpdate.as_view())"), 'shop/views.py': 'class OrderUpdate(SuccessMessageMixin, UpdateView):\n    model = Order\n' },
+      '/orders/[pk]/edit open GET,POST'],
+    // base classes in the project, in the same file and another one
+    ['project base with login + @action', { 'api/urls.py': router(), 'api/views.py': vs + "class Authed(viewsets.ModelViewSet):\n    permission_classes = [permissions.IsAuthenticated]\nclass OrderViewSet(Authed):\n    queryset = Order.objects.all()\n    @action(detail=True, methods=['post'])\n    def refund(self, request, pk=None):\n        pass\n" },
+      '/api/orders login GET,POST | /api/orders/[pk] login GET,PUT,PATCH,DELETE | /api/orders/[pk]/refund login POST'],
+    ['project mixin in another file', { 'shop/mixins.py': 'from django.contrib.auth.mixins import LoginRequiredMixin\nclass OwnerOnly(LoginRequiredMixin):\n    pass\n',
+      'shop/urls.py': shopUrls("path('o/<int:pk>/delete/', views.OrderDelete.as_view())"), 'shop/views.py': 'from .mixins import OwnerOnly\nclass OrderDelete(OwnerOnly, DeleteView):\n    model = Order\n' }, '/o/[pk]/delete login GET,POST'],
+    ['open project base in another file', { 'shop/base.py': 'from django.views import View\nclass Base(View):\n    pass\n',
+      'shop/urls.py': shopUrls("path('wipe/', views.Wipe.as_view())"), 'shop/views.py': 'from .base import Base\nclass Wipe(Base):\n    def post(self, request):\n        Order.objects.all().delete()\n' }, '/wipe open POST'],
+    ['get_permissions', { 'api/urls.py': router(), 'api/views.py': vs + "class OrderViewSet(viewsets.ModelViewSet):\n    queryset = Order.objects.all()\n    def get_permissions(self):\n        if self.action in ('list', 'retrieve'):\n            return [permissions.AllowAny()]\n        return [permissions.IsAuthenticated()]\n" },
+      '/api/orders login GET,POST | /api/orders/[pk] login GET,PUT,PATCH,DELETE'],
+    // method_decorator: on dispatch, on post, a list, a list variable; name='get' leaves POST open
+    ...([['@method_decorator(login_required, name="dispatch")\n', 'login'], ['@method_decorator([never_cache, login_required], name="dispatch")\n', 'login'],
+      ['@method_decorator(decorators, name="dispatch")\n', 'login'], ['@method_decorator(login_required, name="get")\n', 'open']] as const)
+      .map(([d, want]): [string, Record<string, string>, string] => [d, { 'shop/urls.py': shopUrls("path('wipe/', views.Wipe.as_view())"), 'shop/views.py': wipeView(d) }, `/wipe ${want} GET,POST`]),
+    ['method_decorator on post', { 'shop/urls.py': shopUrls("path('wipe/', views.Wipe.as_view())"), 'shop/views.py': wipeView('').replace('    def post', '    @method_decorator(login_required)\n    def post') }, '/wipe login GET,POST'],
+    // wrappers in urls.py that take arguments first
+    ...["permission_required('shop.delete_order')(views.wipe)", 'user_passes_test(lambda u: u.is_staff)(views.wipe)', "login_required(login_url='/x/')(views.wipe)"]
+      .map((w): [string, Record<string, string>, string] => [w, { 'shop/urls.py': shopUrls(`path('wipe/', ${w})`), 'shop/views.py': 'def wipe(request):\n    Order.objects.all().delete()\n' }, '/wipe login POST']),
+    // composed DRF permissions
+    ['IsAuthenticated | ReadOnly', { 'api/urls.py': router(), 'api/views.py': vs + 'class OrderViewSet(viewsets.ReadOnlyModelViewSet):\n    permission_classes = [IsAuthenticated | ReadOnly]\n    queryset = Order.objects.all()\n' }, '/api/orders open GET | /api/orders/[pk] open GET'],
+    ['~IsAuthenticated', { 'api/urls.py': router(), 'api/views.py': vs + 'class OrderViewSet(viewsets.ModelViewSet):\n    permission_classes = [~IsAuthenticated]\n    queryset = Order.objects.all()\n' }, '/api/orders open GET,POST | /api/orders/[pk] open GET,PUT,PATCH,DELETE'],
+    // routes that were missed
+    ['include tuple + namespace', { 'mysite/urls.py': "from django.urls import path, include\nurlpatterns = [path('api/', include(('api.urls', 'api'), namespace='api'))]\n", 'api/urls.py': router(undefined, "urlpatterns = [path('v1/', include((router.urls, 'api'), namespace='v1'))]"),
+      'api/views.py': vs + 'class OrderViewSet(viewsets.ModelViewSet):\n    queryset = Order.objects.all()\n' }, '/api/v1/orders open GET,POST | /api/v1/orders/[pk] open GET,PUT,PATCH,DELETE'],
+    ['router in another file, [*router.urls]', { 'api/routers.py': "from rest_framework.routers import DefaultRouter\nfrom .views import OrderViewSet\nrouter = DefaultRouter()\nrouter.register('orders', OrderViewSet)\n",
+      'api/urls.py': 'from .routers import router\nurlpatterns = [*router.urls]\n', 'api/views.py': vs + 'class OrderViewSet(viewsets.ReadOnlyModelViewSet):\n    queryset = Order.objects.all()\n' }, '/api/orders open GET | /api/orders/[pk] open GET'],
+    ['views package re-export', { 'shop/urls.py': shopUrls("path('wipe/', views.wipe)"), 'shop/views/__init__.py': 'from .orders import wipe\n', 'shop/views/orders.py': 'def wipe(request):\n    Order.objects.all().delete()\n' }, '/wipe open POST'],
+    ['star import', { 'shop/urls.py': "from django.urls import path\nfrom .views import *\nurlpatterns = [path('wipe/', wipe)]\n", 'shop/views.py': 'def wipe(request):\n    Order.objects.all().delete()\n' }, '/wipe open POST'],
+    // methods a viewset turns off, or a route maps
+    ['http_method_names', { 'api/urls.py': router(), 'api/views.py': vs + "class OrderViewSet(viewsets.ModelViewSet):\n    http_method_names = ['get', 'head']\n    queryset = Order.objects.all()\n" }, '/api/orders open GET | /api/orders/[pk] open GET'],
+    ['as_view mapping', { 'api/urls.py': "from django.urls import path\nfrom .views import OrderViewSet\nurlpatterns = [path('orders/', OrderViewSet.as_view({'get': 'list'}))]\n", 'api/views.py': vs + 'class OrderViewSet(viewsets.ModelViewSet):\n    queryset = Order.objects.all()\n' }, '/api/orders open GET'],
+    ['re_path groups', { 'shop/urls.py': "from django.urls import re_path\nfrom . import views\nurlpatterns = [re_path(r'^orders/(\\d+)/(?:edit|change)/?$', views.o)]\n", 'shop/views.py': 'def o(request, pk):\n    return None\n' }, '/orders/[id]/edit open GET'],
+  ]
+  for (const [name, files, want] of cases) assert.equal(r(files), want, `review 7: ${name}`)
+  // same-named apps: the one next to the project wins
+  const nested = { 'backend/mysite/urls.py': "from django.urls import path, include\nurlpatterns = [path('shop/', include('shop.urls'))]\n",
+    'backend/shop/urls.py': "from django.urls import path\nfrom . import views\nurlpatterns = [path('wipe/', views.wipe)]\n", 'backend/shop/views.py': 'def wipe(request):\n    Order.objects.all().delete()\n',
+    'backend/legacy/shop/urls.py': "from django.urls import path\nfrom . import views\nurlpatterns = [path('old/', views.old)]\n", 'backend/legacy/shop/views.py': 'def old(request):\n    return None\n' }
+  assert.ok(r(nested).includes('/shop/wipe open POST'), r(nested))
+  // what a view does includes the helpers it calls, instance .save()/.delete(), and ORM chains split over lines
+  const c = card(site({}), site({ 'shop/urls.py': shopUrls("path('pay/', views.pay), path('hook/', views.hook), path('rm/<int:pk>/', views.rm)"),
+    'shop/services.py': 'def place_order(user):\n    order = Order(customer=user)\n    order.save()\n    return order\n',
+    'shop/views.py': "from .services import place_order\n@login_required\n@require_POST\ndef pay(request):\n    place_order(request.user)\n@require_POST\ndef hook(request):\n    Order.objects.filter(\n        pk=1,\n    ).update(status='paid')\n@require_POST\ndef rm(request, pk):\n    order = Order.objects.get(pk=pk)\n    order.delete()\n" }))
+  for (const e of ['saves new orders and requires login ✓. /pay', 'updates orders. /hook', '⚠ Anyone can use the hook part', 'deletes orders. /rm/[pk]'])
+    assert.ok(c.includes(e), `review 7 missing "${e}"\n${c}`)
+  console.log('ok (review 7)')
+}
+
+// Review 8 (2026-10-28): Django and DRF, second pass. Commented-out code, get_permissions branches, Python's base class order, and more ways to write urls.py.
+{
+  const site = (extra: Record<string, string>) => ({ 'requirements.txt': 'Django==5.1\ndjangorestframework==3.16\n',
+    'mysite/urls.py': "from django.urls import path, include\nurlpatterns = [\n    path('', include('shop.urls')),\n    path('api/', include('api.urls')),\n]\n",
+    'shop/models.py': "from django.db import models\nclass Order(models.Model):\n    total = models.IntegerField()\n", ...extra })
+  const r = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries(site(files))))
+    return [...a.routes].filter(([, x]) => x.kind === 'endpoint').map(([k, x]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : 'open'} ${[...a.files.get(k)!.fns.keys()].join(',')}`).sort().join(' | ') }
+  const vs = "from rest_framework import viewsets, permissions\nfrom rest_framework.permissions import *\nfrom shop.models import Order\n"
+  const ms = (body: string) => vs + `class OrderViewSet(viewsets.ModelViewSet):\n    queryset = Order.objects.all()\n${body}`
+  const router = "from django.urls import path, include\nfrom rest_framework.routers import DefaultRouter\nfrom .views import OrderViewSet\nrouter = DefaultRouter()\nrouter.register(r'orders', OrderViewSet)\nurlpatterns = [path('', include(router.urls))]\n"
+  const shopUrls = (u: string) => `from django.urls import path, include\nfrom . import views\nurlpatterns = [${u}]\n`
+  const wipe = 'def wipe(request):\n    Order.objects.all().delete()\n', wipeCls = (bases: string, pre = '') => `from django.views import View\nfrom django.contrib.auth.mixins import LoginRequiredMixin\n${pre}class Wipe(${bases}):\n    def post(self, request):\n        Order.objects.all().delete()\n`
+  const mw = "MIDDLEWARE = [\n    'django.contrib.auth.middleware.AuthenticationMiddleware',\n    'django.contrib.auth.middleware.LoginRequiredMiddleware',\n]\n"
+  const OPEN = '/api/orders open GET,POST | /api/orders/[pk] open GET,PUT,PATCH,DELETE', LOGIN = OPEN.replace(/open/g, 'login')
+  const cases: [string, Record<string, string>, string][] = [
+    ['get_permissions: create open', { 'api/urls.py': router, 'api/views.py': ms("    def get_permissions(self):\n        if self.action == 'create':\n            return [AllowAny()]\n        return [IsAuthenticated()]\n") },
+      '/api/orders open GET,POST | /api/orders/[pk] login GET,PUT,PATCH,DELETE'],
+    ['get_permissions: super()', { 'api/urls.py': router, 'api/views.py': ms('    permission_classes = [IsAuthenticated]\n    def get_permissions(self):\n        return super().get_permissions()\n') }, LOGIN],
+    ['commented-out setting', { 'mysite/settings.py': "REST_FRAMEWORK = {'DEFAULT_PERMISSION_CLASSES': [\n    'rest_framework.permissions.AllowAny',\n    # 'rest_framework.permissions.IsAuthenticated',\n]}\n", 'api/urls.py': router, 'api/views.py': ms('') }, OPEN],
+    ['commented-out middleware', { 'mysite/settings.py': mw.replace("    'django.contrib.auth.middleware.Login", "    # 'django.contrib.auth.middleware.Login"), 'shop/urls.py': shopUrls("path('wipe/', views.wipe)"), 'shop/views.py': wipe }, '/wipe open POST'],
+    ['commented-out permission class', { 'api/urls.py': router, 'api/views.py': ms('    permission_classes = [\n        AllowAny,  # was IsAuthenticated\n    ]\n') }, OPEN],
+    ['commented-out raise', { 'shop/urls.py': shopUrls("path('wipe/', views.wipe)"), 'shop/views.py': 'def wipe(request):\n    if not request.user.is_authenticated:\n        pass  # raise PermissionDenied\n    Order.objects.all().delete()\n' }, '/wipe open POST'],
+    ['IsAuthenticatedOrCreate', { 'api/urls.py': router, 'api/views.py': ms('    permission_classes = [IsAuthenticatedOrCreate]\n') }, OPEN],
+    ['as_view(permission_classes=[AllowAny])', { 'api/urls.py': "from django.urls import path\nfrom .views import Wipe\nurlpatterns = [path('wipe/', Wipe.as_view(permission_classes=[AllowAny]))]\n",
+      'api/views.py': vs + 'from rest_framework.views import APIView\nclass Wipe(APIView):\n    permission_classes = [IsAuthenticated]\n    def post(self, request):\n        Order.objects.all().delete()\n' }, '/api/wipe open POST'],
+    ['diamond: B overrides the shared base', { 'api/urls.py': router, 'api/views.py': vs + 'class Base(viewsets.ModelViewSet):\n    permission_classes = [IsAuthenticated]\nclass A(Base):\n    pass\nclass B(Base):\n    permission_classes = [AllowAny]\nclass OrderViewSet(A, B):\n    queryset = Order.objects.all()\n' }, OPEN],
+    ['mixin right of View', { 'shop/urls.py': shopUrls("path('wipe/', views.Wipe.as_view())"), 'shop/views.py': wipeCls('View, LoginRequiredMixin') }, '/wipe open POST'],
+    ['middleware: DRF base from another package', { 'mysite/settings.py': mw, 'shop/urls.py': shopUrls("path('wipe/', views.Wipe.as_view())"), 'shop/views.py': 'from rest_framework_simplejwt.views import TokenViewBase\nclass Wipe(TokenViewBase):\n    def post(self, request):\n        Order.objects.all().delete()\n' }, '/wipe open POST'],
+    ['middleware: @login_not_required on a class does nothing', { 'mysite/settings.py': mw, 'shop/urls.py': shopUrls("path('wipe/', views.Wipe.as_view())"), 'shop/views.py': wipeCls('View', '@login_not_required\n') }, '/wipe login POST'],
+    ['inline include', { 'shop/urls.py': shopUrls("path('x/', include([path('wipe/', views.wipe)]))"), 'shop/views.py': wipe }, '/x/wipe open POST'],
+    ['include(variable)', { 'shop/urls.py': "from django.urls import path, include\nfrom . import views\nextra = [path('wipe/', views.wipe)]\nurlpatterns = [path('x/', include(extra))]\n", 'shop/views.py': wipe }, '/x/wipe open POST'],
+    ['urlpatterns.append', { 'shop/urls.py': shopUrls('') + "urlpatterns.append(path('wipe/', views.wipe))\n", 'shop/views.py': wipe }, '/wipe open POST'],
+    ['register(prefix=, viewset=)', { 'api/urls.py': router.replace("router.register(r'orders', OrderViewSet)", "router.register(prefix='orders', viewset=OrderViewSet)"), 'api/views.py': ms('') }, OPEN],
+    ['typed request', { 'shop/urls.py': shopUrls("path('wipe/', views.wipe)"), 'shop/views.py': 'def wipe(request: HttpRequest) -> HttpResponse:\n    Order.objects.all().delete()\n' }, '/wipe open POST'],
+    ['view assigned in views.py', { 'shop/urls.py': shopUrls("path('wipe/', views.wipe)"), 'shop/views.py': wipeCls('View') + 'wipe = Wipe.as_view()\n' }, '/wipe open POST'],
+    ['async ORM', { 'shop/urls.py': shopUrls("path('wipe/', views.wipe)"), 'shop/views.py': 'async def wipe(request):\n    await Order.objects.all().adelete()\n' }, '/wipe open POST'],
+    ['writes only through a helper', { 'shop/urls.py': shopUrls("path('wipe/', views.wipe)"), 'shop/views.py': 'def clear():\n    Order.objects.all().delete()\ndef wipe(request):\n    clear()\n' }, '/wipe open POST'],
+  ]
+  for (const [name, files, want] of cases) assert.equal(r(files), want, `review 8: ${name}`)
+  // pyFold follows real calls only: cache.delete() isn't the delete() route in the same file (FastAPI, Flask too)
+  const fa = (extra: string) => ({ 'app/main.py': `from fastapi import FastAPI, Depends\napp = FastAPI()\n@app.get('/orders')\ndef orders():\n${extra}    return []\n@app.delete('/orders/{id}')\ndef delete(id: int, user = Depends(get_current_user)):\n    db.delete(order)\n` })
+  const c1 = card(fa(''), fa("    cache.delete('stale')\n"))
+  assert.ok(!c1.includes('⚠') && !c1.includes('deletes orders'), `review 8 pyFold\n${c1}`)
+  // a webhook that checks its signature is exempt from CSRF on purpose
+  const hook = (body: string) => ({ ...site({}), 'shop/urls.py': shopUrls("path('hook/', views.hook)"), 'shop/views.py': `from django.views.decorators.csrf import csrf_exempt\n@csrf_exempt\ndef hook(request):\n${body}    return None\n` })
+  assert.ok(!card(site({}), hook("    stripe.Webhook.construct_event(request.body, sig, secret)\n")).includes('csrf'), 'review 8 webhook csrf')
+  assert.ok(card(site({}), hook("    Order.objects.all().delete()\n")).includes('csrf'), 'review 8 csrf still flagged')
+  console.log('ok (review 8)')
+}
+
+// Review 9 (2026-10-28): Django and DRF, third pass.
+{
+  const site = (extra: Record<string, string>) => ({ 'requirements.txt': 'Django==5.1\ndjangorestframework==3.16\n',
+    'mysite/urls.py': "from django.urls import path, include\nurlpatterns = [\n    path('', include('shop.urls')),\n    path('api/', include('api.urls')),\n]\n",
+    'shop/models.py': "from django.db import models\nclass Order(models.Model):\n    total = models.IntegerField()\n", ...extra })
+  const r = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries(site(files))))
+    return [...a.routes].filter(([, x]) => x.kind === 'endpoint').map(([k, x]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : 'open'} ${[...a.files.get(k)!.fns.keys()].join(',')} ${[...a.files.get(k)!.written].join(',')}`).sort().join(' | ') }
+  const router = "from django.urls import path, include\nfrom rest_framework.routers import DefaultRouter\nfrom .views import OrderViewSet\nrouter = DefaultRouter()\nrouter.register(r'orders', OrderViewSet)\nurlpatterns = [path('', include(router.urls))]\n"
+  const gp = (body: string, extra = '') => ({ 'api/urls.py': router, 'api/views.py': `from rest_framework import viewsets\nfrom rest_framework.permissions import *\nfrom shop.models import Order\nclass OrderViewSet(viewsets.ModelViewSet):\n    queryset = Order.objects.all()\n${extra}    def get_permissions(self):\n${body}` })
+  const shop = (urls: string, views: string) => ({ 'shop/urls.py': `from django.urls import path\nfrom . import views\nurlpatterns = [${urls}]\n`, 'shop/views.py': views })
+  const CREATE_OPEN = '/api/orders open GET,POST Order | /api/orders/[pk] login GET,PUT,PATCH,DELETE Order'
+  const cases: [string, Record<string, string>, string][] = [
+    ['fetched then deleted', shop("path('o/<int:pk>/del/', views.rm)", 'from django.shortcuts import get_object_or_404\ndef rm(request, pk):\n    order = get_object_or_404(Order, pk=pk)\n    order.delete()\n'), '/o/[pk]/del open POST Order'],
+    ['serializer.save', shop("path('o/', views.make)", 'from rest_framework.decorators import api_view\n@api_view([\'POST\'])\ndef make(request):\n    serializer = OrderSerializer(data=request.data)\n    serializer.save()\n'), '/o open POST Order'],
+    ['wrapped condition', gp("        if self.action in (\n            'create',\n        ):\n            return [AllowAny()]\n        return [IsAuthenticated()]\n"), CREATE_OPEN],
+    ['branch sets permission_classes', gp("        if self.action == 'create':\n            self.permission_classes = [AllowAny]\n        return super().get_permissions()\n", '    permission_classes = [IsAuthenticated]\n'), CREATE_OPEN],
+    ['permission_classes_by_action', gp('        try:\n            return [p() for p in self.permission_classes_by_action[self.action]]\n        except KeyError:\n            return [p() for p in self.permission_classes]\n',
+      "    permission_classes = [IsAuthenticated]\n    permission_classes_by_action = {'create': [AllowAny]}\n"), CREATE_OPEN],
+    ['multi-line return', gp('        return [\n            IsAuthenticated(),\n        ]\n'), CREATE_OPEN.replace('open GET,POST', 'login GET,POST')],
+    ['not in a variable: skipped, never a false ✓', gp("        if self.action not in self.public_actions:\n            return [IsAuthenticated()]\n        return [AllowAny()]\n"), CREATE_OPEN.replace('login', 'open')],
+    ['two conditions: skipped', gp("        if self.request.method not in SAFE_METHODS and self.action != 'create':\n            return [IsAuthenticated()]\n        return [AllowAny()]\n"), CREATE_OPEN.replace('login', 'open')],
+    ['charges money: POST', shop("path('go/', views.go)", 'def go(request):\n    stripe.checkout.Session.create(mode="payment")\n'), '/go open POST '],
+    ['urlpatterns = a + b', { 'shop/urls.py': "from django.urls import path\nfrom . import views\na = [path('wipe/', views.wipe)]\nurlpatterns = a\n", 'shop/views.py': 'def wipe(request):\n    Order.objects.all().delete()\n' }, '/wipe open POST Order'],
+    ['wipe = login_required(wipe)', shop("path('wipe/', views.wipe)", 'def wipe(request):\n    Order.objects.all().delete()\nwipe = login_required(wipe)\n'), '/wipe login POST Order'],
+    ['shared outside base after its users', shop("path('wipe/', views.Wipe.as_view())", 'from django.views import View\nfrom django.contrib.auth.mixins import LoginRequiredMixin\nclass A(LoginRequiredMixin, View):\n    pass\nclass B(View):\n    pass\nclass Wipe(B, A):\n    def post(self, request):\n        Order.objects.all().delete()\n'), '/wipe login POST Order'],
+  ]
+  for (const [name, files, want] of cases) assert.equal(r(files), want, `review 9: ${name}`)
+  // pyFold: an object named like its module (from app.cache import cache) isn't the module; a function defined inside a handler isn't the route of the same name
+  const fl = (route: string) => ({ 'app/__init__.py': '', 'app/cache.py': 'class C:\n    def clear(self): pass\ncache = C()\ndef clear():\n    Order.query.delete()\n',
+    'app/routes.py': `from flask import Flask\nfrom app.cache import cache\napp = Flask(__name__)\n@app.get('/orders')\ndef orders():\n${route}    return 'x'\n` })
+  const fa = (route: string) => ({ 'app/main.py': `from fastapi import FastAPI, Depends\napp = FastAPI()\n@app.delete('/orders/{id}')\ndef remove(id: int, user = Depends(get_current_user)):\n    db.delete(db.get(Order, id))\n@app.get('/orders')\ndef orders():\n${route}    return []\n` })
+  for (const c of [card(fl(''), fl('    cache.clear()\n')), card(fa(''), fa('    def remove(x): return x\n    remove(1)\n'))]) assert.ok(!c.includes('⚠') && !c.includes('deletes'), `review 9 pyFold\n${c}`)
+  // a csrf_exempt view that only mentions a signature in a comment or a field name is still flagged
+  const hook = (body: string) => ({ ...site({}), ...shop("path('hook/', views.hook)", `from django.views.decorators.csrf import csrf_exempt\n@csrf_exempt\ndef hook(request):\n${body}    return None\n`) })
+  assert.ok(card(site({}), hook("    # TODO verify the signature\n    p.signature = request.POST['signature']\n")).includes('csrf'), 'review 9 csrf')
+  console.log('ok (review 9)')
 }
