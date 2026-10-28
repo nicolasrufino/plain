@@ -55,7 +55,8 @@ type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
   tables: Set<string>; ops: Set<string>; writes: boolean; sbAuth: boolean; env: Set<string>; auth: boolean; money: boolean   // sbAuth: supabase.auth.getUser(), a real check only on a server
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
-  texts: Set<string>; refuses: Set<string>; envReq: Set<string>; exports: Set<string>   // words on screen ("[price]" for a formatted price); "no" messages (4xx); env vars without a fallback
+  texts: Set<string>; refuses: Set<string>; envReq: Set<string>; exports: Set<string>
+  serverFns: Map<string, string>; serverRoute: boolean; pageGuard: boolean; globalGuard: '' | 'function' | 'request'   // TanStack Start   // words on screen ("[price]" for a formatted price); "no" messages (4xx); env vars without a fallback
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
   handlers: { server: string; method: string; path: string; guard: boolean; handler?: string; facts: FileFacts }[]  // Express-style routes
@@ -80,6 +81,7 @@ const empty = (printed = ''): FileFacts => ({
   outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(), headings: [], forms: 0,
   binds: new Map(), locals: new Map(), handlers: [], mounts: [], pages: [], calls: [], wrappers: new Map(),
   texts: new Set(), refuses: new Set(), envReq: new Set(), exports: new Set(),
+  serverFns: new Map(), serverRoute: false, pageGuard: false, globalGuard: '',
 })
 const fnLike = (n?: ts.Node) => !!n && (ts.isArrowFunction(n) || ts.isFunctionExpression(n))
 // `process.env.PORT || 3001` has a real default; `|| ''` or `?? undefined` only quiets TypeScript, the value is still needed
@@ -133,6 +135,40 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
     : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
   const visit = (n: ts.Node) => {
+    // TanStack Start server action: const book = createServerFn({ method: 'POST' }).middleware([auth]).validator(...).handler(async () => ...)
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && /^createServerFn\b/.test(n.initializer.getText(sf))) {
+      let method = 'GET', h: ts.Expression | undefined
+      const mw: ts.Expression[] = []
+      for (let c: ts.Node = n.initializer; ts.isCallExpression(c); c = ts.isPropertyAccessExpression(c.expression) ? c.expression.expression : c.expression) {
+        const name = ts.isPropertyAccessExpression(c.expression) ? c.expression.name.text : c.expression.getText(sf), a0 = c.arguments[0]
+        if (name === 'handler') h = a0
+        if (name === 'middleware' && a0 && ts.isArrayLiteralExpression(a0)) mw.push(...a0.elements)
+        if (name === 'createServerFn' && a0 && ts.isObjectLiteralExpression(a0))
+          method = str((a0.properties.find(q => ts.isPropertyAssignment(q) && q.name.getText(sf) === 'method') as ts.PropertyAssignment | undefined)?.initializer)?.toUpperCase() ?? 'GET'
+      }
+      if (h) { addHandler('', method, `(server action) ${n.name.text}`, mw, h); f.serverFns.set(n.name.text, method); return }
+    }
+    if (ts.isPropertyAssignment(n) || ts.isMethodDeclaration(n)) {
+      const key = n.name.getText(sf), val = ts.isPropertyAssignment(n) ? n.initializer : n
+      // createFileRoute('/api/x')({ server: { middleware: [auth], handlers: { GET, POST } } })
+      if (key === 'handlers' && ts.isObjectLiteralExpression(n.parent) && ts.isPropertyAssignment(n.parent.parent) && n.parent.parent.name.getText(sf) === 'server') {
+        f.serverRoute = true
+        const methods = (o: ts.Node): void => { if (ts.isObjectLiteralExpression(o)) for (const q of o.properties) if (q.name && METHODS.includes(q.name.getText(sf))) f.fns.set(q.name.getText(sf), q.getText(sf)); ts.forEachChild(o, methods) }
+        methods(val)
+      }
+      if (key === 'middleware' && ts.isArrayLiteralExpression(val) && ts.isObjectLiteralExpression(n.parent) && ts.isPropertyAssignment(n.parent.parent) && n.parent.parent.name.getText(sf) === 'server'
+        && val.elements.some(isGuard)) f.auth = true
+      // beforeLoad: () => { if (!context.user) throw redirect({ to: '/login' }) }: hides the page, doesn't protect its data
+      if (key === 'beforeLoad' && /redirect\s*\(|\bthrow\b/.test(val.getText(sf)) && /user|auth|session|login|sign ?in|claims/i.test(val.getText(sf))) f.pageGuard = true
+      // createStart(() => ({ functionMiddleware: [authMiddleware] })): every server action (or request) checks login
+      if (/^(functionMiddleware|requestMiddleware)$/.test(key) && ts.isArrayLiteralExpression(val) && val.elements.some(isGuard)) f.globalGuard = key === 'requestMiddleware' ? 'request' : 'function'
+    }
+    // legacy: createServerFileRoute('/api/x').methods({ GET, POST })
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'methods' && /^createServerFileRoute\b/.test(n.expression.expression.getText(sf))
+      && n.arguments[0] && ts.isObjectLiteralExpression(n.arguments[0])) {
+      f.serverRoute = true
+      for (const q of n.arguments[0].properties) if (q.name && METHODS.includes(q.name.getText(sf))) f.fns.set(q.name.getText(sf), q.getText(sf))
+    }
     if (ts.isCallExpression(n)) {
       const callee = n.expression
       const arg = str(n.arguments[0])?.replace(/^\[…\]/, '')
@@ -351,6 +387,18 @@ function returnsLiteralOnly(fn: ts.Node): boolean {
 // ---------- facts about the whole app ----------
 
 export type Route = { kind: 'page' | 'endpoint'; url: string }
+// TanStack Router file routes: src/routes/classes.$classId.tsx -> /classes/[classId]; _authed/ and (group)/ add nothing;
+// posts_.$id.edit.tsx -> /posts/[id]/edit; files under -folders are ignored; [.] is a literal dot.
+export function tanstackRoute(path: string): { url: string; ids: string[] } | null {
+  const m = path.match(/^(?:src\/|app\/)?routes\/(.+)\.[jt]sx?$/)
+  if (!m || m[1].split('/').some(x => x.startsWith('-')) || /(^|\/)__root$|routeTree\.gen$/.test(m[1])) return null
+  const toks = m[1].replace(/\[\.\]/g, '\u0000').split(/[/.]/).map(t => t.replace(/\u0000/g, '.'))
+  const kept = toks.filter((t, i) => !(i === toks.length - 1 && (t === 'index' || t === 'route')))
+  const segs = kept.filter(t => !t.startsWith('_') && !/^\(.*\)$/.test(t)).map(t => t.replace(/_$/, ''))
+    .map(t => t === '$' ? '[rest]' : t.startsWith('$') ? `[${t.slice(1)}]` : t)
+  // ids of the layouts above it, to find a login check on a parent (_authed.tsx, admin/route.tsx)
+  return { url: '/' + segs.join('/'), ids: kept.map((_, i) => kept.slice(0, i + 1).join('/')) }
+}
 // Next.js routes come from file paths: app/x/page.tsx, app/api/x/route.ts, and (with pagesDir) pages/x.tsx, pages/api/x.ts.
 export function route(path: string, pagesDir = false): Route | null {
   const m = path.match(/^(?:src\/)?app\/(.*?)\/?(page|route)\.[jt]sx?$/)
@@ -403,8 +451,24 @@ export function appFacts(snap: Snap) {
   const routes = new Map<string, Route>()
   const deps_ = Object.assign({}, ...[...snap].filter(([p]) => /(^|\/)package\.json$/.test(p) && !p.includes('node_modules/')).map(([, t]) => deps(t))) as Record<string, string>
   for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
-  // React Router: the component each <Route> shows is a page at that address. It runs in the browser.
+  // TanStack Start: route files are pages (or server routes); a login check on a parent layout covers its children.
   const browserPages = new Set<string>()
+  if (Object.keys(deps_).some(d => /^@tanstack\/(react-start|start|react-router|solid-start)$/.test(d))) {
+    const tr = new Map([...files.keys()].flatMap(p => { const t = tanstackRoute(p); return t ? [[p, t] as const] : [] }))
+    const byId = new Map([...tr].map(([p, t]) => [t.ids.at(-1)!, p]))
+    for (const [p, t] of tr) {
+      const f = files.get(p)!, server = f.serverRoute && !f.jsx.size
+      routes.set(p, { kind: server ? 'endpoint' : 'page', url: t.url })
+      if (!server) { browserPages.add(p); if (t.ids.some(id => files.get(byId.get(id) ?? '')?.pageGuard)) f.auth = true }
+    }
+  }
+  // TanStack server actions: calling one (createBooking({ data }), useServerFn(createBooking)) talks to the server.
+  for (const [p, f] of files) for (const x of f.used) {
+    const q = f.serverFns.has(x) ? p : target(p, x), m = q && files.get(q)?.serverFns.get(x)
+    if (m) f.fetches.add(`${m} (server action) ${x}`)
+  }
+  const globalGuard = (kind: string) => [...files.values()].some(f => f.globalGuard === kind || f.globalGuard === 'request')
+  // React Router: the component each <Route> shows is a page at that address. It runs in the browser.
   for (const [p, f] of files) for (const pg of f.pages) {
     const q = target(p, pg.comp)
     if (q && !routes.has(q)) { routes.set(q, { kind: 'page', url: pg.path }); browserPages.add(q); if (pg.guard) files.get(q)!.auth = true }
@@ -434,7 +498,7 @@ export function appFacts(snap: Snap) {
       unit.fns.set(h.method, hf.printed)
       unit.printed += `\n${h.method} ${hf.printed}`
       // Logged in if every handler that changes something checks (or, with none, every handler does).
-      const writes = h.method !== 'GET', guard = pre!.guard || h.guard || hf.auth || hf.sbAuth || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
+      const writes = h.method !== 'GET', guard = pre!.guard || h.guard || hf.auth || hf.sbAuth || globalGuard(url.startsWith('(server action)') ? 'function' : 'request') || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
       const u = unit as FileFacts & { w?: boolean[]; r?: boolean[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
@@ -454,6 +518,7 @@ export function appFacts(snap: Snap) {
     }
   }
   for (const p of files.keys()) if (routes.has(p) && !p.includes('#')) fold(p, files.get(p)!, new Set([p]))
+  for (const [k, r] of routes) if (r.kind === 'endpoint' && !k.includes('#') && globalGuard('request')) files.get(k)!.auth = true
   // Reading the session in the browser redirects nobody; on a server (edge function, Next.js) it's a real check.
   for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k)) files.get(k)!.auth = true
   // Whether a page or address checks login is part of what it is: losing the check counts as a change.
@@ -484,7 +549,8 @@ const fieldName = (c: string) => { const f = camel(c); return f === 'id' || /Id$
 const fieldList = (fs: string[]) => list(fs.filter(f => !f.startsWith('→')).map(fieldName).filter(Boolean))
 
 // "/products/[slug]/reviews" -> ["product", "reviews"]: a segment before a [param] is one of many
-export const named = (url: string) => {
+export const named = (url: string): string[] => {
+  if (url.startsWith('(server action) ')) return [words(url.slice(16))]
   const segs = url.replace(/^\/functions\/v1\//, '/').split('/').filter(s => s && s !== 'api')
   return segs.flatMap((s, i) => s.startsWith('[') ? [] : [segs[i + 1]?.startsWith('[') ? singular(words(s)) : words(s)])
 }
@@ -493,7 +559,7 @@ export function pageName(url: string) {
   const n = named(url)
   return url.endsWith(']') ? `each ${n.join(' ')} page` : `the ${n.join(' ')} page`
 }
-const serverName = (url: string) => `the ${named(url).join(' ') || 'main'} part of your server`
+const serverName = (url: string) => url.startsWith('(server action) ') ? `the "${named(url)[0]}" action on your server` : `the ${named(url).join(' ') || 'main'} part of your server`
 
 const VERBS: Record<string, string> = { create: 'create', retrieve: 'look up', update: 'update', del: 'delete', delete: 'delete', list: 'list', send: 'send' }
 function outsidePhrase(o: string) {
@@ -568,7 +634,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       ?? [...f.written][0] ?? [...f.tables][0]
   const endpoint = (path: string) => [...B.files].find(([p]) => { const r = route(p); return r?.kind === 'endpoint' && norm(r.url) === norm(path) })
   const fetchPhrase = (x: string) => {
-    const [method, path] = x.split(' '), e = endpoint(path), r = e && route(e[0])!
+    const method = x.slice(0, x.indexOf(' ')), path = x.slice(x.indexOf(' ') + 1), e = endpoint(path), r = e && route(e[0])!
     const t = e && mainTable(e[1], r!.url), noun = t ? things(t) : 'data'
     const sends = method === '?' ? !!e?.[1].fns.has('POST') && !e[1].fns.has('GET') : method !== 'GET'
     if (e?.[1].money) return 'starts a payment 💰'
@@ -588,6 +654,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       f.auth ? 'You have to log in to open it ✓' : '',
     ].filter(Boolean).join(' ')
   }
+  // Server code that an admin page calls is admin-only, whatever its name.
+  const adminCalls = (url: string) => [...B.files].some(([p, f]) => route(p)?.kind === 'page' && /(^|\/)(admin|dashboard)(\/|$)/.test(route(p)!.url)
+    && [...f.fetches].some(x => norm(x.slice(x.indexOf(' ') + 1)) === norm(url)))
   const viewOnly = (f: FileFacts) => ![...f.fetches].some(x => !x.startsWith('GET ')) && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
 
   const changes: Change[] = [], problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []
@@ -650,7 +719,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const writes = changesData(b)
       if (r.kind === 'page' && /admin|dashboard|account/.test(r.url))
         problems.push({ kind: 'Unsafe', text: `Anyone can open ${name} without logging in.` })
-      else if (r.kind === 'endpoint' && writes && (SENSITIVE.test(r.url) || [...b.written].some(t => SENSITIVE.test(t))))
+      else if (r.kind === 'endpoint' && writes && (SENSITIVE.test(r.url) || [...b.written].some(t => SENSITIVE.test(t)) || adminCalls(r.url)))
         problems.push({ kind: 'Unsafe', text: `Anyone can use ${name} without logging in.` })
       else if (r.kind === 'endpoint' && writes) {
         const t = mainTable(b, r.url), noun = t ? things(t) : 'data'

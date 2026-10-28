@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { report, snapshot } from '../src/plain.ts'
+import { report, snapshot, tanstackRoute } from '../src/plain.ts'
 import { recapCli } from '../src/session.ts'
 import { readDb, findings } from '../src/supabase.ts'
 
@@ -129,7 +129,7 @@ const ui = report(new Map(), new Map(Object.entries({
   'server/src/index.ts': "import express from 'express'\nconst app = express()\napp.post('/api/auth/register', async (req, res) => { await prisma.user.create({}) })\napp.patch('/api/bookings/:id', async (req, res) => { await prisma.booking.update({}) })\n",
 })), { ref: 'main' })
 for (const e of ['loads data from your server and updates bookings on your server', 'a box for "Status"', 'an "Add note" button',
-  'an email box and a password box', '⚠ VITE_SUPABASE_SERVICE_ROLE_KEY is a secret', 'Anyone can change bookings'])
+  'an email box and a password box', '⚠ VITE_SUPABASE_SERVICE_ROLE_KEY is a secret', '⚠ Anyone can use the booking part of your server without logging in'])
   assert.ok(ui.replace(/\s+/g, ' ').includes(e), `ui missing: ${e}\n${ui}`)   // ignore line wrapping
 for (const e of ['with', 'Paid', 'register part', 'Saving']) assert.ok(!new RegExp(`sections for.*${e}|${e} part|"${e}`).test(ui), `ui should not say: ${e}\n${ui}`)
 console.log('ok (helpers, forms, public routes, browser secrets)')
@@ -331,4 +331,38 @@ console.log('ok (routes that start changing data)')
   const odd = card({ 'db/schema.prisma': 'model A {\n  id Int @id\n}\n' }, { 'db/schema.prisma': 'model A {\n  id Int @id\n  b Int\n}\n' })
   assert.ok(odd.includes('`npx prisma migrate dev --schema db/schema.prisma`'), odd)
   console.log('ok (review 3)')
+}
+
+// TanStack Start (Lovable's default since May 2026): file routes, layouts that check login, server actions, server routes.
+{
+  const urls: [string, string | null][] = [['src/routes/index.tsx', '/'], ['src/routes/classes.$classId.tsx', '/classes/[classId]'],
+    ['src/routes/_authed/my-bookings.tsx', '/my-bookings'], ['src/routes/posts_.$postId.edit.tsx', '/posts/[postId]/edit'], ['src/routes/(shop)/cart.tsx', '/cart'],
+    ['src/routes/account/route.tsx', '/account'], ['src/routes/posts/index.tsx', '/posts'], ['src/routes/files/$.tsx', '/files/[rest]'],
+    ['src/routes/script[.]js.tsx', '/script.js'], ['src/routes/-components/Card.tsx', null], ['src/routes/__root.tsx', null], ['src/routeTree.gen.ts', null]]
+  for (const [p, u] of urls) assert.equal(tanstackRoute(p)?.url ?? null, u, p)
+  const tsBefore = {
+  'package.json': '{"dependencies":{"@tanstack/react-start":"1.169.4","@tanstack/react-router":"1.169.4","@supabase/supabase-js":"2"}}',
+  'src/routes/__root.tsx': "export const Route = createRootRoute({ beforeLoad: async () => ({ user: await fetchUser() }) })\n",
+  'src/routes/index.tsx': "export const Route = createFileRoute('/')({ component: Home })\nfunction Home() { return <h1>Studio Flow</h1> }\n",
+  'src/routes/_authed.tsx': "export const Route = createFileRoute('/_authed')({ beforeLoad: ({ context }) => { if (!context.user) throw redirect({ to: '/login' }) } })\n",
+}
+  const tsAfter = { ...tsBefore,
+  'src/routes/classes.$classId.tsx': "import { bookClass } from '../server/booking.functions'\nexport const Route = createFileRoute('/classes/$classId')({ component: C })\nfunction C() { const book = useServerFn(bookClass); return <><h1>Class</h1><button onClick={() => book({ data: {} })}>Book a spot</button></> }\n",
+  'src/routes/_authed/my-bookings.tsx': "export const Route = createFileRoute('/_authed/my-bookings')({ component: M })\nfunction M() { return <h1>My bookings</h1> }\n",
+  'src/routes/admin.classes.tsx': "import { saveClass } from '../server/admin.functions'\nexport const Route = createFileRoute('/admin/classes')({ component: A })\nfunction A() { return <><h1>Classes</h1><button onClick={() => saveClass({ data: {} })}>Save</button></> }\n",
+  'src/routes/-components/Card.tsx': 'export function Card() { return <div /> }\n',
+  'src/routes/api/stripe-webhook.ts': "export const Route = createFileRoute('/api/stripe-webhook')({ server: { handlers: { POST: async ({ request }) => { await supabaseAdmin.from('bookings').update({ status: 'paid' }); return new Response('ok') } } } })\n",
+  'src/server/booking.functions.ts': "export const bookClass = createServerFn({ method: 'POST' }).middleware([authMiddleware]).inputValidator((d) => d).handler(async ({ data, context }) => { await context.supabase.from('bookings').insert({}); const s = await stripe.checkout.sessions.create({}); return s.url })\n",
+  'src/server/admin.functions.ts': "export const saveClass = createServerFn({ method: 'POST' }).validator((d) => d).handler(async ({ data }) => { await supabase.from('classes').upsert(data) })\nexport const listClasses = createServerFn().handler(async () => supabase.from('classes').select())\n",
+}
+  const c = card(tsBefore, tsAfter)
+  for (const e of ['⚠ Anyone can open the admin classes page without logging in.', '⚠ Anyone can use the "save class" action on your server without logging in.',
+    'The my bookings page is new, titled "My bookings".', 'You have to log in to open it ✓ /my-bookings', 'It has a "Book a spot" button and starts a payment 💰. /classes/[classId]',
+    'New server code that saves new bookings, charges customers 💰 and requires login ✓. (server action) bookClass', 'lists classes and works without logging in'])
+    assert.ok(c.includes(e), `tanstack missing: "${e}"\n${c}`)
+  for (const e of ['stripe webhook part', 'Card', 'root']) assert.ok(!c.includes(e), `tanstack should not say "${e}"\n${c}`)
+  // An app-wide auth middleware covers every server action.
+  const g = card(tsBefore, { ...tsAfter, 'src/start.ts': 'export const startInstance = createStart(() => ({ functionMiddleware: [authMiddleware] }))\n' })
+  assert.ok(!g.includes('"save class" action on your server without'), g)
+  console.log('ok (tanstack start)')
 }
