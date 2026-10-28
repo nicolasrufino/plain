@@ -13,6 +13,7 @@ import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
 import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
 import { javaFacts, type JavaFacts, type Family } from './java.ts'
+import { STRIPE_EVENTS } from './stripe-events.ts'
 import { phpFacts, modelOf, type PhpFacts, type SchemaOp, type Mw } from './php.ts'
 import { csFacts, mergeAuth, join as csJoin, under, csPath, type CsFacts, type CsClass, type CsRoute, type ExtCall, type Auth } from './csharp.ts'
 
@@ -926,7 +927,7 @@ export function appFacts(snap: Snap) {
     const lookup = (t: string, m: string) => methods.get(`${t}.${m}`) ?? [...methods].find(([k]) => k.endsWith(`.${m}`) && (impls.get(k.split('.')[0]) ?? []).includes(t))?.[1]
     const fold = (g: FileFacts & { checks?: Family[] }, into: FileFacts & { checks?: Family[] }, seen: Set<string>) => {
       for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'refuses'] as const) for (const y of g[k]) into[k].add(y)
-      into.money ||= g.money; into.writes ||= g.writes; into.checks = [...into.checks ?? [], ...g.checks ?? []]
+      into.money ||= g.money; into.writes ||= g.writes; into.checks = [...into.checks ?? [], ...g.checks ?? []]; into.printed += (into.printed ? '\n' : '') + g.printed
       for (const u of g.used) if (u.startsWith('jcall:') && !seen.has(u)) {
         seen.add(u); const [t, m] = u.slice(6).split('.')
         const w = repoWrites.get(`${t}.${m}`)   // @Modifying @Query repository method
@@ -957,7 +958,7 @@ export function appFacts(snap: Snap) {
       const into: FileFacts & { checks?: Family[] } = Object.assign(empty(), { checks: [...r.checks] }), h = methods.get(`${r.cls}.${r.name}`)
       // @PreAuthorize on the interface method this controller implements (an OpenAPI-generated API, say)
       for (const i of impls.get(r.cls) ?? []) into.checks!.push(...methods.get(`${i}.${r.name}`)?.checks ?? [])
-      if (h) fold({ ...h, checks: [] }, into, new Set()); into.printed = h?.printed ?? ''
+      if (h) fold({ ...h, checks: [] }, into, new Set())
       route(p, r, into)
     }
     // Spring Data REST: with the dependency, every repository is an API of its own (list, read, create, update, delete), unless exported = false
@@ -1085,6 +1086,23 @@ export function appFacts(snap: Snap) {
       for (const u of g.used) if (u.startsWith('notify:') && notifications.get(u.slice(7))) { g.services.add('email'); g.outside.add('email: send') }
       return g
     }
+    // what an address does includes what it calls: services ($cancelEvent->handle()), their dependencies (an interface: the classes that
+    // implement it), the class's own helpers; a few levels down
+    const follow = (g: FileFacts, into: FileFacts, seen: Set<string>, depth = 0) => {
+      for (const u of g.used) if (u.startsWith('pcall:') && !seen.has(u) && depth < 6) {
+        seen.add(u)
+        // the class by its full name (no short-name guess: \Stripe\Invoice isn't the app's Invoice), or an interface's implementations
+        const t = u.slice(6, u.lastIndexOf('.')), m = u.slice(u.lastIndexOf('.') + 1)
+        for (const c of classes.has(t) ? [t] : [...classes].filter(([, x]) => x.interfaces.includes(bareName(t))).map(([q]) => q)) {
+          const callee = chainOf(c).map(x => methods.get(`${x}.${m}`)).find(Boolean)
+          if (!callee) continue
+          for (const key of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'refuses', 'used'] as const) for (const x of callee[key]) into[key].add(x)
+          into.money ||= callee.money; into.writes ||= callee.writes
+          into.printed += '\n' + callee.printed   // a change in the service is a change in the address
+          follow(callee, into, seen, depth + 1)
+        }
+      }
+    }
     const expand = (mw: string[]): string[] => mw.flatMap(m => m === 'web' || m === 'api' ? [m, ...groupMw(m)] : [m])
     const applies = (fn: string) => (m: Mw) => (!m.only || m.only.includes(fn)) && !m.except?.includes(fn)
     for (const [, { p, r, method, ctx }] of found) {
@@ -1103,7 +1121,9 @@ export function appFacts(snap: Snap) {
       const off = (m: string) => without.includes(resolved(m)) || without.includes(resolved(m).split(':')[0])
       const mws = [...expand(ctx.mw), ...groupMw('*'), ...ctrl].filter(m => !off(m)).concat(lv13 === 'maybe' && offAttrs.length ? ['?'] : [])
       const h = r.facts ?? chain.map(c => methods.get(`${c}.${fn}`)).find(Boolean)
-      const facts = finish(Object.assign(empty(), h, { tables: new Set(h?.tables), written: new Set(h?.written), ops: new Set(h?.ops), env: new Set(h?.env), envReq: new Set(h?.envReq), services: new Set(h?.services), outside: new Set(h?.outside), used: new Set(h?.used), refuses: new Set(h?.refuses) }))
+      const facts = Object.assign(empty(), h, { tables: new Set(h?.tables), written: new Set(h?.written), ops: new Set(h?.ops), env: new Set(h?.env), envReq: new Set(h?.envReq), services: new Set(h?.services), outside: new Set(h?.outside), used: new Set(h?.used), refuses: new Set(h?.refuses) })
+      if (h) follow(h, facts, new Set())
+      finish(facts)
       // in the handler: its own check; a gate or policy; a FormRequest whose authorize() checks the user; $this->authorize needs a trait
       // (AuthorizesRequests, on Laravel 10's base controller): without it every request crashes
       const authorizes = chain.some(c => k(c).traits.includes('AuthorizesRequests'))
@@ -1762,7 +1782,11 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const emptied = ops.filter(x => x.op === 'drop' && ops.some(y => y.op === 'create' && y.table === x.table) && A.models.has(modelOf(x.table))).map(x => things(modelOf(x.table)))
     if (emptied.length) ship.push(`Back up your data first: ${m} deletes all ${list(emptied)} (it drops the table and creates it again, empty).`)
     else if (ops.some(x => x.loses && !x.table)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`) }
-  if (newPhp.length) ship.push(`Apply ${list(newPhp.map(m => m.split('/').pop()!.replace(/\.php$/, '')))} to your live database before the new code goes live (\`php artisan migrate --force\`), or the parts that use it will fail.`)
+  // (one that only adds indexes just makes lookups faster: nothing breaks if it runs later)
+  const phpName = (m: string) => m.split('/').pop()!.replace(/\.php$/, ''), phpOps = (m: string) => (B.files.get(m) as PhpFacts | undefined)?.php.schema ?? []
+  const phpSpeed = newPhp.filter(m => phpOps(m).length > 0 && phpOps(m).every(x => x.indexOnly)), phpNeeded = newPhp.filter(m => !phpSpeed.includes(m))
+  if (phpNeeded.length) ship.push(`Apply ${list(phpNeeded.map(phpName))} to your live database before the new code goes live (\`php artisan migrate --force\`), or the parts that use it will fail.`)
+  if (phpSpeed.length) ship.push(`Apply ${list(phpSpeed.map(phpName))} to your live database too (\`php artisan migrate --force\`). It only makes lookups faster, so nothing breaks if it runs later.`)
   const PHP_RISK: Record<string, Problem> = {
     mass: { kind: 'Unsafe', text: 'Saves whatever the visitor sends ($request->all()) into the database, and the model accepts every field. A visitor could set fields like is_admin, price or user_id. Use $request->validated(), or list the allowed fields in $fillable.' },
     force: { kind: 'Unsafe', text: 'Saves whatever the visitor sends ($request->all()) with forceFill / forceCreate, which skips the list of allowed fields. A visitor could set fields like is_admin, price or user_id. Use $request->validated().' },
@@ -1870,6 +1894,24 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   for (const [p, f] of B.files) if (/(^|\/)components\//.test(p))
     for (const n of f.fns.keys()) if (/^[A-Z]/.test(n) && !usersOf(n, p).length && !A.files.get(p)?.fns.has(n))
       unfinished.push(`The ${words(n)} component was built, but it isn't shown on any page yet.`)
+
+  // A Stripe webhook that starts handling a new kind of event: Stripe only sends an endpoint the events picked for it, so until the
+  // new one is added there the new code never runs. An event counts where the code handles it (=== 'x', case 'x', a 'x' => handler
+  // key, C#'s EventTypes.X), in a file that checks Stripe's signature; one of Stripe's own event names (src/stripe-events.ts); new to
+  // the app, not just to that file. Tests and scripts aside.
+  const PASCAL = new Map([...STRIPE_EVENTS].map(e => [e.replace(/[._]/g, ''), e]))
+  const handled = (t = '') => {
+    const code = t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\w])\/\/[^\n]*/g, '$1').replace(/(^|\s)#(?!\[)[^\n]*/g, '$1')
+    return new Set([...[...code.matchAll(/(?:===?|\bcase|\bwhen|Equals\()\s*['"`]([a-z_.]+)['"`]|['"`]([a-z_.]+)['"`]\s*(?:===?|=>|:)/g)].map(m => m[1] ?? m[2]),
+      ...[...code.matchAll(/\bEventTypes\.(\w+)/g)].map(m => PASCAL.get(m[1].toLowerCase()) ?? '')].filter(e => STRIPE_EVENTS.has(e)))
+  }
+  const verifies = (t = '') => /constructEvent|construct_event|ConstructEvent|parseEventNotification|parse_event_notification/.test(t)
+  const hookFiles = (X: Snap) => [...X].filter(([p, t]) => CODE.test(p) && verifies(t) && !/(^|\/)(tests?|__tests__|spec|scripts|e2e|cypress)\/|\.(test|spec)\.\w+$|Tests?\.\w+$|(^|\/)test_\w+\.py$|_test\.py$/i.test(p))
+  const hadEvents = new Set(hookFiles(before).flatMap(([, t]) => [...handled(t)]))
+  const newEvents = [...new Set(hookFiles(after).flatMap(([, t]) => [...handled(t)]))].filter(e => !hadEvents.has(e))
+  if (newEvents.length) ship.push(hookFiles(before).length
+    ? `In Stripe (Workbench → Webhooks, your endpoint), make sure it receives ${list(newEvents)} (skip this if it's set to receive all events). Stripe only sends an endpoint the events picked for it, so until then the new code for ${newEvents.length > 1 ? 'them' : 'it'} never runs.`
+    : `In Stripe (Workbench → Webhooks), create an endpoint for your webhook's address that receives ${list(newEvents)}. Until then Stripe sends it nothing.`)
 
   // env, packages, services
   const usedBefore = new Set([...A.files.values()].flatMap(f => [...f.env]))

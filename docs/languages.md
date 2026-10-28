@@ -579,14 +579,18 @@ Laravel 11, 12 and 13 (the current one), and the shapes agents still write from 
   - A policy that accepts guests (`?User $user`) makes `can:` and gate checks say nothing.
   - `$this->middleware()` in a constructor only works on Laravel 10's base controller. On 11's, the
     page crashes, and plain says so ([11 release notes][lv-11]).
-- **What an address does:** Eloquent (`Order::create`, `$order->update(...)`, `$order->delete()`,
+- **What an address does** follows the controller into the classes it calls: injected services,
+  constructor-promoted properties, interfaces (to the classes that implement them), `app(X::class)`,
+  its own helpers, a model's own methods. Package classes (`\Stripe\Invoice`) aren't followed. Then:
+  Eloquent (`Order::create`, `$order->update(...)`, `$order->delete()`,
   `$user->orders()->create(...)`, `DB::table('orders')`), Stripe (`stripe-php`, and Cashier's
   `checkout()` / `charge()` when `laravel/cashier` is installed), email (`Mail::to()->send()`, and
   notifications whose `via()` includes `mail`).
 - **The tables** come from the migrations (`database/migrations`), replayed in order:
   `Schema::create`, `Schema::table`, `dropColumn`, `renameColumn`, `Schema::drop`.
 - **Before you ship:** "apply the migration with `php artisan migrate --force`" (without `--force`
-  it does nothing on a live site, [migrations][lv-migrations]); "back up first" when it drops data.
+  it does nothing on a live site, [migrations][lv-migrations]); "back up first" when it drops data;
+  "nothing breaks if it runs later" when it only adds or drops plain indexes.
   `config('services.stripe.secret')` is followed to the env var its config file reads.
 - **To flag:**
   - `env('X')` outside the `config/` folder: it gives nothing once the live site caches its

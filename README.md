@@ -111,6 +111,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 - [Trials, round 4](docs/trials-django.md): the same on Django + REST Framework, the first non-JavaScript app
 - [Trials, round 5](docs/trials-nuxt-sveltekit.md): the same on Nuxt and SvelteKit
 - [Trials, round 6](docs/trials-angular-aspnet.md): the same on Angular + ASP.NET Core
+- [Trials, round 7](docs/trials-laravel.md): the same on Laravel
 - [Scenario](docs/scenario.md): one feature, from building to reviewing
 - [Review research](docs/review-research.md): the review bottleneck, what exists, the gap
 - [Code-to-English research](docs/research.md): line-level English and prior work

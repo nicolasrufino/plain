@@ -17,7 +17,7 @@ export type Mw = { mw: string; only?: string[]; except?: string[]; attr?: boolea
 export type PhpRoute = { methods: string[]; path: string; mw: string[]; without: string[]; cls?: string; fn?: string; facts?: FileFacts & { check?: Check }; at: number }   // at: where in the file (routes and includes run in order)
 export type Group = { prefix: string; mw: string[]; without: string[] }
 export type Check = 'login' | 'policy' | 'crash' | 'unknown' | `owner:${string}`   // the handler turns guests away; through a gate or policy; $this->authorize (needs a trait); rejects in a way plain can't read
-export type SchemaOp = { op: 'create' | 'table' | 'drop' | 'rename'; table: string; to?: string; add: string[]; drop: string[]; renames: [string, string][]; loses: boolean; nullable?: string[] }
+export type SchemaOp = { op: 'create' | 'table' | 'drop' | 'rename'; table: string; to?: string; add: string[]; drop: string[]; renames: [string, string][]; loses: boolean; nullable?: string[]; indexOnly?: boolean }   // indexOnly: only adds or drops indexes
 export type PhpFacts = FileFacts & { php: {
   routes: PhpRoute[]                                            // Route::get(...) etc. in this file, with the groups around them
   includes: (Group & { file: string; at: number })[]           // require __DIR__.'/auth.php', ->group(base_path('routes/x.php'))
@@ -61,6 +61,8 @@ export const phpPath = (p: string) => p.replace(/\{(\w+)(:\w+)?\??\}/g, '[$1]')
 // Laravel facades: their static calls aren't Eloquent models (an app model may be called Event or Session: plain.ts keeps only
 // classes that are models)
 const FACADES = /^(Route|Schema|Auth|Gate|Log|Cache|Storage|Http|Str|Arr|Hash|Validator|Inertia|Carbon|CarbonImmutable|Redirect|View|URL|Artisan|Bus|Crypt|Lang|Password|RateLimiter|Redis|Blade|Vite|Mail|Notification|DB|Checkout|Cashier|self|static|parent)$/
+// classes from packages: their calls aren't followed (\Stripe\Invoice isn't the app's Invoice model)
+const VENDOR = /^(Stripe|Illuminate|Laravel|Symfony|GuzzleHttp|Carbon|Psr|League|Aws|Google|OpenAI|Anthropic|Spatie|Inertia|Livewire|Barryvdh|Maatwebsite|Intervention)\\/
 const CSRF = /^(ValidateCsrfToken|VerifyCsrfToken|PreventRequestForgery)$/
 const VERBS: Record<string, string[]> = { get: ['GET'], post: ['POST'], put: ['PUT'], patch: ['PATCH'], delete: ['DELETE'], options: ['OPTIONS'], any: ['ANY'] }
 const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : s.endsWith('sses') ? s.slice(0, -2) : s.endsWith('s') ? s.slice(0, -1) : s
@@ -286,7 +288,9 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
       model: /^Illuminate\\(Database\\Eloquent\\(Model|Relations\\Pivot)|Foundation\\Auth\\User)$/.test(baseFull ?? '') || /^(Model|Authenticatable)$/.test(baseRaw ?? ''),
       unguarded: false, table: undefined as string | undefined }
     php.classes.set(name, info)
-    const fields = types(cls)
+    // the class's typed properties ($this->refunder: RefundsStripeOrders), from constructor promotion or declarations
+    const fields = new Map([...types(cls), ...all(body, 'property_promotion_parameter').flatMap(p => p.childForFieldName('type') ? [[`$this->${p.childForFieldName('name')!.text.slice(1)}`, fq(p.childForFieldName('type')!.text.replace(/^\?/, ''))] as const] : []),
+      ...all(body, 'property_declaration').flatMap(d => d.childForFieldName('type') ? all(d, 'property_element').map(e => [`$this->${e.childForFieldName('name')!.text.slice(1)}`, fq(d.childForFieldName('type')!.text.replace(/^\?/, ''))] as const) : [])])
     for (const m of all(body, 'method_declaration')) {
       const mname = m.childForFieldName('name')!.text, key = `${name}.${mname}`
       const mBody = m.childForFieldName('body')
@@ -312,7 +316,7 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
       const ma = attrs(m)
       if (ma.length) { info.methodMw.set(mname, attrMw(ma, /^(Middleware|Authorize)$/)); info.methodWithout.set(mname, attrMw(ma, /^WithoutMiddleware$/)) }
       php.params.set(key, all(m.childForFieldName('parameters')!, 'simple_parameter').map(p => short(p.childForFieldName('type')?.text.replace(/^\?/, '') ?? '')))
-      const g = collect(m, empty(m.text.replace(/\s+/g, ' ')), new Map([...fields, ...types(m)]))
+      const g = collect(m, empty(m.text.replace(/\s+/g, ' ')), new Map([...fields, ...types(m)]), name, info.model)
       for (const t of php.params.get(key)!) if (/^[A-Z]/.test(t)) g.tables.add(`@m:${t}`)   // show(Order $order): route model binding loads it
       const inputs = requestParams(m)
       php.methods.set(key, Object.assign(g, { check: codeCheck(mBody, true, inputs) }))
@@ -362,6 +366,9 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
       if (op !== 'create' && op !== 'table') continue
       const s: SchemaOp = { op, table, add: [], drop: [], renames: [], loses: false }
       const fn = a[1]?.v
+      const onTable = (fn ? all(fn, 'member_call_expression') : []).filter(x => x.childForFieldName('object')?.type === 'variable_name').map(x => x.childForFieldName('name')!.text)
+      s.indexOnly = op === 'table' && onTable.length > 0 && onTable.every(k => /^(index|spatialIndex|dropIndex|dropSpatialIndex|renameIndex)$/.test(k))
+        && !/DB::|::query\s*\(|->(update|delete|insert|save|truncate)\s*\(/.test(fn?.text ?? '')   // (no data change in the closure either)
       for (const call of fn ? all(fn, 'member_call_expression') : []) {
         // $table->string('name')->nullable(): the innermost call on $table
         if (call.childForFieldName('object')?.type !== 'variable_name') continue
@@ -386,6 +393,8 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
       }
       php.schema.push(s)
     }
+    // index-only means the whole up(): nothing but Schema::table(...) statements
+    if (!(up?.childForFieldName('body')?.namedChildren ?? []).every(st => !st || st.type === 'comment' || /^Schema::table\s*\(/.test(st.text.trim()))) for (const x of php.schema) x.indexOnly = false
     if (up && /DB::(statement|unprepared)\s*\(\s*['"][^'"]*\b(DROP|TRUNCATE|DELETE)\b|->(delete|truncate)\s*\(\s*\)/i.test(up.text)) php.schema.push({ op: 'table', table: '', add: [], drop: [], renames: [], loses: true })
   }
 
@@ -408,7 +417,7 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
   // (all:Order for Order::create($request->all()); all:? when plain can't tell which model)
   const vars = types(root)
   for (const m of code.matchAll(/(?:\b(\w+)::|(\$\w+)->|->)(create|update|fill|forceFill|forceCreate|firstOrCreate|updateOrCreate)\s*\(\s*(?:\$request|request\(\))->(?:all|input|post)\(\s*\)/g))
-    php.risks.add(/^force/.test(m[3]) ? 'force' : `all:${m[1] && /^[A-Z]/.test(m[1]) ? m[1] : vars.get(m[2] ?? '')?.replace(/^new:/, '') ?? '?'}`)
+    php.risks.add(/^force/.test(m[3]) ? 'force' : `all:${m[1] && /^[A-Z]/.test(m[1]) ? m[1] : short(vars.get(m[2] ?? '')?.replace(/^new:/, '') ?? '?')}`)
   if (/\b(DB::(select|statement|insert|update|delete|unprepared)|->(whereRaw|havingRaw|orderByRaw|selectRaw)|DB::raw)\s*\(\s*("[^"]*\$\w|'[^']*'\s*\.\s*\$|"[^"]*"\s*\.\s*\$)/.test(code)) php.risks.add('sql')
   return f
 
@@ -421,14 +430,14 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
   // $request->user() / auth()->user() -> User
   function types(n: N): Map<string, string> {
     const out = new Map<string, string>()
-    for (const p of all(n.childForFieldName('parameters') ?? n, 'simple_parameter')) { const t = p.childForFieldName('type')?.text.replace(/^\?/, ''); if (t && /^[A-Z]/.test(short(t))) out.set(p.childForFieldName('name')!.text, short(t)) }
+    for (const p of all(n.childForFieldName('parameters') ?? n, 'simple_parameter')) { const t = p.childForFieldName('type')?.text.replace(/^\?/, ''); if (t && /^[A-Z]/.test(short(t))) out.set(p.childForFieldName('name')!.text, fq(t)) }
     for (const a of all(n, 'assignment_expression')) {
       const l = a.childForFieldName('left')?.text, r = a.childForFieldName('right')
       if (!l || !r) continue
       let x: N | null = r
       while (x?.type === 'member_call_expression') x = x.childForFieldName('object')
-      if (r.type === 'object_creation_expression') out.set(l, 'new:' + short(r.namedChildren[0]!.text))
-      else if (x?.type === 'scoped_call_expression' && /^[A-Z]/.test(short(x.childForFieldName('scope')!.text))) out.set(l, short(x.childForFieldName('scope')!.text))
+      if (r.type === 'object_creation_expression') out.set(l, 'new:' + fq(r.namedChildren[0]!.text))
+      else if (x?.type === 'scoped_call_expression' && /^[A-Z]/.test(short(x.childForFieldName('scope')!.text))) out.set(l, fq(x.childForFieldName('scope')!.text))
       else if (/^(\$request->user\(\)|auth\(\)->user\(\)|Auth::user\(\)|\$this->user\(\))$/.test(r.text)) out.set(l, 'User')
     }
     return out
@@ -439,10 +448,12 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
     return c === 'login' || c === 'policy' || c?.startsWith('owner:') ? c : inClass && /\$this->authorize\s*\(/.test(uncomment(body?.text ?? '')) ? 'crash' : c
   }
   // Facts from one subtree: Eloquent reads and writes, Stripe, email, config and env, "no" messages.
-  function collect(node: N, g: FileFacts, vars: Map<string, string>): FileFacts {
+  // `self`: the class the code is in. Calls into other classes ($cancelEvent->handle(), $this->refunder->refund(), PricingService::quote(),
+  // app(X::class)->y(), $this->helper()) are recorded as pcall:Class.method and followed in plain.ts.
+  function collect(node: N, g: FileFacts, vars: Map<string, string>, self?: string, isModel = false): FileFacts {
     const model = (n: N | null | undefined): string | undefined => {
       if (!n) return undefined
-      if (n.type === 'variable_name') { const t = vars.get(n.text); return t?.replace(/^new:/, '') }
+      if (n.type === 'variable_name') { if (n.text === '$this' && isModel) return short(self!); const t = vars.get(n.text); return t && short(t.replace(/^new:/, '')) }
       if (n.type === 'member_call_expression') {
         const name = n.childForFieldName('name')!.text, obj = n.childForFieldName('object')
         if (/^(user)$/.test(name) && /^(\$request|auth\(\)|\$this)$/.test(obj?.text ?? '')) return 'User'
@@ -470,6 +481,8 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
       if (s === 'Notification' && /^(send|sendNow)$/.test(name)) g.used.add(`notify:${c.text.match(/\bnew\s+\\?([\w\\]+)/)?.[1].split('\\').at(-1) ?? '?'}`)
       if (s === 'DB' && name === 'table') { const t = str(a[0]?.v); if (t) g.tables.add(`@tbl:${t}`) }
       if (FACADES.test(s)) continue
+      const scope = c.childForFieldName('scope')!.text, sfq = /^(self|static)$/.test(scope) ? self : fq(scope)
+      if (sfq && /^[A-Z]/.test(short(sfq)) && scope !== 'parent' && !VENDOR.test(sfq)) g.used.add(`pcall:${sfq}.${name}`)   // PricingService::quote()
       // Order::create([...]), Order::destroy($id), Order::where(...) (a read; a write if the chain ends in update/delete, below)
       if (/^(create|forceCreate|insert|insertOrIgnore|insertGetId|upsert|updateOrCreate|firstOrCreate|updateOrInsert)$/.test(name)) write(`@m:${s}`, /^(upsert|updateOrCreate|updateOrInsert)$/.test(name) ? 'update' : 'create')
       else if (/^(destroy|forceDestroy|truncate)$/.test(name)) write(`@m:${s}`, 'delete')
@@ -478,6 +491,9 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
     for (const c of all(node, 'member_call_expression')) {
       const name = c.childForFieldName('name')!.text, obj = c.childForFieldName('object'), t = c.text
       g.used.add(name)
+      const app = obj?.type === 'function_call_expression' && /^(app|resolve)$/.test(obj.childForFieldName('function')?.text ?? '') ? obj.text.match(/\(\s*\\?([\w\\]+)::class/)?.[1] : undefined
+      const callee = app ? fq(app) : obj?.text === '$this' ? self : vars.get(obj?.text ?? '')?.replace(/^new:/, '')
+      if (callee && /^[A-Z]/.test(short(callee)) && !VENDOR.test(callee)) g.used.add(`pcall:${callee}.${name}`)
       if (/^(save|update|increment|decrement|restore)$/.test(name)) write(model(obj), name === 'save' && obj?.type === 'variable_name' && vars.get(obj.text)?.startsWith('new:') ? 'create' : 'update')
       if (/^(delete|forceDelete)$/.test(name)) write(model(obj), 'delete')
       if (/^(create|createMany|createQuietly|firstOrCreate|updateOrCreate|insert|upsert|attach|sync|syncWithoutDetaching|detach|toggle)$/.test(name) && obj?.type !== 'scoped_call_expression') { const m = model(obj); if (m) write(m, /^(detach)$/.test(name) ? 'delete' : /^(updateOrCreate|upsert|sync\w*|toggle)$/.test(name) ? 'update' : 'create') }

@@ -1570,5 +1570,43 @@ class OrderCreate(LoginRequiredMixin, CreateView):
       'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->alias(['admin' => \\App\\Http\\Middleware\\EnsureAdmin::class]); }"),
       'app/Http/Middleware/EnsureAdmin.php': "<?php\nnamespace App\\Http\\Middleware;\nclass EnsureAdmin { public function handle(Request $request, Closure $next) {\n  $response = DB::transaction(fn () => $next($request));\n  if (! $request->user()) { abort(403); }\n  return $response;\n} }\n" }), 'requires login ✓')
   }
+  // an index-only migration breaks nothing if it runs late; following a controller into the service it calls
+  c = lv({ 'database/migrations/2026_10_28_000000_idx.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::table('orders', function (Blueprint $t) { $t->index(['status', 'created_at']); }); } };\n" })
+  has(c, 'nothing breaks if it runs later'); not(c, 'or the parts that use it will fail')
+  c = lv({ ...web("Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel'])->middleware('auth');\n"),
+    'app/Http/Controllers/OrderController.php': orders.replace('public function cancel(Order $order) {', 'public function cancel(Order $order, \\App\\Services\\Canceller $canceller) { $canceller->run($order); return; '),
+    'app/Services/Canceller.php': "<?php\nnamespace App\\Services;\nclass Canceller { public function __construct(private Refunds $refunds) {} public function run(Order $order) { $this->refunds->refund($order); $order->user->notify(new Cancelled($order)); } }\n",
+    'app/Services/StripeRefunds.php': "<?php\nnamespace App\\Services;\nclass StripeRefunds implements Refunds { public function refund(Order $order) { $stripe = new \\Stripe\\StripeClient('x'); $stripe->refunds->create(['payment_intent' => $order->pi]); } }\n",
+    'app/Notifications/Cancelled.php': "<?php\nclass Cancelled extends Notification { public function via(object $n): array { return ['mail']; } }\n" })
+  has(c, 'asks Stripe to create a refund', 'emails people')
+  // a webhook that starts handling a new Stripe event: a dashboard step (not for event names in tests)
+  const hook = (body: string) => "<?php\nnamespace App\\Http\\Controllers;\nclass StripeWebhookController extends Controller { public function __invoke(Request $request) { $event = \\Stripe\\Webhook::constructEvent($request->getContent(), $request->header('Stripe-Signature'), 'x'); " + body + " } }\n"
+  const H = { ...L, 'app/Http/Controllers/StripeWebhookController.php': hook("if ($event->type === 'checkout.session.completed') { }") }
+  c = card(H, { ...H, 'app/Http/Controllers/StripeWebhookController.php': hook("if ($event->type === 'checkout.session.completed') { } if ($event->type === 'checkout.session.expired') { }") })
+  has(c, 'make sure it receives checkout.session.expired (skip this if'); not(c, 'receives checkout.session.completed')
+  not(card(H, { ...H, 'tests/Feature/HookTest.php': "<?php\nclass HookTest { function t() { $this->post('/stripe/webhook', ['type' => 'charge.refunded', 'sig' => 'Stripe-Signature']); } }\n" }), 'Workbench')
+  // not: a comment, an expand path, a log value, the same handler moved to another file
+  for (const body of ["// TODO later: 'invoice.payment_failed'", "\\Stripe\\Checkout\\Session::retrieve(['id' => 'x', 'expand' => ['payment_intent.latest_charge']]);", "Log::warning('x', ['expected' => 'checkout.session.async_payment_failed']);"])
+    not(card(H, { ...H, 'app/Http/Controllers/StripeWebhookController.php': hook("if ($event->type === 'checkout.session.completed') { } " + body) }), 'Workbench')
+  not(card(H, { ...L, 'app/Http/Controllers/Webhooks/StripeController.php': hook("if ($event->type === 'checkout.session.completed') { }") }), 'Workbench')
+  // review 21: a change only inside the called class; a vendor class with an app model's short name; a model method writing via $this;
+  // index-only means only index changes (no data change next to it, no full-text index)
+  {
+    const svc = (run: string) => ({ ...L, ...web("Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel'])->middleware('auth');\n"),
+      'app/Http/Controllers/OrderController.php': orders.replace('public function cancel(Order $order) {', 'public function cancel(Order $order, \\App\\Services\\Canceller $c) { $c->run($order); return; '),
+      'app/Services/Canceller.php': `<?php\nnamespace App\\Services;\nclass Canceller { public function run(Order $order) { ${run} } }\n` })
+    has(card(svc("$order->update(['status' => 'x']);"), svc('$order->delete();')), 'The order cancel part of your server changed')
+    c = lv({ ...web("Route::post('/invoices/{id}/pay', [OrderController::class, 'pay'])->middleware('auth');\n"),
+      'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function pay($id) { $stripeInvoice = \\Stripe\\Invoice::retrieve($id); $stripeInvoice->pay(); }\n  public function index"),
+      'app/Models/Invoice.php': "<?php\nnamespace App\\Models;\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Invoice extends Model { public function pay() { Payment::create([]); } }\n",
+      'app/Models/Payment.php': "<?php\nnamespace App\\Models;\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Payment extends Model {}\n" })
+    not(c, 'payments')
+    has(lv({ ...web("Route::post('/orders/{order}/void', [OrderController::class, 'void'])->middleware('auth');\n"),
+      'app/Http/Controllers/OrderController.php': orders.replace('public function index', "public function void(Order $order) { $order->markVoid(); }\n  public function index"),
+      'app/Models/Order.php': L['app/Models/Order.php'].replace('}\n', "public function markVoid() { $this->update(['status' => 'void']); } }\n") }), 'updates orders')
+    const idx = (up: string) => lv({ 'database/migrations/2026_10_28_000000_idx.php': `<?php\nreturn new class extends Migration { public function up(): void { ${up} } };\n` })
+    for (const up of ["Schema::table('orders', fn (Blueprint $t) => $t->index('status')); DB::table('orders')->update(['status' => 'new']);", "Schema::table('orders', function (Blueprint $t) { $t->index('status'); DB::table('orders')->update(['status' => 'new']); });", "Schema::table('orders', fn (Blueprint $t) => $t->fullText('status'));"])
+      not(idx(up), 'nothing breaks if it runs later')
+  }
   console.log('ok (laravel)')
 }
