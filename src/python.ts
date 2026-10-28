@@ -14,7 +14,9 @@ try {
   parser.setLanguage(await Language.load(fileURLToPath(new URL('../vendor/tree-sitter-python.wasm', import.meta.url))))
 } catch { parser = undefined }   // not installed: Python files are skipped
 
-export type PyFacts = FileFacts & { models: Map<string, string[]>; risks: Set<string> }
+// servers: routers/apps/blueprints made in this file; aliases: CurrentUser = Annotated[User, Depends(get_current_user)]
+export type PyFacts = FileFacts & { models: Map<string, string[]>; risks: Set<string>; servers: Map<string, { prefix: string; guard: boolean }>
+  aliases: Map<string, boolean>; appGuard: boolean }
 
 const str = (n?: N | null) => n?.type === 'string' && !n.namedChildren.some(c => c?.type === 'interpolation')
   ? n.namedChildren.filter(c => c?.type === 'string_content').map(c => c!.text).join('') : undefined
@@ -24,12 +26,17 @@ const kw = (call: N, name: string) => args(call).find(a => a.type === 'keyword_a
 const pos = (call: N) => args(call).filter(a => a.type !== 'keyword_argument')
 const fnName = (call: N) => call.childForFieldName('function')?.text ?? ''
 const all = (n: N, type: string) => n.descendantsOfType(type).filter((x): x is N => !!x)
-const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
-const modelOf = (v: string) => cap(v.replace(/_(\w)/g, (_, c) => c.toUpperCase()).replace(/s$/, ''))   // order_item -> OrderItem
+const cap = (s: string) => s ? s[0].toUpperCase() + s.slice(1) : s
+// order_item -> OrderItem; db_item / new_user -> Item / User; self, x -> nothing
+const modelOf = (v: string) => /^(self|cls|obj|x|_)$/.test(v) || v.length < 2 ? '' : cap(v.replace(/^(db|new|created|updated|the)_/, '').replace(/_(\w)/g, (_, c) => c.toUpperCase()).replace(/s$/, ''))
 
 const HTTP = /^(get|post|put|patch|delete)$/
-// Dependencies and decorators that check who you are (get_current_user, login_required, jwt_required, require_admin)
-const GUARD = /current_(active_)?user|login_required|jwt_required|auth|admin|require|verify|token|permission|staff|superuser/i
+// What checks who you are. Decorators: login_required, jwt_required(), admin_required, roles_required, permission_required.
+// FastAPI dependencies, by the function inside Depends(...): get_current_user, require_admin, verify_token; not get_admin_service,
+// AuthService, or get_current_user_optional (lets everyone through).
+const GUARD_DECO = /^(login_required|jwt_required|fresh_jwt_required|admin_required|roles?_required|permission_required|staff_member_required|superuser_required|auth_required|requires_auth|token_required)$/
+const GUARD_DEP = /^(get_)?current_(active_)?(user|admin|superuser)$|^(require|verify|check)_\w+|^(get_)?(admin|authenticated)_user$|^(is_)?(admin|authenticated|logged_in)$|^auth(enticate)?(_user)?$|login_required/i
+const depGuard = (text: string) => [...text.matchAll(/\b(?:Depends|Security)\(\s*([\w.]+)/g)].some(m => { const fn = m[1].split('.').at(-1)!; return GUARD_DEP.test(fn) && !/optional|_or_none|maybe/i.test(fn) })
 const SERVICES: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend', twilio: 'Twilio',
   boto3: 'AWS', supabase: 'Supabase', sendgrid: 'SendGrid', postmarker: 'Postmark' }
 const HOSTS: Record<string, string> = { 'api.resend.com': 'Resend', 'api.stripe.com': 'Stripe', 'api.openai.com': 'OpenAI', 'api.anthropic.com': 'Anthropic',
@@ -41,7 +48,8 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
   const tree = parser.parse(text)
   if (!tree) return undefined
   const root = tree.rootNode
-  const f = Object.assign(collect(root, empty(text.replace(/#[^\n]*/g, '').replace(/\s+/g, ' '))), { models: new Map<string, string[]>(), risks: new Set<string>() })
+  const f: PyFacts = Object.assign(collect(root, empty(text.replace(/#[^\n]*/g, '').replace(/\s+/g, ' '))),
+    { models: new Map<string, string[]>(), risks: new Set<string>(), servers: new Map(), aliases: new Map<string, boolean>(), appGuard: false })
   f.todos = all(root, 'comment').map(c => c.text.match(/#\s*((TODO|FIXME|HACK)\b.*)/)?.[1]).filter((t): t is string => !!t)
 
   // imports: from .routers import orders; from app.db import SessionLocal as S; import stripe
@@ -58,56 +66,77 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
   }
 
   // servers and routers: app = FastAPI(); router = APIRouter(prefix='/orders', dependencies=[Depends(get_current_user)]); bp = Blueprint('x', __name__, url_prefix='/x')
-  const servers = new Map<string, { prefix: string; guard: boolean }>()
+  const servers = f.servers
   for (const a of all(root, 'assignment')) {
     const left = a.childForFieldName('left')?.text ?? '', right = a.childForFieldName('right')
     if (right?.type !== 'call') continue
     const fn = fnName(right)
     if (/^(FastAPI|APIRouter|Flask|Blueprint)$/.test(fn.split('.').at(-1)!))
-      servers.set(left, { prefix: str(kw(right, 'prefix') ?? kw(right, 'url_prefix')) ?? '', guard: guardIn(kw(right, 'dependencies')) })
+      servers.set(left, { prefix: str(kw(right, 'prefix') ?? kw(right, 'url_prefix')) ?? '', guard: depGuard(kw(right, 'dependencies')?.text ?? '') })
+    // CurrentUser = Annotated[User, Depends(get_current_user)]: a parameter typed CurrentUser is a login check
+    if (/^[A-Z]\w*$/.test(left) && /^Annotated\[/.test(right?.text ?? '')) f.aliases.set(left, depGuard(right!.text))
   }
-  // @bp.before_request that turns people away: everything in that blueprint needs login
-  for (const d of all(root, 'decorated_definition')) {
-    const decos = d.namedChildren.filter((c): c is N => c?.type === 'decorator').map(c => c.namedChildren[0]!)
-    const def = d.childForFieldName('definition')!
-    for (const x of decos) {
-      const m = x.text.match(/^(\w+)\.before_(app_)?request$/)
-      if (m && servers.has(m[1]) && /abort\(\s*40[13]|redirect\(|current_user|is_authenticated|login/i.test(def.text) && /abort|redirect|raise/.test(def.text)) servers.get(m[1])!.guard = true
-    }
+  for (const a of all(root, 'assignment')) {   // the same, written as a type alias without a call
+    const left = a.childForFieldName('left')?.text ?? '', right = a.childForFieldName('right')
+    if (/^[A-Z]\w*$/.test(left) && right?.type === 'subscript' && /^Annotated\[/.test(right.text)) f.aliases.set(left, depGuard(right.text))
   }
-  // routes: @router.post('/{id}'), @app.route('/x', methods=['POST']), @app.api_route('/x', methods=[...])
-  for (const d of all(root, 'decorated_definition')) {
-    const def = d.childForFieldName('definition')!
+  // @bp.before_request that turns logged-out people away: everything in that blueprint (before_app_request: the whole app) needs login
+  const turnsAway = (body: N) => all(body, 'if_statement').some(i => {
+    const cond = i.childForFieldName('condition')?.text ?? '', then = i.childForFieldName('consequence')?.text ?? ''
+    return /current_user|is_authenticated|request\.user|session\.get\(|session\[|g\.user|\buser\b/.test(cond)
+      && /abort\(\s*40[13]|raise\s+\w*(HTTPException|Unauthori[sz]ed|Forbidden|PermissionDenied)|status_code\s*=\s*40[13]|redirect\([^)]*login|url_for\(\s*['"][\w.]*login/.test(then)
+  })
+  const decorated = all(root, 'decorated_definition').map(d => ({ def: d.childForFieldName('definition')!,
+    decos: d.namedChildren.filter((c): c is N => c?.type === 'decorator').map(c => c.namedChildren[0]!) }))
+  for (const { def, decos } of decorated) for (const x of decos) {
+    const m = x.text.match(/^(\w+)\.before_(app_)?request$/)
+    if (m && turnsAway(def)) { if (m[2]) f.appGuard = true; else if (servers.has(m[1])) servers.get(m[1])!.guard = true }
+  }
+  // routes: @router.post('/{id}'), @app.route('/x', methods=['POST']), @app.api_route('/x', methods=[...]); also on an imported app or blueprint
+  for (const { def, decos } of decorated) {
     if (def.type !== 'function_definition') continue
-    const decos = d.namedChildren.filter((c): c is N => c?.type === 'decorator').map(c => c.namedChildren[0]!)
-    const guard = decos.some(x => GUARD.test(x.text.split('(')[0]) && !/route|get|post|put|patch|delete/.test(x.text.split('(')[0].split('.').at(-1)!))
-      || decos.some(x => x.type === 'call' && guardIn(kw(x, 'dependencies')))
-      || (def.childForFieldName('parameters')?.namedChildren ?? []).some(p => !!p && /\b(Depends|Security)\(/.test(p.text) && GUARD.test(p.text))
-    for (const x of decos) {
+    const params = def.childForFieldName('parameters')?.namedChildren.filter((x): x is N => !!x) ?? []
+    for (const [i, x] of decos.entries()) {
       if (x.type !== 'call') continue
       const fn = fnName(x), obj = fn.split('.').slice(0, -1).join('.'), last = fn.split('.').at(-1)!, path = str(pos(x)[0])
-      if (!servers.has(obj) || path === undefined) continue
+      const imported = !servers.has(obj) && f.binds.has(obj)
+      if (path === undefined || !/^(route|api_route|get|post|put|patch|delete)$/.test(last) || !servers.has(obj) && !imported) continue
       const methods = HTTP.test(last) ? [last.toUpperCase()]
-        : /^(route|api_route)$/.test(last) ? (kw(x, 'methods')?.namedChildren.map(m => str(m!)?.toUpperCase()).filter((m): m is string => !!m) ?? ['GET']) : []
+        : (kw(x, 'methods')?.namedChildren.map(m => str(m!)?.toUpperCase()).filter((m): m is string => !!m) ?? ['GET'])
+      // Flask only applies decorators written *below* the route decorator
+      const guard = decos.slice(i + 1).some(d => GUARD_DECO.test(d.text.split('(')[0].split('.').at(-1)!))
+        || depGuard(kw(x, 'dependencies')?.text ?? '') || params.some(q => depGuard(q.text)) || turnsAway(def)
+      // parameters typed with an alias (current_user: CurrentUser) are checked against aliases from every file
+      const mw = params.map(q => q.childForFieldName('type')?.text.match(/^\w+$/)?.[0]).filter((t): t is string => !!t)
       const facts = collect(def, empty(def.text))
-      const s = servers.get(obj)!
       // FastAPI {id} and Flask <int:id> become [id]
-      const url = (s.prefix.replace(/\/$/, '') + path).replace(/\{(\w+)(:[^}]*)?\}/g, '[$1]').replace(/<(?:\w+:)?(\w+)>/g, '[$1]').replace(/(.)\/$/, '$1') || '/'
-      for (const m of methods) f.handlers.push({ server: obj, method: m, path: url, guard: guard || s.guard, mw: [], facts })
+      const url = path.replace(/\{(\w+)(:[^}]*)?\}/g, '[$1]').replace(/<(?:\w+:)?(\w+)>/g, '[$1]')
+      for (const m of methods) f.handlers.push({ server: obj, method: m, path: url, guard: guard || !!servers.get(obj)?.guard, mw, facts, own: servers.get(obj)?.prefix, imported })
     }
   }
   // app.include_router(orders.router, prefix='/api', dependencies=[...]); app.register_blueprint(bp, url_prefix='/x')
+  // A register_blueprint url_prefix replaces the blueprint's own; an include_router prefix adds to the router's.
   for (const c of all(root, 'call')) {
-    const fn = fnName(c), last = fn.split('.').at(-1)!
-    if (!/^(include_router|register_blueprint)$/.test(last) || !servers.has(fn.split('.').slice(0, -1).join('.'))) continue
-    const target = pos(c)[0]?.text.split('.')[0]
-    if (target) f.mounts.push({ server: fn.split('.')[0], path: str(kw(c, 'prefix') ?? kw(c, 'url_prefix')) ?? '', target, guard: guardIn(kw(c, 'dependencies')), guardLike: false })
+    const fn = fnName(c), last = fn.split('.').at(-1)!, parent = fn.split('.').slice(0, -1).join('.')
+    if (!/^(include_router|register_blueprint)$/.test(last) || !servers.has(parent) && !f.binds.has(parent)) continue
+    const t = pos(c)[0]?.text ?? '', [target, attr] = t.includes('.') ? [t.split('.')[0], t.split('.').slice(1).join('.')] : [t, t]
+    const given = kw(c, 'prefix') ?? kw(c, 'url_prefix')
+    if (target) f.mounts.push({ server: parent, path: str(given) ?? '', target, attr, guard: depGuard(kw(c, 'dependencies')?.text ?? ''), guardLike: false,
+      override: last === 'register_blueprint' && !!given })
+  }
+  // Mounted in the same file: fold the mount into the routes right away
+  for (let i = 0; i < 5; i++) for (const m of f.mounts.filter(m => servers.has(m.target) && m.target === m.attr)) {
+    for (const h of f.handlers) if (h.server === m.target) {
+      h.path = m.path.replace(/\/$/, '') + (m.override ? '' : (h.own ?? '').replace(/\/$/, '')) + h.path
+      h.guard ||= m.guard || !!servers.get(m.server)?.guard; h.server = m.server; h.own = servers.get(m.server)?.prefix
+    }
+    f.mounts.splice(f.mounts.indexOf(m), 1)
   }
 
   // models: class Order(db.Model) / (Base) / (SQLModel, table=True) / (models.Model)
   for (const cls of all(root, 'class_definition')) {
     const sup = cls.childForFieldName('superclasses')?.text ?? ''
-    if (!/\b(db\.Model|models\.Model|Base|DeclarativeBase)\b|SQLModel.*table\s*=\s*True/.test(sup)) continue
+    if (!/\b(db\.Model|models\.Model|Base|DeclarativeBase)\b|table\s*=\s*True/.test(sup)) continue   // not BaseModel (pydantic)
     const fields: string[] = []
     for (const st of cls.childForFieldName('body')?.namedChildren ?? []) {
       const a = st?.type === 'expression_statement' ? st.namedChildren[0] : undefined
@@ -124,7 +153,9 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
   // the mistakes AI makes most in Python apps (Bandit / Semgrep rules)
   for (const a of all(root, 'assignment')) {
     const left = a.childForFieldName('left')?.text ?? '', right = a.childForFieldName('right')
-    if (/^DEBUG$/.test(left) && right?.text === 'True') f.risks.add('debug')
+    // module level only: DEBUG = True inside class DevelopmentConfig is the dev setting, not the live one
+    const top = a.parent?.parent?.type === 'module' && !/(^|\/)(dev|development|local|test)\w*\.py$|settings\/(dev|local|test)/.test(path)
+    if (/^DEBUG$/.test(left) && right?.text === 'True' && top) f.risks.add('debug')
     if (/^(SECRET_KEY|app\.secret_key|app\.config\[['"]SECRET_KEY['"]\])$/.test(left) && str(right)) f.risks.add('secret')
     if (/^CORS_(ALLOW_ALL_ORIGINS|ORIGIN_ALLOW_ALL)$/.test(left) && right?.text === 'True') f.risks.add('cors')
   }
@@ -133,7 +164,7 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
     if (/\.run$/.test(fn) && kw(c, 'debug')?.text === 'True') f.risks.add('debug')
     if (fn === 'CORS' && !kw(c, 'origins') && !kw(c, 'resources')) f.risks.add('cors')
     if (/(^|\.)add_middleware$/.test(fn) && /CORSMiddleware/.test(c.text) && /allow_origins\s*=\s*\[\s*['"]\*['"]/.test(c.text)) f.risks.add('cors')
-    if (/(^|\.)(execute|executescript|raw|text|extra)$/.test(fn) && (fString(pos(c)[0]) || /^(binary_operator)$/.test(pos(c)[0]?.type ?? '') && /['"]/.test(pos(c)[0]!.text))) f.risks.add('sql')
+    if (/(^|\.)(execute|executescript|raw|extra)$|^(sqlalchemy\.|sa\.)?text$/.test(fn) && (fString(pos(c)[0]) || /^(binary_operator)$/.test(pos(c)[0]?.type ?? '') && /['"]/.test(pos(c)[0]!.text))) f.risks.add('sql')
   }
   if (all(root, 'decorator').some(d => /^(csrf_exempt|csrf\.exempt)$/.test(d.namedChildren[0]?.text ?? ''))) f.risks.add('csrf')
 
@@ -145,7 +176,6 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
   }
   return f
 
-  function guardIn(n?: N) { return !!n && /\b(Depends|Security)\(/.test(n.text) && GUARD.test(n.text) }
 
   // Facts from one subtree: the whole file, or one route handler.
   function collect(node: N, g: FileFacts): FileFacts {
@@ -154,11 +184,12 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
       g.used.add(fn.split('.').at(-1)!)
       // SQLAlchemy: session.add(Order(...)), session.delete(order), session.query(Order), select(Order), Order.query
       if (/(^|\.)session\.(add|add_all|merge)$|^(db\.)?session\.(add|merge)$/.test(fn) || /^(self\.)?(db|session)\.(add|merge)$/.test(fn)) {
-        const t = a0?.type === 'call' ? fnName(a0) : a0 ? modelOf(a0.text) : undefined
+        const made = a0 && all(node, 'assignment').find(x => x.childForFieldName('left')?.text === a0.text && x.childForFieldName('right')?.type === 'call')
+        const t = a0?.type === 'call' ? fnName(a0) : made ? fnName(made.childForFieldName('right')!) : a0 ? modelOf(a0.text) : undefined
         if (t && /^[A-Z]\w*$/.test(t)) { g.written.add(t); g.tables.add(t) }
         g.writes = true; g.ops.add('create')
       }
-      if (/(^|\.)(session|db)\.delete$/.test(fn) && a0) { const t = modelOf(a0.text); g.written.add(t); g.tables.add(t); g.writes = true; g.ops.add('delete') }
+      if (/(^|\.)(session|db)\.delete$/.test(fn) && a0) { const t = modelOf(a0.text); if (t) { g.written.add(t); g.tables.add(t) } g.writes = true; g.ops.add('delete') }
       if (/(^|\.)(query|select|get)$/.test(fn) && a0 && /^[A-Z]\w*$/.test(a0.text) && /session|db|^select$/.test(fn)) g.tables.add(a0.text)
       if (/^(insert|update|delete)$/.test(fn) && a0 && /^[A-Z]\w*$/.test(a0.text)) { g.tables.add(a0.text); g.written.add(a0.text); g.writes = true; g.ops.add(fn === 'insert' ? 'create' : fn) }
       // Django: Order.objects.create(...), Order.objects.filter(...).delete()
@@ -193,9 +224,6 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
       if (s.childForFieldName('value')?.text === 'os.environ' && k) { g.env.add(k); g.envReq.add(k) }
     }
     for (const t of all(node, 'attribute')) { const m = t.text.match(/^([A-Z]\w*)\.query$/); if (m) g.tables.add(m[1]) }   // Order.query.filter(...)
-    // a check inside the handler: if not current_user...: abort(401) / raise HTTPException(401) / redirect(...)
-    if (/current_user|is_authenticated|get_current_user|request\.user|verify_id_token|get_user\(/.test(node.text)
-      && /abort\(\s*40[13]|status_code\s*=\s*40[13]|HTTP_40[13]|HTTPException\(\s*40[13]|redirect\(|PermissionDenied/.test(node.text)) g.auth = true
     g.emptyCatch += all(node, 'except_clause').filter(e => /^\s*pass\s*$/.test(e.namedChildren.at(-1)?.text ?? '')).length
     return g
   }

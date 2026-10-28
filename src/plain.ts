@@ -60,8 +60,8 @@ export type FileFacts = {
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
-  handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts }[]  // Express-style routes and server actions
-  mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean }[]  // app.use('/api/x', [guards], router | require('./x'))
+  handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
+  mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
   pages: { path: string; comp: string; guard: boolean }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
   wrappers: Map<string, string>                                               // fetch helpers and their address prefix: api() -> '/api'
@@ -442,9 +442,22 @@ function models(schema = ''): Map<string, string[]> {
 }
 
 const envKeys = (text = '') => new Set([...text.matchAll(/^\s*([A-Z0-9_]+)\s*=/gm)].map(m => m[1]))
-// requirements.txt lines (stripe==7.1.0) and pyproject dependency strings ("fastapi>=0.110")
-const pyDeps = (text: string) => Object.fromEntries([...text.matchAll(/^\s*["']?([A-Za-z][\w.-]*)(?:\[[^\]]*\])?\s*((?:[=<>!~]=?|@)\s*[^"',;#\s]+)?/gm)]
-  .filter(m => !/^(name|version|description|requires|readme|license|authors|dependencies|build|python|project|tool|\[)/i.test(m[1])).map(m => [m[1].toLowerCase(), (m[2] ?? '*').replace(/\s/g, '').replace(/^==/, '')]))
+// Python packages: requirements.txt lines (stripe==7.1.0), and in pyproject.toml only real dependency lists:
+// [project] dependencies = [...], [project.optional-dependencies] groups, [tool.poetry.*dependencies] tables.
+const pySpec = (x: string) => x.match(/^\s*([A-Za-z][\w.-]*)(?:\[[^\]]*\])?\s*((?:[=<>!~]=?)\s*[^,;#\s]+)?/)
+const pyDeps = (text: string, path: string): Record<string, string> => {
+  const out: Record<string, string> = {}, add = (spec?: string) => { const m = spec && pySpec(spec); if (m && m[1].toLowerCase() !== 'python') out[m[1].toLowerCase()] = (m[2] ?? '*').replace(/\s/g, '').replace(/^==/, '') }
+  if (!path.endsWith('.toml')) { for (const l of text.split('\n')) if (!/^\s*(#|-|$)|:\/\//.test(l)) add(l.replace(/#.*/, '')); return out }
+  let section = '', inArray = false
+  for (const l of text.split('\n')) {
+    const h = l.match(/^\s*\[([^\]]+)\]\s*$/)
+    if (h) { section = h[1]; inArray = false; continue }
+    const arrayHere = section === 'project' && /^\s*dependencies\s*=\s*\[/.test(l) || section === 'project.optional-dependencies' && /^\s*[\w-]+\s*=\s*\[/.test(l)
+    if (arrayHere || inArray) { for (const q of l.matchAll(/["']([^"']+)["']/g)) add(q[1]); inArray = !/\]/.test(l.replace(/\[[^\]]*\]/g, '').split('=').slice(arrayHere ? 1 : 0).join('=')) || (arrayHere && !/\]\s*$/.test(l)); continue }
+    if (/^tool\.poetry(\.group\.[\w-]+)?\.(dev-)?dependencies$/.test(section)) { const m = l.match(/^\s*([A-Za-z][\w.-]*)\s*=\s*(?:["']([^"']*)["']|\{[^}]*version\s*=\s*["']([^"']*)["'])/); if (m && m[1] !== 'python') out[m[1].toLowerCase()] = m[2] ?? m[3] ?? '*' }
+  }
+  return out
+}
 const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.dependencies, ...p.devDependencies } as Record<string, string> } catch { return {} } }
 
 export function appFacts(snap: Snap) {
@@ -480,7 +493,7 @@ export function appFacts(snap: Snap) {
 
   const routes = new Map<string, Route>()
   const deps_ = Object.assign({}, ...[...snap].filter(([p]) => /(^|\/)package\.json$/.test(p) && !p.includes('node_modules/')).map(([, t]) => deps(t)),
-    ...[...snap].filter(([p]) => /(^|\/)(requirements[\w-]*\.txt|pyproject\.toml)$/.test(p)).map(([, t]) => pyDeps(t))) as Record<string, string>
+    ...[...snap].filter(([p]) => /(^|\/)(requirements[\w-]*\.txt|pyproject\.toml)$/.test(p)).map(([p, t]) => pyDeps(t, p))) as Record<string, string>
   for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
   // TanStack Start: route files are pages (or server routes); a login check on a parent layout covers its children.
   const browserPages = new Set<string>()
@@ -522,7 +535,7 @@ export function appFacts(snap: Snap) {
   // Express-style servers: each address becomes its own unit "file#/api/x", with the facts of its handlers.
   const mounts = new Map<string, { path: string; guard: boolean; from: string }>()
   const guards: { from: string; path: string }[] = []
-  for (const [p, f] of files) for (const m of f.mounts) {
+  for (const [p, f] of files) if (!p.endsWith('.py')) for (const m of f.mounts) {
     const q = m.target.startsWith('.') ? resolve(p, m.target) : target(p, m.target), file = q && files.get(q)
     if (file && (file.handlers.length || file.mounts.length)) mounts.set(q!, { ...m, from: p })   // it declares routes: a router
     else if (m.guardLike) guards.push({ from: p, path: m.path })                                  // otherwise it's a login check
@@ -533,10 +546,35 @@ export function appFacts(snap: Snap) {
     return { path: up.path.replace(/\/$/, '') + m.path, guard: up.guard || m.guard }
   }
   const guardedPaths = guards.map(g => prefix(g.from).path.replace(/\/$/, '') + g.path)
+  // Python: routers are named things inside files, so mounts are keyed by file and router
+  const pyMounts = new Map<string, { from: string; server: string; path: string; guard: boolean; override: boolean }>()
+  for (const [p, f] of files) if (p.endsWith('.py')) for (const m of f.mounts) {
+    const q = target(p, m.target)
+    if (q) pyMounts.set(`${q}::${m.attr}`, { from: p, server: m.server, path: m.path.replace(/\/$/, ''), guard: m.guard, override: !!m.override })
+  }
+  const pyServer = (file: string, name: string) => (files.get(file) as PyFacts | undefined)?.servers?.get(name)
+  const pyPrefix = (file: string, server: string, seen = new Set<string>()): { path: string; guard: boolean; override: boolean } => {
+    const k = `${file}::${server}`, m = pyMounts.get(k)
+    if (!m || seen.has(k)) return { path: '', guard: false, override: false }
+    seen.add(k)
+    const pf = !pyServer(m.from, m.server) && files.get(m.from)!.binds.has(m.server) ? target(m.from, m.server) ?? m.from : m.from   // parent imported too
+    const up = pyPrefix(pf, m.server, seen), parent = pyServer(pf, m.server)
+    return { path: up.path + (up.override ? '' : (parent?.prefix ?? '').replace(/\/$/, '')) + m.path, guard: up.guard || !!parent?.guard || m.guard, override: m.override }
+  }
+  const pyAliases = new Map([...files.values()].flatMap(f => [...((f as PyFacts).aliases ?? [])]))
+  const pyAppGuard = [...files.values()].some(f => (f as PyFacts).appGuard)
+  const pyRoute = (p: string, h: FileFacts['handlers'][number]) => {
+    let file = p, own = h.own ?? '', g = false
+    if (h.imported) { const q = target(p, h.server); if (q) { file = q; own = pyServer(q, h.server)?.prefix ?? ''; g = !!pyServer(q, h.server)?.guard } }
+    const P = pyPrefix(file, h.server)
+    return { url: (P.path + (P.override ? '' : own.replace(/\/$/, '')) + h.path).replace(/(.)\/$/, '$1') || '/',
+      guard: P.guard || g || pyAppGuard || h.mw.some(a => pyAliases.get(a)) }
+  }
   for (const [p, f] of [...files]) {
     const pre = f.handlers.length ? prefix(p) : null
     for (const h of f.handlers) {
-      const url = h.path.startsWith('(server action) ') ? `${h.path} in ${p}`
+      const py = p.endsWith('.py') ? pyRoute(p, h) : undefined
+      const url = py ? py.url : h.path.startsWith('(server action) ') ? `${h.path} in ${p}`
         : (pre!.path.replace(/\/$/, '') + (h.path === '/' ? '' : h.path)).replace(/:(\w+)\??/g, '[$1]') || '/'
       const key = `${p}#${url}`, unit = files.get(key) ?? empty()
       const hf = h.handler ? f.locals.get(h.handler) ?? (target(p, h.handler) ? files.get(target(p, h.handler)!)?.locals.get(h.handler) : undefined) ?? h.facts : h.facts
@@ -547,7 +585,7 @@ export function appFacts(snap: Snap) {
       // Logged in if every handler that changes something checks (or, with none, every handler does).
       // A named middleware counts unless this repo defines it and it can't stop anyone; reading the user counts only if the code acts on it.
       const mwGuard = h.guard && !(h.mw.length && h.mw.every(m => middleware.get(m) === false))
-      const writes = h.method !== 'GET', guard = pre!.guard || mwGuard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
+      const writes = h.method !== 'GET', guard = pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
       const u = unit as FileFacts & { w?: boolean[]; r?: boolean[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
@@ -658,7 +696,7 @@ export type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: s
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
 // Addresses that have to work before you're logged in (or are called by other services): never "missing a login check".
 // Webhooks and sign-in callbacks anywhere in the address; login pages only as the last part, and never under admin.
-const PUBLIC = /^(login|log in|register|signup|sign up|signin|sign in|logout|log out|signout|sign out|forgot password|reset password|verify|verify email|health)$/
+const PUBLIC = /^(login|log in|register|signup|sign up|signin|sign in|logout|log out|signout|sign out|forgot password|reset password|verify|verify email|health|token|access token|refresh|refresh token)$/   // token: OAuth2 password login
 const isPublic = (url: string) => !/admin/i.test(url) && (named(url).some(s => /\b(webhooks?|callback|oauth)\b/.test(s)) || PUBLIC.test(named(url).at(-1) ?? ''))
 
 export type Analysis = ReturnType<typeof analyze>

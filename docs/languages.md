@@ -13,7 +13,8 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | **Supabase** (tables, Row Level Security, edge functions) | ✅ Supported |
 | Stripe, OpenAI, Anthropic, Resend, Twilio (outside services) | ✅ Recognized |
 | **TanStack Start** (Lovable's default since May 2026) | ✅ Supported |
-| 3. Python: FastAPI, Flask, Django | Planned |
+| **Python: FastAPI, Flask** (SQLAlchemy, SQLModel) | ✅ Supported |
+| 3. Python: Django (`urls.py`, views, DRF) | 🔜 Next (its ORM and models already work) |
 | 4. Vue / Nuxt, SvelteKit | Planned |
 | 5. Angular | Planned |
 | 6. C#: ASP.NET Core | Planned |
@@ -241,38 +242,61 @@ Lovable's default for new apps since May 2026, usually with Supabase.
 - **Any stack:** server code that an admin page calls is treated as admin-only. A missing
   login check there is ⚠, whatever the code is called.
 
-## Python: FastAPI, Flask, Django (planned)
+## Python: FastAPI and Flask ✅ (Django 🔜)
 
 - **Addresses:**
-  - Flask: `@app.route('/x', methods=[...])` and `@bp.post`. Blueprint prefixes come from
-    `Blueprint(url_prefix=)`, and `register_blueprint(url_prefix=)` replaces them.
-  - FastAPI: `@app.get('/x/{id}')`. `APIRouter(prefix=)` and `include_router(prefix=)` add up.
-  - Django: `urls.py` `path()` and `include()`. Methods come from the view (`def get/post`,
-    `@require_POST`). DRF routers make several addresses from one line.
-- **Login checks, and why they're harder:**
-  - Per address: `@login_required` / `@jwt_required()` (Flask), `Depends(get_current_user)`
-    in parameters or `dependencies=[...]` (FastAPI), `LoginRequiredMixin` /
-    `permission_classes` (Django and DRF).
-  - App-wide checks are common, and missing them would cause false alarms:
-    - Flask `before_request`
-    - FastAPI router- or app-level `dependencies`
-    - Django `LoginRequiredMiddleware`
-    - DRF `DEFAULT_PERMISSION_CLASSES`. Its absence means everything is public by default,
-      which plain should say.
+  - FastAPI: `@app.get('/x/{id}')` and `@router.post(...)` on `FastAPI()` / `APIRouter(prefix=...)`.
+    Router prefixes add up with `include_router(..., prefix=...)`, across files.
+  - Flask: `@app.route('/x/<int:id>', methods=[...])` and `@bp.post(...)` on `Blueprint(url_prefix=...)`,
+    plus `register_blueprint(..., url_prefix=...)`.
+  - Path parameters become `[id]`, like everywhere else.
+- **Login checks:**
+  - FastAPI:
+    - `Depends(get_current_user)` / `Security(...)` in a route's parameters
+    - `dependencies=[Depends(...)]` on the route, the router, or `include_router`
+  - Flask:
+    - `@login_required`, `@jwt_required()`, `@admin_required`
+    - a blueprint's `before_request` that aborts or redirects
+  - Inside a handler: a check on `current_user` / `request.user` that aborts with 401/403,
+    raises or redirects.
+  - Names are matched like in Express, since there's no standard (`get_current_user`,
+    `require_admin`, `verify_token`, …).
 - **Database:**
-  - SQLAlchemy / SQLModel models; writes through `session.add` / `delete`.
-  - Django models; writes through `objects.create`, `.save()`, `.delete()`.
-  - Migrations: Alembic `op.drop_column` / `drop_table` (only in `upgrade()`), and Django
-    `RemoveField` / `DeleteModel`.
-- **Common AI mistakes to flag:** `DEBUG = True` / `debug=True`, a hard-coded `SECRET_KEY`,
-  CORS open to every site, `@csrf_exempt`, and SQL built from f-strings. Sources: Bandit and
-  Semgrep rules, and the [Veracode 2025 report][veracode] (38% of AI-written Python had a flaw).
-- **Parser decision: tree-sitter (WebAssembly) inside plain, not the user's `python3`.**
-  - The `python3` on a user's machine is often old. The Mac default is 3.9, or an install
-    prompt.
-  - `ast` can't read syntax newer than the Python running it.
-  - It gives up on a whole file at the first error, while tree-sitter keeps going.
-  - tree-sitter-python is about 0.5 MB and gives every user the same result.
+  - SQLAlchemy / SQLModel: `session.add(Order(...))`, `session.delete(order)`,
+    `Order.query.filter(...).delete()`, `select(Order)`.
+  - Django ORM: `Order.objects.create/update/delete`.
+  - Supabase-py: `supabase.table('orders').insert(...)`.
+  - Models: `class Order(db.Model)`, `(Base)`, `(SQLModel, table=True)` or `(models.Model)`.
+    Their fields and links show up in the database part of the card, like Prisma.
+- **Before you ship:**
+  - Migrations: plain notices changed models with no new Alembic / Flask-Migrate / Django
+    migration, and `drop_table` / `drop_column` / `RemoveField` in `upgrade()`.
+  - Env vars: `os.environ[...]`, `os.getenv('X')` and `config('X')`. A real default means
+    it's optional.
+  - New packages from `requirements.txt` and `pyproject.toml`.
+- **The mistakes AI makes most in Python** (from Bandit and Semgrep rules, and the
+  [Veracode 2025 report][veracode]: 38% of AI-written Python had a flaw):
+
+  | In the code | Card says | Level |
+  |---|---|---|
+  | `DEBUG = True`, `app.run(debug=True)` | error pages can show visitors your code and settings | ⚠ |
+  | `SECRET_KEY = '...'`, `app.secret_key = '...'` | anyone who sees the code can fake logins | ⚠ |
+  | `execute(f"... {x}")`, `text(f"...")`, `.raw(f"...")` | SQL injection | ⚠ |
+  | `allow_origins=["*"]`, `CORS(app)`, `CORS_ALLOW_ALL_ORIGINS = True` | any website can call your server | ! |
+  | `@csrf_exempt` | other sites could submit that form for a logged-in visitor | ! |
+
+- **Any stack:** an address under `/admin` with no login check is ⚠ even if it only *reads*
+  data. An admin export is a data leak.
+- **Parser: tree-sitter, not the user's `python3`.**
+  - The Python on a user's machine is often old (the Mac default is 3.9) or missing.
+  - Python's own `ast` can't read syntax newer than itself, and gives up on a whole file at
+    the first error.
+  - tree-sitter-python (MIT, 0.5 MB, in `vendor/`) loads in about 8 ms, handles `match`,
+    `type` aliases and modern f-strings, and keeps going past syntax errors.
+- **Django, next:** routes in `urls.py` (`path()`, `include()`); methods come from the view;
+  DRF routers create several addresses from one line. Login checks: `@login_required`,
+  `LoginRequiredMixin`, `permission_classes`, and `DEFAULT_PERMISSION_CLASSES`. Without that
+  setting, DRF allows everyone, which plain should say.
 
 ## Vue / Nuxt and SvelteKit (planned)
 

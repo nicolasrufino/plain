@@ -437,3 +437,41 @@ def checkout(user = Depends(get_current_user)):
   for (const e of ['Other files', 'list orders part', '/api/coupons/ ']) assert.ok(!c.includes(e), `python should not say "${e}"\n${c}`)
   console.log('ok (python: fastapi + flask)')
 }
+
+// Review 5 (2026-10-28): Python login checks and prefixes without false reassurance.
+{
+  const flask = (body: string) => `from flask import Flask, Blueprint, redirect, request, abort, url_for\nfrom flask_login import login_required, current_user\napp = Flask(__name__)\n${body}\n`
+  const c1 = card({}, {
+    'a/order.py': flask("@login_required\n@app.route('/admin/delete', methods=['POST'])\ndef d():\n    User.query.delete()\n"),
+    'b/https.py': flask("bp = Blueprint('o', __name__, url_prefix='/orders')\n@bp.before_request\ndef https():\n    if not request.is_secure:\n        return redirect(request.url.replace('http', 'https'))\n@bp.post('/')\ndef o():\n    db.session.add(Order())\napp.register_blueprint(bp)\n"),
+    'c/prg.py': flask("@app.route('/comments', methods=['POST'])\ndef c():\n    name = current_user.name if current_user.is_authenticated else 'guest'\n    db.session.add(Comment(name=name))\n    return redirect(url_for('index'))\n"),
+    'd/fast.py': "from fastapi import FastAPI, Depends\nfrom fastapi.security import OAuth2PasswordRequestForm\napp = FastAPI()\n@app.delete('/admin/users/{user_id}')\ndef du(user_id: int, admin_service = Depends(get_admin_service)):\n    db.delete(user)\n@app.post('/reviews')\ndef r(user = Depends(get_current_user_optional)):\n    db.add(Review())\n@app.post('/token')\ndef t(form: OAuth2PasswordRequestForm = Depends()):\n    return {}\n",
+  })
+  for (const e of ['⚠ Anyone can use the admin delete part', '⚠ Anyone can use the orders part', 'Anyone can post comments', '⚠ Anyone can use the admin user part', 'Anyone can post reviews'])
+    assert.ok(c1.includes(e), `review 5 missing "${e}"\n${c1}`)
+  assert.ok(!c1.includes('post data'), c1)
+  // the FastAPI full-stack template: CurrentUser alias, SQLModel table=True, routers mounted through api_router
+  const c2 = card({}, {
+    'app/api/deps.py': 'from typing import Annotated\nfrom fastapi import Depends\nCurrentUser = Annotated[User, Depends(get_current_user)]\n',
+    'app/models.py': 'class ItemBase(SQLModel):\n    title: str\nclass Item(ItemBase, table=True):\n    id: int\n    title: str\n',
+    'app/api/routes/items.py': "from fastapi import APIRouter\nfrom app.api.deps import CurrentUser\nrouter = APIRouter(prefix='/items')\n@router.post('/')\ndef create(current_user: CurrentUser, item_in: ItemCreate):\n    item = Item(**item_in)\n    session.add(item)\n",
+    'app/api/main.py': 'from fastapi import APIRouter\nfrom app.api.routes import items\napi_router = APIRouter()\napi_router.include_router(items.router)\n',
+    'app/main.py': "from fastapi import FastAPI\nfrom app.api.main import api_router\napp = FastAPI()\napp.include_router(api_router, prefix='/api/v1')\n",
+    'pyproject.toml': '[project]\nname = "app"\ndependencies = [\n  "fastapi>=0.114",\n  "python-jose>=3.3",\n]\n[tool.ruff]\nline-length = 100\n',
+  })
+  for (const e of ['saves new items and requires login ✓. /api/v1/items', 'Your database now stores items: title.', 'python-jose (>=3.3)'])
+    assert.ok(c2.includes(e), `review 5 missing "${e}"\n${c2}`)
+  for (const e of ['line-length', 'item bases', '⚠']) assert.ok(!c2.includes(e), `review 5 should not say "${e}"\n${c2}`)
+  // blueprints: registered url_prefix replaces the blueprint's own; routes on a blueprint imported from __init__.py; two routers in one file
+  const c3 = card({}, {
+    'app/__init__.py': "from flask import Flask\nfrom app.admin import bp as admin_bp\napp = Flask(__name__)\napp.register_blueprint(admin_bp, url_prefix='/admin')\n",
+    'app/admin/__init__.py': "from flask import Blueprint\nbp = Blueprint('admin', __name__, url_prefix='/admin')\n",
+    'app/admin/routes.py': "from app.admin import bp\n@bp.route('/wipe', methods=['POST'])\ndef wipe():\n    Order.query.delete()\n",
+    'api/users.py': "from fastapi import APIRouter, Depends\nrouter = APIRouter(prefix='/users')\nadmin_router = APIRouter(prefix='/admin/users')\n@router.post('/signup')\ndef signup():\n    db.add(User())\n@admin_router.delete('/{id}')\ndef rm(id: int):\n    db.delete(user)\n",
+    'api/main.py': "from fastapi import FastAPI, Depends\nfrom api import users\napp = FastAPI()\napp.include_router(users.router)\napp.include_router(users.admin_router, dependencies=[Depends(get_current_admin)])\n",
+  })
+  for (const e of ['⚠ Anyone can use the admin wipe part of your server without logging in.', '/admin/wipe', 'deletes users and requires login ✓. /admin/users/[id]'])
+    assert.ok(c3.includes(e), `review 5 missing "${e}"\n${c3}`)
+  for (const e of ['/admin/admin', 'signup part']) assert.ok(!c3.includes(e), `review 5 should not say "${e}"\n${c3}`)
+  console.log('ok (review 5)')
+}
