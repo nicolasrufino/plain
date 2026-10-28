@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { analyze, snapshot, route, pageName, named, things, list, cap, type Analysis } from './plain.ts'
+import { analyze, snapshot, pageName, named, things, list, cap, type Analysis } from './plain.ts'
 
 const ID = { GIT_AUTHOR_NAME: 'plain', GIT_AUTHOR_EMAIL: 'plain@localhost', GIT_COMMITTER_NAME: 'plain', GIT_COMMITTER_EMAIL: 'plain@localhost' }
 const git = (args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env) =>
@@ -63,6 +63,7 @@ export function recap(cwd: string, steps: { prompt: string; before: string; afte
     .filter(x => x.a.files > 0)
   if (!per.length) return 'plain recap · nothing about the app changed in this session.'
   const { A, B } = total
+  const route = (p: string) => B.routes.get(p) ?? A.routes.get(p)
   const out: string[] = [`${bold('plain recap')} · ${per.length} request${per.length === 1 ? '' : 's'} · ${total.files} files changed`]
 
   // --- your app now: pages, money, admin, data, with what's new or changed today

@@ -4,7 +4,7 @@
 //   plain [ref] [--asked "what you asked for"]   ref defaults to HEAD (uncommitted work)
 //   plain --hook                                  Claude Code Stop hook: reads the last prompt
 //
-// ponytail: Next.js App Router + Prisma + Stripe only. Each framework is one more fact extractor.
+// ponytail: Next.js (app/ and pages/), Express-style servers, React Router, Prisma, Stripe. Each framework is one more fact extractor.
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
@@ -36,62 +36,121 @@ const SERVICES: Record<string, string> = {
 }
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend', supabase: 'Supabase' }
-const CODE = /\.(ts|tsx|js|jsx|mjs)$/
+const CODE = /\.[cm]?[jt]sx?$/
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
 
 type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
-  tables: Set<string>; writes: boolean; env: Set<string>; auth: boolean; money: boolean
+  tables: Set<string>; ops: Set<string>; writes: boolean; env: Set<string>; auth: boolean; money: boolean
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
+  binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
+  handlers: { method: string; path: string; guard: boolean; handler?: string; facts: FileFacts }[]  // Express-style routes
+  mounts: { path: string; target: string; guard: boolean }[]                  // app.use('/api/x', router | require('./x'))
+  pages: { path: string; comp: string; guard: boolean }[]                     // React Router <Route> / { path, element }
 }
 
 export const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
 const isExported = (n: ts.Node) =>
   ts.canHaveModifiers(n) && !!ts.getModifiers(n)?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)
 
+const HTTP = /^(get|post|put|patch|delete)$/
+const SERVER = /^(express(\.Router)?|Router|fastify|Fastify|new Hono|require\(['"]express['"]\)(\.Router)?)\(/   // what makes a variable a server/router
+const GUARD = /auth|admin|protect|login|logged|token|jwt|session|private/i   // server middleware that checks who you are
+const PAGE_GUARD = /auth|protect|private|require|guard|signedin|loggedin/i   // client wrapper that does
+const empty = (printed = ''): FileFacts => ({
+  fns: new Map(), used: new Set(), jsx: new Set(), services: new Set(), tables: new Set(), ops: new Set(),
+  writes: false, env: new Set(), auth: false, money: false, emptyCatch: 0, todos: [], hardcoded: [], anys: 0, printed,
+  outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(), headings: [], forms: 0,
+  binds: new Map(), locals: new Map(), handlers: [], mounts: [], pages: [],
+})
+const fnLike = (n?: ts.Node) => !!n && (ts.isArrowFunction(n) || ts.isFunctionExpression(n))
+
 export function fileFacts(path: string, text: string): FileFacts {
   const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true,
-    /x$/.test(path) ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
-  const f: FileFacts = {
-    fns: new Map(), used: new Set(), jsx: new Set(), services: new Set(), tables: new Set(),
-    writes: false, env: new Set(), auth: false, money: false, emptyCatch: 0,
-    todos: text.match(/\/\/\s*(TODO|FIXME|HACK)\b[^\n]*/g)?.map(t => t.replace(/^\/\/\s*/, '')) ?? [],
-    hardcoded: [], anys: 0, printed: printer.printFile(sf),
-    outside: new Set(), links: new Set(), fetches: new Set(), ui: new Set(), imports: [], written: new Set(), headings: [], forms: 0,
+    /tsx$/.test(path) ? ts.ScriptKind.TSX : /\.[cm]?ts$/.test(path) ? ts.ScriptKind.TS : ts.ScriptKind.JSX)
+  const f = collect(sf, sf, empty(printer.printFile(sf)))
+  f.todos = text.match(/\/\/\s*(TODO|FIXME|HACK)\b[^\n]*/g)?.map(t => t.replace(/^\/\/\s*/, '')) ?? []
+  const addFn = (name: string, node: ts.Node) => {
+    f.fns.set(name, printer.printNode(ts.EmitHint.Unspecified, node, sf))
+    if (/^(get|fetch|load|list)[A-Z]/.test(name) && returnsLiteralOnly(node)) f.hardcoded.push(name)
   }
+  for (const st of sf.statements) {
+    const fns: [string, ts.Node][] = ts.isFunctionDeclaration(st) && st.name ? [[st.name.text, st]]
+      : ts.isVariableStatement(st) ? st.declarationList.declarations.filter(d => ts.isIdentifier(d.name) && fnLike(d.initializer)).map(d => [(d.name as ts.Identifier).text, d.initializer!])
+      : []
+    for (const [name, node] of fns) {
+      f.locals.set(name, collect(sf, node, empty(printer.printNode(ts.EmitHint.Unspecified, node, sf))))
+      if (isExported(st)) addFn(name, node)
+    }
+  }
+  return f
+}
+
+// Facts from one subtree: a whole file, one function, or one route handler.
+function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
+  const servers = new Set<string>(), guarded = new Set<string>()
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
     : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
   const visit = (n: ts.Node) => {
     if (ts.isCallExpression(n)) {
       const callee = n.expression
+      const arg = str(n.arguments[0])?.replace(/^\[…\]/, '')
       if (ts.isIdentifier(callee)) {
         f.used.add(callee.text)
         if (AUTH.has(callee.text)) f.auth = true
-        const arg = str(n.arguments[0])
         if (callee.text === 'fetch' && arg?.startsWith('/')) f.fetches.add(arg.split('?')[0])
+        if (callee.text === 'require' && arg) { f.imports.push(arg); if (SERVICES[arg]) f.services.add(SERVICES[arg]) }
       } else if (ts.isPropertyAccessExpression(callee)) {
         const parts = callee.getText(sf).replace(/\s|\?/g, '').split('.')
-        if (parts[0] === 'prisma' && parts.length === 3 && !parts[1].startsWith('$')) {
+        const obj = parts.slice(0, -1).join('.'), last = parts.at(-1)!, args = n.arguments
+        const isGuard = (a: ts.Node) => !fnLike(a) && GUARD.test(a.getText(sf))
+        if (servers.has(obj) && last === 'use') {
+          const t = args.at(-1)!, spec = ts.isCallExpression(t) && t.expression.getText(sf) === 'require' ? str(t.arguments[0]) : undefined
+          if (arg?.startsWith('/') && (ts.isIdentifier(t) || spec)) f.mounts.push({ path: arg, target: spec ?? t.getText(sf), guard: args.slice(1, -1).some(isGuard) })
+          else if (!arg && args.some(isGuard)) guarded.add(obj)
+        } else if (servers.has(obj) && HTTP.test(last) && arg?.startsWith('/') && args.length > 1) {
+          const h = args.at(-1)!
+          f.handlers.push({ method: last.toUpperCase(), path: arg, guard: guarded.has(obj) || args.slice(1, -1).some(isGuard),
+            handler: ts.isIdentifier(h) ? h.text : undefined, facts: fnLike(h) ? collect(sf, h, empty(printer.printNode(ts.EmitHint.Unspecified, h, sf))) : empty(h.getText(sf)) })
+          return   // the handler's facts belong to the route, not to the whole file
+        } else if (HTTP.test(last) && arg?.startsWith('/') && !servers.has(obj)) f.fetches.add(arg.split('?')[0])   // axios.get('/api/x'), api.post(...)
+        if (/^(prisma|db)$/.test(parts[0]) && parts.length === 3 && !parts[1].startsWith('$')) {
           f.tables.add(cap(parts[1]))
-          if (WRITES.test(parts[2])) { f.writes = true; f.written.add(cap(parts[1])) }
+          if (WRITES.test(parts[2])) { f.writes = true; f.written.add(cap(parts[1])); f.ops.add(parts[2].replace(/Many$/, '').replace('upsert', 'update')) }
         }
         if (parts[0] === 'stripe' && parts.at(-1) === 'create') f.money = true
         if (CLIENTS[parts[0]] && parts.length > 1) f.outside.add(`${CLIENTS[parts[0]]}: ${parts.slice(1).join('.')}`)
         if (parts.at(-1) === 'push' && /router/.test(parts[0]) && str(n.arguments[0])?.startsWith('/')) f.links.add(str(n.arguments[0])!)
       }
     }
-    if (ts.isPropertyAccessExpression(n) && n.expression.getText(sf) === 'process.env') f.env.add(n.name.text)
+    if (ts.isPropertyAccessExpression(n) && /^(process|import\.meta)\.env$/.test(n.expression.getText(sf))) f.env.add(n.name.text)
+    if (ts.isVariableDeclaration(n) && n.initializer) {
+      const init = n.initializer.getText(sf)
+      if (ts.isIdentifier(n.name) && SERVER.test(init)) servers.add(n.name.text)
+      const mod = init.match(/(?:require|import)\(\s*['"]([^'"]+)['"]/)?.[1]   // require('x'), lazy(() => import('x'))
+      if (mod) for (const el of ts.isIdentifier(n.name) ? [n.name] : ts.isObjectBindingPattern(n.name) ? n.name.elements.map(e => e.name) : [])
+        if (ts.isIdentifier(el)) f.binds.set(el.text, mod)
+    }
+    if (ts.isStringLiteral(n) && METHODS.includes(n.text) && /\.method\b/.test((ts.isCaseClause(n.parent) ? n.parent.parent.parent : n.parent).getText(sf)))
+      f.fns.set(n.text, '')   // pages/api: if (req.method === 'POST')
+    const route = routeLike(n, sf)
+    if (route) {
+      const chain = [route]; for (let p = n.parent; p; p = p.parent) { const r = routeLike(p, sf); if (r) chain.unshift(r) }
+      const path = chain.reduce((acc, r) => r.path === undefined ? acc : r.path.startsWith('/') ? r.path : `${acc.replace(/\/$/, '')}/${r.path}`, '')
+      if (route.comp && (route.path !== undefined || route.index) && !path.includes('*'))
+        f.pages.push({ path: path || '/', comp: route.comp, guard: chain.some(r => r.guard) })
+    }
     if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) f.jsx.add(n.tagName.getText(sf))
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
       const mod = n.moduleSpecifier.text
       f.imports.push(mod)
       if (SERVICES[mod]) f.services.add(SERVICES[mod])
       const c = n.importClause
-      if (c?.name) f.used.add(c.name.text)
+      if (c?.name) { f.used.add(c.name.text); f.binds.set(c.name.text, mod) }
       if (c?.namedBindings && ts.isNamedImports(c.namedBindings))
-        for (const el of c.namedBindings.elements) f.used.add((el.propertyName ?? el.name).text)
+        for (const el of c.namedBindings.elements) { f.used.add((el.propertyName ?? el.name).text); f.binds.set(el.name.text, mod) }
     }
     if (ts.isJsxAttribute(n) && n.initializer) {
       const v = str(n.initializer), name = n.name.getText(sf)
@@ -113,21 +172,32 @@ export function fileFacts(path: string, text: string): FileFacts {
     if (n.kind === ts.SyntaxKind.AnyKeyword) f.anys++
     ts.forEachChild(n, visit)
   }
-  visit(sf)
-
-  const addFn = (name: string, node: ts.Node) => {
-    f.fns.set(name, printer.printNode(ts.EmitHint.Unspecified, node, sf))
-    if (/^(get|fetch|load|list)[A-Z]/.test(name) && returnsLiteralOnly(node)) f.hardcoded.push(name)
-  }
-  for (const st of sf.statements) {
-    if (!isExported(st)) continue
-    if (ts.isFunctionDeclaration(st) && st.name) addFn(st.name.text, st)
-    if (ts.isVariableStatement(st))
-      for (const d of st.declarationList.declarations)
-        if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer)))
-          addFn(d.name.text, d.initializer)
-  }
+  visit(root)
   return f
+}
+
+// <Route path="x" element={<Page />}> or { path: 'x', element: <Page /> }: its path, the page component, and any login wrapper.
+function routeLike(n: ts.Node, sf: ts.SourceFile): { path?: string; index: boolean; comp?: string; guard: boolean } | null {
+  const tags = (e?: ts.Node) => { const out: string[] = []; const v = (x: ts.Node) => { if (ts.isJsxOpeningElement(x) || ts.isJsxSelfClosingElement(x)) out.push(x.tagName.getText(sf)); ts.forEachChild(x, v) }; if (e) v(e); return out }
+  let path: string | undefined, index = false, el: ts.Node | undefined
+  if (ts.isJsxElement(n)) n = n.openingElement
+  else if (ts.isJsxOpeningElement(n)) return null   // seen through its JsxElement
+  if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText(sf) === 'Route') {
+    for (const a of n.attributes.properties) if (ts.isJsxAttribute(a)) {
+      const k = a.name.getText(sf), v = a.initializer
+      if (k === 'path' && v && ts.isStringLiteral(v)) path = v.text
+      if (k === 'index') index = true
+      if ((k === 'element' || k === 'Component' || k === 'component') && v) el = v
+    }
+  } else if (ts.isObjectLiteralExpression(n)) {
+    const prop = (k: string) => n.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(sf) === k) as ts.PropertyAssignment | undefined
+    const p = prop('path')?.initializer
+    if (!p || !ts.isStringLiteral(p) || !(prop('element') || prop('Component') || prop('component') || prop('children'))) return null
+    path = p.text; index = !!prop('index'); el = prop('element')?.initializer ?? prop('Component')?.initializer ?? prop('component')?.initializer
+  } else return null
+  const names = el && (ts.isJsxExpression(el) || ts.isJsxElement(el) || ts.isJsxSelfClosingElement(el)) ? tags(el) : el ? [el.getText(sf).replace(/[{}\s]/g, '')] : []
+  const comp = names.filter(t => /^[A-Z]/.test(t) && !PAGE_GUARD.test(t) && !/^(Navigate|Suspense|Outlet|Fragment)$/.test(t)).at(-1)
+  return { path: path?.replace(/:(\w+)\??/g, '[$1]'), index, comp, guard: names.some(t => PAGE_GUARD.test(t)) }
 }
 
 // A "get/fetch/list" function that returns a literal and never awaits or queries anything.
@@ -145,12 +215,14 @@ function returnsLiteralOnly(fn: ts.Node): boolean {
 
 // ---------- facts about the whole app ----------
 
-type Route = { kind: 'page' | 'endpoint'; url: string }
-export function route(path: string): Route | null {
+export type Route = { kind: 'page' | 'endpoint'; url: string }
+// Next.js routes come from file paths: app/x/page.tsx, app/api/x/route.ts, and (with pagesDir) pages/x.tsx, pages/api/x.ts.
+export function route(path: string, pagesDir = false): Route | null {
   const m = path.match(/^(?:src\/)?app\/(.*?)\/?(page|route)\.[jt]sx?$/)
-  if (!m) return null
-  const url = '/' + m[1].split('/').filter(s => s && !/^\(.*\)$/.test(s)).join('/')
-  return { kind: m[2] === 'page' ? 'page' : 'endpoint', url }
+  const clean = (p: string) => '/' + p.split('/').filter(s => s && s !== 'index' && !/^\(.*\)$/.test(s)).join('/')
+  if (m) return { kind: m[2] === 'page' ? 'page' : 'endpoint', url: clean(m[1]) }
+  const pg = pagesDir && path.match(/^(?:src\/)?pages\/(?!_)(.*)\.[jt]sx?$/)
+  return pg ? { kind: pg[1].startsWith('api/') ? 'endpoint' : 'page', url: clean(pg[1]) } : null
 }
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -174,12 +246,50 @@ export function appFacts(snap: Snap) {
   for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/')) {
     try { files.set(p, fileFacts(p, t)) } catch { /* unparsable file: report nothing about it */ }
   }
-  // A page also does what its own components do: fold in facts from local imports.
-  // ponytail: '@/' and relative paths only; read tsconfig paths if a repo uses other aliases
+  // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
   const resolve = (from: string, spec: string) => {
-    const base = spec.startsWith('@/') ? spec.slice(2) : spec.startsWith('.') ? join(from, '..', spec) : null
-    return base && ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts'].map(e => base + e).find(c => files.has(c))
+    const rest = spec.slice(2), src = from.slice(0, from.lastIndexOf('src/') + 4)
+    const bases = spec.startsWith('@/') ? [rest, 'src/' + rest, src + rest] : spec.startsWith('.') ? [join(from, '..', spec)] : []
+    return bases.flatMap(b => [b, ...['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts', '/index.js'].map(e => b.replace(/\.(m?js|jsx)$/, '') + e)])
+      .find(c => files.has(c))
   }
+  const target = (p: string, name: string) => { const m = files.get(p)!.binds.get(name); return m ? resolve(p, m) : undefined }
+
+  const routes = new Map<string, Route>()
+  const deps_ = Object.assign({}, ...[...snap].filter(([p]) => /(^|\/)package\.json$/.test(p) && !p.includes('node_modules/')).map(([, t]) => deps(t))) as Record<string, string>
+  for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
+  // React Router: the component each <Route> shows is a page at that address.
+  for (const [p, f] of files) for (const pg of f.pages) {
+    const q = target(p, pg.comp)
+    if (q && !routes.has(q)) { routes.set(q, { kind: 'page', url: pg.path }); if (pg.guard) files.get(q)!.auth = true }
+  }
+  // Express-style servers: each address becomes its own unit "file#/api/x", with the facts of its handlers.
+  const mounts = new Map<string, { path: string; guard: boolean; from: string }>()
+  for (const [p, f] of files) for (const m of f.mounts) { const q = m.target.startsWith('.') ? resolve(p, m.target) : target(p, m.target); if (q) mounts.set(q, { ...m, from: p }) }
+  const prefix = (p: string, seen = new Set<string>()): { path: string; guard: boolean } => {
+    const m = mounts.get(p); if (!m || seen.has(p)) return { path: '', guard: false }
+    const up = prefix(m.from, seen.add(p))
+    return { path: up.path.replace(/\/$/, '') + m.path, guard: up.guard || m.guard }
+  }
+  for (const [p, f] of [...files]) {
+    const pre = f.handlers.length ? prefix(p) : null
+    for (const h of f.handlers) {
+      const url = (pre!.path.replace(/\/$/, '') + (h.path === '/' ? '' : h.path)).replace(/:(\w+)\??/g, '[$1]') || '/'
+      const key = `${p}#${url}`, unit = files.get(key) ?? empty()
+      const hf = h.handler ? f.locals.get(h.handler) ?? (target(p, h.handler) && files.get(target(p, h.handler)!)?.locals.get(h.handler)) ?? h.facts : h.facts
+      for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'services', 'fetches'] as const) for (const x of hf[k]) unit[k].add(x)
+      unit.money ||= hf.money
+      unit.fns.set(h.method, hf.printed)
+      unit.printed += `\n${h.method} ${hf.printed}`
+      // Logged in if every handler that changes something checks (or, with none, every handler does).
+      const writes = h.method !== 'GET', guard = pre!.guard || h.guard || hf.auth
+      const u = unit as FileFacts & { w?: boolean[]; r?: boolean[] }
+      ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
+      unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
+      files.set(key, unit); routes.set(key, { kind: 'endpoint', url })
+    }
+  }
+  // A page also does what its own components do: fold in facts from local imports.
   const fold = (p: string, into: FileFacts, seen: Set<string>) => {
     for (const spec of files.get(p)!.imports) {
       const q = resolve(p, spec)
@@ -191,11 +301,11 @@ export function appFacts(snap: Snap) {
       fold(q, into, seen)
     }
   }
-  for (const p of files.keys()) if (route(p)) fold(p, files.get(p)!, new Set([p]))
+  for (const p of files.keys()) if (routes.get(p)?.kind === 'page') fold(p, files.get(p)!, new Set([p]))
   const schemaPath = [...snap.keys()].find(p => p.endsWith('schema.prisma'))
   return {
-    files, models: models(schemaPath && snap.get(schemaPath)),
-    envExample: envKeys(snap.get('.env.example')), deps: deps(snap.get('package.json')),
+    files, routes, models: models(schemaPath && snap.get(schemaPath)),
+    envExample: envKeys([...snap].filter(([p]) => /(^|\/)\.env\.example$/.test(p)).map(([, t]) => t).join('\n')), deps: deps_,
     migrations: [...snap.keys()].filter(p => /prisma\/migrations\/.+\.sql$/.test(p)),
   }
 }
@@ -225,7 +335,6 @@ export function pageName(url: string) {
   return url.endsWith(']') ? `each ${n.join(' ')} page` : `the ${n.join(' ')} page`
 }
 const serverName = (url: string) => `the ${named(url).join(' ') || 'main'} part of your server`
-const placeName = (path: string) => { const r = route(path); return r ? (r.kind === 'page' ? pageName(r.url) : serverName(r.url)) : path }
 
 const VERBS: Record<string, string> = { create: 'create', retrieve: 'look up', update: 'update', del: 'delete', delete: 'delete', list: 'list', send: 'send' }
 function outsidePhrase(o: string) {
@@ -264,6 +373,8 @@ export const report = (before: Snap, after: Snap, opts: { ref: string; asked?: s
 
 export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: string; color?: boolean }) {
   const A = appFacts(before), B = appFacts(after)
+  const route = (p: string) => B.routes.get(p) ?? A.routes.get(p) ?? null
+  const placeName = (p: string) => { const r = route(p); return r ? (r.kind === 'page' ? pageName(r.url) : serverName(r.url)) : p }
   const changed = [...new Set([...before.keys(), ...after.keys()])].filter(p => before.get(p) !== after.get(p)).sort()
   const noise: string[] = [], real: string[] = []
   for (const p of changed) {
@@ -271,6 +382,8 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     if (NOISE.test(p) || (a && b && a.printed === b.printed)) noise.push(p)
     else real.push(p)
   }
+  // Express routes are units inside a file ("file#/api/x"): count one as changed only if its own handlers changed.
+  for (const k of new Set([...A.files.keys(), ...B.files.keys()])) if (k.includes('#') && A.files.get(k)?.printed !== B.files.get(k)?.printed) real.push(k)
   const usersOf = (name: string, self: string) =>
     [...B.files].filter(([p, f]) => p !== self && (f.used.has(name) || f.jsx.has(name))).map(([p]) => placeName(p))
   const mainTable = (f: FileFacts, url: string) =>
@@ -317,12 +430,13 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     } else {
       const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
       if (!a) {
-        const can: string[] = []
+        const can: string[] = [], creates = b.ops.has('create') || (b.writes && !b.ops.size)
         if (b.fns.has('GET')) can.push(`lists ${noun}`)
-        if (b.fns.has('POST')) can.push(b.written.size ? (can.length ? 'saves new ones' : `saves new ${noun}`) : t ? `looks up ${noun}` : 'accepts requests')
+        if (b.fns.has('POST')) can.push(creates ? (can.length ? 'saves new ones' : `saves new ${noun}`)
+          : b.ops.has('update') ? `updates ${noun}` : b.ops.has('delete') ? `deletes ${noun}` : t ? `looks up ${noun}` : 'accepts requests')
         if (b.fns.has('PUT') || b.fns.has('PATCH')) can.push(`updates ${noun}`)
         if (b.fns.has('DELETE')) can.push(`deletes ${noun}`)
-        clauses.push(...can)
+        clauses.push(...new Set(can))
         if (b.money) clauses.push('charges customers 💰')
         if (b.auth) clauses.push('requires login ✓')
       } else {
@@ -359,7 +473,7 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
     problems.push({ kind: 'Check', text: `You asked to "${verb}", but nothing new lets you change anything: ${list(newViewOnly.map(placeName))} only ${newViewOnly.length > 1 ? 'show' : 'shows'} information. If you wanted buttons to act on things (like refunding or cancelling orders), ask for that. (This is a guess.)` })
 
   // files that aren't code
-  for (const p of real) if (!CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore)$|prisma\/migrations\//.test(p))
+  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore)$|prisma\/migrations\//.test(p))
     changes.push({ group: 'Other files', isNew: !before.has(p), text: `The agent ${!before.has(p) ? 'added' : !after.has(p) ? 'deleted' : 'changed'} ${p}${/\.md$/i.test(p) ? ', a notes file (not code)' : ''}.` })
 
   // database
@@ -408,7 +522,7 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
         problems.push({ kind: 'Unasked', text: `The agent also changed ${n}() in ${p}, which doesn't look related to what you asked for.${u.length ? ` It's used by ${list(u)}, so check that ${u.length > 1 ? 'they' : 'it'} still ${u.length > 1 ? 'work' : 'works'}.` : ''}` })
       }
     }
-    if (!b) continue
+    if (!b || p.includes('#')) continue
     for (const t of b.todos.filter(t => !a?.todos.includes(t))) unfinished.push(`The agent left a to-do: "${t.replace(/^(TODO|FIXME|HACK):?\s*/, '')}" (in ${p}).`)
     for (const h of b.hardcoded.filter(h => !a?.hardcoded.includes(h))) unfinished.push(`${h}() returns made-up data instead of reading your database.`)
     if (b.emptyCatch > (a?.emptyCatch ?? 0)) unfinished.push(`If something goes wrong in ${placeName(p)}, the error is silently ignored (an empty catch in ${p}).`)
@@ -430,7 +544,7 @@ export function analyze(before: Snap, after: Snap, opts: { ref: string; asked?: 
   for (const s of new Set([...B.files.values()].flatMap(f => [...f.services]))) if (!svcBefore.has(s))
     changes.push({ group: 'Outside services', isNew: true, text: `Your app now uses ${s}.` })
 
-  return { ...opts, files: real.length, noise: noise.length, changes, problems, unfinished, ship, A, B, schemaChanged: changed.some(p => p.endsWith('schema.prisma')) }
+  return { ...opts, files: real.filter(p => !p.includes('#')).length, noise: noise.length, changes, problems, unfinished, ship, A, B, schemaChanged: changed.some(p => p.endsWith('schema.prisma')) }
 }
 
 export function render(r: {
