@@ -1267,3 +1267,19 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   assert.ok(rest.includes('/orders/[id] open'), `review 18: data rest\n${rest}`)
   console.log('ok (review 18)')
 }
+
+// Round 6 trials (FixIt: Angular + ASP.NET Core, 2026-10-28)
+{
+  const base = { 'S/S.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n', 'S/Data/Db.cs': 'public class AppDb : DbContext { public DbSet<Job> Jobs { get; set; } }\n', 'S/Models/Job.cs': 'public class Job { public int Id { get; set; } }\n',
+    'S/Program.cs': 'var app = WebApplication.CreateBuilder(args).Build();\nusing (var scope = app.Services.CreateScope()) { scope.ServiceProvider.GetRequiredService<AppDb>().Database.Migrate(); }\napp.MapGet("/api/x", (IConfiguration c) => c["Email:FromName"] ?? "FixIt");\napp.Run();\n' }
+  const mig = 'public partial class AddRating : Migration { protected override void Up(MigrationBuilder b) { b.AddColumn<int>(name: "Rating", table: "Jobs"); } }\n'
+  const c1 = card(base, { ...base, 'S/Migrations/20261028_AddRating.cs': mig })
+  for (const e of ['S/Migrations/20261028_AddRating.cs has no 20261028_AddRating.Designer.cs next to it', 'will change your live database by itself the next time the app starts (it calls Database.Migrate)'])
+    assert.ok(c1.includes(e), `round 6 missing "${e}"\n${c1}`)
+  const c2 = card(base, { ...base, 'S/Migrations/20261028_AddRating.cs': mig, 'S/Migrations/20261028_AddRating.Designer.cs': '[DbContext(typeof(AppDb))]\n[Migration("20261028_AddRating")]\npartial class AddRating { }\n' })
+  assert.ok(!c2.includes('Designer.cs next to it') && !c2.includes('Email__FromName'), `round 6: designer + optional setting\n${c2}`)
+  // [Migration] written in the migration file itself (no Designer file) is found by EF too
+  const c3 = card(base, { ...base, 'S/Migrations/20261028_AddRating.cs': '[DbContext(typeof(AppDb))]\n[Migration("20261028_AddRating")]\n' + mig })
+  assert.ok(!c3.includes('Designer.cs next to it'), `round 6: attribute in file\n${c3}`)
+  console.log('ok (round 6 trials)')
+}

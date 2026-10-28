@@ -217,7 +217,11 @@ export function csFacts(path: string, text: string, empty: (printed?: string) =>
     }
     for (const e of all(node, 'element_access_expression')) {   // Configuration["Stripe:SecretKey"]
       const k = str(e.namedChildren.at(-1)?.namedChildren[0]?.namedChildren.at(-1)), obj = e.namedChildren[0]?.text ?? ''
-      if (k && /config|Configuration/i.test(obj) && /^[A-Za-z][\w:]*$/.test(k)) { g.env.add(k.replace(/:/g, '__')); g.envReq.add(k.replace(/:/g, '__')) }
+      // (with a fallback, config["Email:FromName"] ?? "FixIt", it's optional)
+      // (not ?? "" / string.Empty / null / throw: an empty webhook secret fails every check)
+      const rest = e.parent?.type === 'binary_expression' && e.parent.namedChildren[0]?.startIndex === e.startIndex ? e.parent.text.slice(e.text.length).replace(/^\s*\?\?\s*/, '') : undefined
+      const optional = rest !== undefined && rest !== e.parent!.text.slice(e.text.length) && !/^(string\.Empty|""|null|throw\b|default\b)/.test(rest)
+      if (k && /config|Configuration/i.test(obj) && /^[A-Za-z][\w:]*$/.test(k)) { g.env.add(k.replace(/:/g, '__')); if (!optional) g.envReq.add(k.replace(/:/g, '__')) }
     }
     // a login check in the handler: if (!User.Identity?.IsAuthenticated ?? true) return Unauthorized(); if (userId is null) return Challenge();
     // (userId read from the logged-in user's claims, not from the request body)

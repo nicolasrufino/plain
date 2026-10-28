@@ -1519,7 +1519,14 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       if (model && col && A.models.get(model)!.some(f => f.toLowerCase() === col.toLowerCase())) ship.push(`Check your live data before applying ${m}: it adds a rule that no two ${things(model)} can share the same ${fieldName(col) || words(col)}. If any already do, the update fails.`)
     }
   }
-  if (newEf.length) ship.push(`Apply ${list(newEf.map(m => m.split('/').pop()!.replace(/\.cs$/, '')))} to your live database before the new code goes live (\`dotnet ef database update\`), or the parts that use it will fail.`)
+  // EF finds a migration through its [Migration("...")] attribute, normally in the .Designer.cs: without either, it never runs
+  for (const m of newEf) if (!after.has(m.replace(/\.cs$/, '.Designer.cs')) && !/\[Migration\(/.test(after.get(m) ?? ''))   // (the attribute can sit in the file itself)
+    problems.push({ kind: 'Broken', text: `${m} has no ${m.split('/').pop()!.replace(/\.cs$/, '.Designer.cs')} next to it, which is how Entity Framework finds a migration: it will never run, and the code that needs its changes will fail. Re-create it with \`dotnet ef migrations add\`.` })
+  // an app that calls Database.Migrate() at startup applies new migrations itself
+  const selfMigrates = [...after].some(([p, t]) => p.endsWith('.cs') && /\.Database\.Migrate(Async)?\s*\(/.test(t))
+  if (newEf.length) ship.push(selfMigrates
+    ? `${list(newEf.map(m => m.split('/').pop()!.replace(/\.cs$/, '')))} will change your live database by itself the next time the app starts (it calls Database.Migrate). Back up first; if it fails, the app won't start.`
+    : `Apply ${list(newEf.map(m => m.split('/').pop()!.replace(/\.cs$/, '')))} to your live database before the new code goes live (\`dotnet ef database update\`), or the parts that use it will fail.`)
   if ([...B.csModels, ...A.csModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newEf.length)
     ship.push('Update your database: run `dotnet ef migrations add <Name>`, then `dotnet ef database update` (also on your live site). The tables changed, but no migration was created.')
   // appsettings.json is in the code: a real key or password written there is visible to anyone who can see the project
