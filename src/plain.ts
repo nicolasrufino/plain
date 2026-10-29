@@ -2366,6 +2366,119 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Check', text: "Someone can be charged and then have their booking cancelled (for example when the spot was taken while they paid), and nothing refunds them. Refund them when that happens. (This is a guess.)" })
   else if (usesCheckout && cancelFiles.length && !refunds && !closesPages)
     problems.push({ kind: 'Check', text: "Cancelled orders can still be paid: someone who still has the Stripe payment page open can finish paying, and their order stays cancelled, so you'd keep money for nothing. Close their payment page when you cancel (Stripe's Session.expire), or refund them. (This is a guess.)" })
+  // Unpaid checkouts holding spots. The app saves a 'pending' row before sending people to Stripe, and this change makes those
+  // rows count toward a limit (seats, a time slot, orders per day): a 'pending' read in a statement that counts (count, sum, any?,
+  // a RESERVED / holding name), or a counter raised where the pending row is saved. A spot is freed by Stripe's "payment page
+  // expired" message, or by time: a date compared next to 'pending' (only recent ones count, or a job expires old ones), with
+  // no `or` in between. Without either, an abandoned checkout keeps its spot for good. With only Stripe's message, the pending
+  // rows already in the live database (main never freed them) never are: their pages expired long ago.
+  // ponytail: text-level, across stacks; leans to missing a warning (any nearby date comparison frees spots) over a false one.
+  // A list named RESERVED_* reads as a hold wherever it is used. Enum constants (Status::Pending) and column defaults aren't seen.
+  const srcFile = (p: string) => /\.(ts|tsx|js|jsx|mjs|py|php|rb|rake|go|cs|java|kt|sql|vue|svelte)$/.test(p) && !/\.blade\.php$/.test(p)
+    && !isTest(p) && !/_test\.go$|_spec\.rb$|(^|\/)spec\/|Tests?\.(cs|java|kt)$/.test(p)
+  // (comments dropped: `// TODO: handle checkout.session.expired` frees nothing; strings kept whole: '/api/*', `Booking #${id}`)
+  const noComments = (t: string, p: string) => t.replace(/`(?:\\[\s\S]|[^\\`])*`|(['"])(?:\\[\s\S]|(?!\1)[^\\\n])*\1|\/\*[\s\S]*?\*\/|\/\/[^\n]*|#(?!\[)[^\n]*|--[ \t][^\n]*/g,
+    m => /^[`'"]/.test(m) ? m : m[0] === '#' ? (/\.(py|rb|php)$/.test(p) ? '' : m) : m[0] === '-' ? (p.endsWith('.sql') ? '' : m) : m[1] === '/' && /\.(py|rb|sql)$/.test(p) ? m : '')
+  const code = (s: Snap) => new Map([...s].filter(([p]) => srcFile(p)).map(([p, t]) => [p, noComments(t, p)]))
+  const CA = code(after), CB = code(before), MIGR = /(^|\/)(migrations?|migrate)\//
+  // the statement around i: to the nearest `;` both sides (within 400 characters). In code without `;`: from the line of the
+  // outermost bracket still open at i (a call or an object, not a block: `count({` yes, `=> {` no) to where it closes, plus the
+  // chained lines before and after (`Rental.pending` / `.where(...)`, `->where('status', 'pending')` / `->update(...)`)
+  const stmtNear = (t: string, i: number): [number, string] => {
+    const w0 = Math.max(0, i - 400), w1 = Math.min(t.length, i + 400), s0 = t.slice(w0, i).lastIndexOf(';'), e0 = t.slice(i, w1).indexOf(';')
+    if (s0 >= 0 && e0 >= 0) return [w0 + s0 + 1, t.slice(w0 + s0 + 1, i + e0 + 1)]
+    let d = 0, open = i, opens = 0
+    for (let k = i - 1; k >= w0; k--) { const c = t[k]
+      if (c === ')' || c === ']' || c === '}') d++
+      else if (c === '(' || c === '[' || c === '{') { if (d) { d--; continue }
+        if (c === '{' && /^[ \t]*\r?\n/.test(t.slice(k + 1, k + 4)) && !/[([,:=]\s*$/.test(t.slice(Math.max(0, k - 3), k))) break   // a block
+        open = k; opens++ } }
+    let j = i; for (d = opens; j < w1 && d > 0; j++) { const c = t[j]; if (c === '(' || c === '[' || c === '{') d++; else if (c === ')' || c === ']' || c === '}') d-- }
+    let a = t.lastIndexOf('\n', open - 1) + 1
+    while (a > 0 && /^\s*(\.|->)/.test(t.slice(a, t.indexOf('\n', a) >>> 0))) a = t.lastIndexOf('\n', a - 2) + 1
+    let b = t.indexOf('\n', j)
+    while (b >= 0) { const nb = t.indexOf('\n', b + 1); if (!/^\s*(\.|->)/.test(t.slice(b + 1, nb < 0 ? t.length : nb))) break; b = nb }
+    return [a, t.slice(a, b < 0 ? t.length : b)] }
+  const PENDING = /['"]pending['"]|%w\[[^\]]*\bpending\b/gi
+  // saved, not looked for: `status: 'pending'` / `'status' => 'pending'` / VALUES (..., 'pending'), where the nearest keyword before
+  // it in its statement makes a row (create, data, new, insert, values, set, update), not a filter (where, filter, find, count)
+  const savedAt = (t: string, i: number) => { const [s, x] = stmtNear(t, i), before = x.slice(0, i - s)
+    if (!/\bstatus['"]?\s*(=>|:|=)\s*$|\bvalues\s*\([^)]*$/i.test(before)) return false
+    // (not createdAt / updated_at / insertedAt; not `or` / `and` inside a value)
+    const last = [...before.matchAll(/\b(where|filter|exclude|find\w*|count\w*)\b|\b(data|create(?!d)\w*|insert(?!ed)\w*|new(?!\s+Date)|set|values|save|update(?!d)\w*)\b/gi)].at(-1)
+    // (no keyword: a filter object kept aside; `updateMany({ status: 'pending', ... }, ...)`: the first argument is a filter)
+    return !!last?.[2] && !/^(update|delete|remove)\w*\s*\(\s*\{[^}]*$/i.test(before.slice(last.index)) }
+  const makesPending = (t: string) => [...t.matchAll(PENDING)].some(m => savedAt(t, m.index!))
+  const negated = (t: string, i: number) => { const b = t.slice(Math.max(0, i - 45), i)
+    return /\b(not(?!\s+null)|notIn|exclude|whereNot\w*|neq|nin|ne|not_in)\b[^\])}\n]{0,40}$|(!==?|<>)\s*['"]?\s*,?\s*$/i.test(b) }
+  const LIST = /['"]pending['"]\s*,\s*['"](paid|confirmed|completed|booked|reserved|active)['"]|['"](paid|confirmed|completed|booked|reserved|active)['"]\s*,\s*['"]pending['"]|%w\[[^\]]*\bpending\b/i
+  const AGG = /\b(count\w*|sum\w*|exists\??|any\??|size|length|overlap\w*)\b|COUNT\(|SUM\(/i, HOLDW = /\b(?:[Hh]olding\w*|holds?|reserved|reserved_(?:seats|spots|tickets|count|quantity|statuses)|reserved(?:Seats|Spots|Tickets|Count|Quantity)|RESERVED_[A-Z_]+)\b/   // (not reservedFor, reserved_at)
+  const LIMIT = /\bcapacity\b|sold[ _-]?out|\b(is|are|date|day|slot|class|event|show)\s+(is\s+)?full\b|already\s+(reserved|booked|taken)|not enough\s+\w+|fully booked|\bno more\s+\w+|\b(seats?|spots?|places?|tickets?|slots?)\s+(left|remaining|available)\b|\boverlap/gi
+  const count = (t = '', re: RegExp) => [...t.matchAll(re)].length
+  // reads of 'pending' that count toward a limit: not saving one, not left out (not / exclude / whereNotIn / !=), not a write's
+  // filter, not one row's status compared (`$order->status === 'pending'`) unless inside a count (`CountAsync(b => b.Status == "pending")`)
+  // (in markup, only its own line: a page's whole `return (<main>…)` isn't one statement)
+  const lineAt = (t: string, i: number) => t.slice(t.lastIndexOf('\n', i) + 1, (t.indexOf('\n', i) + 1 || t.length + 1) - 1)
+  // a count used against the limit: the name it's kept in is compared or subtracted (`taken >= c.capacity`, `capacity - $taken`),
+  // or the statement compares it itself; not a dashboard showing `{unpaid} checkouts not finished`
+  // (the name a statement keeps its result in: `const taken =`, `$reserved =`, `taken, err :=`, `export const HELD =`)
+  const keptIn = (x: string) => x.match(/^\s*(?:export\s+)?(?:(?:public|private|static|readonly|final)\s+)*(?:(?:const|let|var|val)\s+|\$)?(\w+)\s*(?:,\s*\w+\s*)?(?::\s*\w+\s*)?:?=(?![=>])/)?.[1]
+  // a line that checks against a limit: + - or a spaced comparison next to a limit's name (`taken >= c.capacity`,
+  // `paid + held > MAX_PER_DAY`), not markup, not `unpaid > 0` (a badge) or `skip + take < total` (paging)
+  // (a bare `limit` is paging: `offset + limit < total`)
+  const LIMNAME = /[Cc]apacity|CAPACITY|\b[Mm]ax\w*|MAX|(?<=\w)[Ll]imit\b|\b[Ll]imit_\w+|LIMIT|\b[Ss]eats\b|SEATS|\b[Ss]pots\b|[Aa]vailable|[Rr]emaining|[Qq]uota|\bcap\b|_PER_|per_?[Dd]ay/
+  // or that refuses (`raise UnavailableError, "Bike is already reserved" if conflicts`, `if (clash) return Conflict(...)`)
+  const checks = (line: string, n = '') => !/<\/\w|\/>/.test(line) && ((n ? new RegExp(String.raw`(?<![\w$])\$?${n}\b\s*(?:[-+](?![->=])|\s[<>]=?\s)|(?:[-+]|\s[<>]=?\s)\s*\$?${n}\b`) : /\s[<>]=?\s|[-+]/).test(line) && LIMNAME.test(line)
+    || /\b(raise|throw|abort)\b|Conflict\(|\b(409|422)\b|already|\bfull\b|not enough|overlap|unavailable/i.test(line))
+  const compared = (t: string, i: number, x: string) => { const n = keptIn(x)
+    if (!n) return checks(x)
+    const use = new RegExp(String.raw`(?<![\w$])\$?${n}\b`)
+    return t.slice(i, i + 600).split('\n').some(l => use.test(l) && checks(l, n)) }   // (the name itself is the operand, not a neighbour in `{ sold, unpaid, remaining: c.capacity - sold }`)
+  // a list ('pending', 'paid') counts where it's counted: in its own statement, or the next one that uses its name
+  // (`held = new[] { "pending", "paid" }` … `CountAsync(b => held.Contains(b.Status))`); a list of every status checks nothing
+  const listRead = (t: string, i: number, x: string) => { if (AGG.test(x)) return compared(t, i, x)
+    const n = keptIn(x), j = n ? t.slice(i).search(new RegExp(String.raw`(?<![\w$])${n}\b`)) : -1
+    if (j < 0) return false
+    const y = stmtNear(t, i + j)[1]; return AGG.test(y) && compared(t, i + j, y) }
+  const pendingReads = (t: string) => [...t.matchAll(PENDING)].filter(m => { const i = m.index!, x0 = stmtNear(t, i)[1], x = /<\/\w|\/>/.test(x0) ? lineAt(t, i) : x0
+    if (savedAt(t, i) || negated(t, i) || isWrite(x) || /\b(delete\w*|destroy\w*|remove)\b/i.test(x)) return false
+    // (one row: "is this order still unpaid?", by id, key or session; not every row but this one: `NOT: { id }`, `id != ?`)
+    if (/whereKey|\bfind(_by)?\(|\bid['"]?\s*(=>|:|==?(?!=))|['"]id['"]\s*,|\bpk\s*=|\bsession_id\b|params\.id/i.test(x.replace(/\bNOT\s*:\s*\{[^}]*\}|\b(where\.)?not\([^)]*\)|whereNot\w*\([^)]*\)|\.exclude\([^)]*\)|\bid['"]?\s*(!==?|<>)\s*[^,)\s]+/gi, ''))) return false
+    if (/(===?)\s*$/.test(t.slice(Math.max(0, i - 6), i)) && !AGG.test(x)) return false
+    // (or the function it's in is named for it: scopeHoldingSeats, `scope :reserved`): the last declaration before it, still open
+    const w = Math.max(0, i - 1500), decl = [...t.slice(w, i).matchAll(/\b(?:function|def|scope)\s+:?(\w+)|\bfunc\b\s*(?:\([^)]*\)\s*)?(\w+)|\b(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^()]*\)|\w+)\s*=>/g)].at(-1)
+    const body = decl ? t.slice(w + decl.index!, i) : '', fn = decl && (count(body, /\{/g) > count(body, /\}/g) || !/[{}]/.test(body)) ? decl[1] ?? decl[2] ?? decl[3] ?? '' : ''
+    return HOLDW.test(x) || /holding|reserved|capacity/i.test(fn) || LIST.test(x) && listRead(t, i, x) || AGG.test(x) && compared(t, i, x) }).length
+  const total = (c: Map<string, string>, f: (t: string) => number) => [...c].reduce((n, [, t]) => n + f(t), 0)
+  const COUNTER = /\bset\s+\w+\s*=\s*[\w.]*\w+\s*\+|->increment\(|\.increment!?\(|\bincrement\s*:|\$inc\b|F\(['"]\w+['"]\)\s*\+/i
+  // a counter raised where the pending row is saved, next to a limit (`SET order_count = order_count + 1 WHERE order_count < 30`)
+  const counter = (c: Map<string, string>) => [...c].some(([p, t]) => !MIGR.test(p) && makesPending(t) && COUNTER.test(t) && count(t, LIMIT) > 0)
+  // a date compared, in any common form: created_at < ?, createdAt: { gt: cutoff }, created__lt=, created_at: ...cutoff,
+  // { [Op.lt]: cutoff }, LessThan(cutoff), .lt('created_at', x), lt(t.createdAt, x), reservedUntil > NOW(); not assigned (`'expires_at' => now()`)
+  const DATE = String.raw`(?:created|updated|inserted|modified|expires)(?:_?at|_?on|At|On)?|(?:reserved|held)_?until`
+  const TIMECMP = new RegExp(String.raw`\b(?:${DATE})(?:__[lg]te?\b|\W{0,40}?(?:\$?\b[lg]te?\b|\[Op\.[lg]te?\]|LessThan|MoreThan|<(?!\/)=?|(?<![=-])>=?)|['"]?\s*(?::|=>)\s*\(?\.\.\.?)|\b(?:lt|lte|gt|gte|LessThan\w*|MoreThan\w*)\s*\(\s*['"]?[\w.]*?(?:${DATE})\b`, 'i')
+  const MARK = /['"]pending['"]|\.pending\b|(::|->)pending\(|%w\[[^\]]*\bpending\b/gi
+  const byTime = (c: Map<string, string>) => [...c].some(([p, t]) => !MIGR.test(p) && [...t.matchAll(MARK)].some(m => { const i = m.index!
+    if (negated(t, i) || savedAt(t, i)) return false
+    // ponytail: any date compared within 400 characters frees it (a job, a recent-only count, two statements); an unrelated
+    // rate limit next to the count is read the same: a missed warning, never a false one
+    const w0 = Math.max(0, i - 400), w = t.slice(w0, i + 400)
+    return [...w.matchAll(new RegExp(TIMECMP.source, 'gi'))].some(tm => { const j = w0 + tm.index!; return !/\bor(Where)?\b|\|\|/i.test(t.slice(Math.min(i, j), Math.max(i, j))) }) }))
+  const byStripe = (c: Map<string, string>) => [...c].some(([p, t]) => !MIGR.test(p) && /checkout\.session\.expired|CheckoutSessionExpired/i.test(t))
+  // old pending rows marked expired / cancelled / failed (or deleted) outside Stripe's message: by age anywhere, or in a migration,
+  // a command or a job on the whole table (not a user cancelling their own, a job cancelling one event's, an error handler failing this order)
+  const UNSCOPED = /\b[A-Z]\w*(::|\.)(where\w*|objects|query|filter|update\w*|delete\w*)\b|\b[A-Z]\w*(::|\.)\w+(\([^)]*\))?(->|\.)(update|delete|destroy)\w*|(update|delete)Many\(\s*\{\s*where:\s*\{\s*status:[^,}]*\}|DB::table|\b(update|UPDATE)\s+\w+\s+(set|SET)\b|\b(delete|DELETE)\s+(from|FROM)\b/
+  const JOB = /(^|\/)(migrations?|migrate|console|commands?|jobs?|tasks?|cron|workers?|management|schedule|scripts?|cmd|bin)(\/|\.\w+$)/i
+  const cleansUp = (c: Map<string, string>) => [...c].map(([p, t]) => [p, noCatch(t)]).some(([p, t]) => !/checkout\.session\.expired|CheckoutSessionExpired/i.test(t)
+    && [...t.matchAll(MARK)].some(m => { const [, x] = stmtNear(t, m.index!)
+      return !negated(t, m.index!) && (MIGR.test(p) || JOB.test(p) && UNSCOPED.test(x) && !/->\w+\(\)\s*->|\$this->/.test(x) || TIMECMP.test(x)) && !/whereKey|\bfind(_by)?\(|\bid['"]?\s*(=>|:|=|,)|\.id\b|_id\b/i.test(x) && (/\b(delete\w*|destroy\w*)\b/i.test(x) || (isWrite(x) || /\bupdate_all\b/.test(x)) && /['"](expired|cancell?ed|failed|abandoned)['"]/i.test(x)) }))
+  const holds = usesCheckout && [...CA.values()].some(makesPending) && [...CA].some(([p, t]) => !MIGR.test(p) && count(t, LIMIT) > 0)
+  const grew = total(CA, pendingReads) > total(CB, pendingReads)
+  if (holds && !byStripe(CA) && !byTime(CA) && (grew || counter(CA) && !counter(CB)))
+    problems.push({ kind: 'Check', text: "Unpaid checkouts now take up spots for good. An order counts toward the limit as soon as checkout starts, while it's still unpaid, and nothing ever frees it: someone who leaves the payment page (or goes back and tries again) keeps the spot, and anyone could fill every spot without paying. Count only paid orders plus recent unpaid ones (and give the Stripe payment page a short expiry), or free the spot when Stripe says the page expired. (This is a guess.)" })
+  // (old rows are already freed if main freed them, if only recent pending rows count, or if the change expires them)
+  else if (holds && grew && byStripe(CA) && !byTime(CA) && !byStripe(CB) && !byTime(CB) && [...CB.values()].some(makesPending) && !cleansUp(CA))
+    problems.push({ kind: 'Check', text: "Old unpaid checkouts already in your database now take up spots, and nothing will free them: their payment pages expired long ago, so Stripe won't say so again. Before this goes live, mark the old unpaid (\"pending\") orders as expired. (This is a guess.)" })
   // a GET that changes things: opening a link (from another site, an email preview, a browser loading ahead) is enough
   const onlyPost = 'django' in B.deps ? 'with `@require_POST`' : 'flask' in B.deps ? "with `methods=['POST']`" : 'a POST route instead of a GET one'
   // links meant to act when opened: email confirmations, payment returns. Stripe's cancel_url sends people back by GET: that view is skipped

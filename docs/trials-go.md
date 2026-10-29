@@ -363,6 +363,64 @@ The independent review of the Go reader found more before it shipped (in the sam
 
 ## Still open
 
-1. **Holds nothing releases** (the 🔴 in rounds 7, 8 and 9): a `pending` order or a counted slot taken at
-   checkout, with nothing that frees it when the checkout is abandoned.
+1. ✅ **Holds nothing releases** (the 🔴 in rounds 7, 8 and 9): a `pending` order or a counted slot taken at
+   checkout, with nothing that frees it when the checkout is abandoned. Fixed later; see [below](#fixed-after-the-trials).
 2. **"Only admins ✓"** for an admin check, in every stack.
+
+## Fixed after the trials
+
+**Unpaid checkouts holding spots** (the 🔴 in rounds 7, 8 and 9). It's one rule for every stack. It fires
+when the app saves a `pending` row before sending people to Stripe Checkout, and the change makes those
+rows count toward a limit. That can be a list such as `['pending', 'paid']`, a `pending` filter next to
+the limit, or a counter raised where the pending row is saved. A spot is freed by Stripe's "payment page
+expired" message, or by counting only recent pending rows (a time check next to `pending`, with no "or"
+in between).
+
+| Branch | What frees a spot | plain now says |
+|---|---|---|
+| Rails p5 (overlapping rentals) | nothing | "Unpaid checkouts now take up spots for good…" |
+| Go p5 (30 orders per date) | nothing | the same |
+| Laravel p5 (`reserved_tickets`, backfilled from pending orders) | Stripe's message, new in the change | "Old unpaid checkouts already in your database now take up spots…" |
+| Laravel p6 (`holdingSeats`, no age limit) | the same | the same |
+
+Main already saved pending rows and never freed them, so old abandoned checkouts are on the live
+database. If main already freed them, or only recent pending rows count, plain says nothing. A whole new
+app has no old rows either.
+
+An independent review (round 25) tried to break it with cases across stacks. The first version gave 38
+wrong answers, mostly false alarms:
+- counts that leave pending rows out (`not`, `exclude`, `whereNotIn`, `!=`);
+- time limits written as a cutoff variable, a job, or before the `pending`;
+- admin dashboards that count unpaid orders;
+- `placeholder` text, and a TODO comment that names Stripe's event;
+- error handlers that fail one order;
+- renamed files.
+
+A second round found 8 more:
+- markup read as a limit (`<th>Capacity</th>`, `rounded-full`);
+- a `createdAt` filter read as saving a row;
+- one user cancelling their own orders read as a cleanup of old rows;
+- `/*` inside a string read as a comment.
+
+A third round found 13. Most were app code that frees spots in a shape the rule didn't know (Supabase
+`.lt('created_at', …)`, Drizzle `lt(…)`, Sequelize `[Op.lt]`, Mongoose `$lt`, a two-step Rails job). At
+that point we changed approach, since missing a warning costs less than a false one:
+- **Freeing spots:** any date comparison, in any of those forms, within 400 characters of a pending
+  filter now counts as freeing them.
+- **Counting toward the limit:** a count only counts when the name it's kept in is compared against
+  something (`taken >= c.capacity`), not just shown on a page.
+
+A fourth round found 11, which needed narrower rules:
+- a count kept for paging (`skip + take < total`) or shown on a page;
+- status lists used only for validation;
+- cleanups written as scopes, `.rake` tasks or `scripts/`.
+
+A fifth round found 5 narrow ones. A count listed next to a remaining total (`{ sold, unpaid, remaining: … }`)
+read as a limit check, and so did a one-row "is this order still unpaid?" check. Now the count itself has to be
+compared, and checks by id or session are skipped.
+
+All rounds' cases (about 120) are pinned as tests. Known limits:
+- a pending-approval flow (another table, refused on overlap) next to a pending checkout reads the same;
+- a date comparison near the count for another reason (a rate limit) hides the warning;
+- a `RESERVED_*` list left defined reads as a hold;
+- enum constants (`Status::Pending`) aren't seen.

@@ -79,7 +79,7 @@ staged files. The session log lives in `.git/plain-session.jsonl`.
 | **Supabase** (Lovable, Bolt) | your tables, and **who your access rules (Row Level Security) let in**: tables anyone can read or change, rules that only check "is logged in", users who can mark their own order paid |
 | **Stripe**, OpenAI, Resend and other services | when your app starts using them, and the code that charges money |
 
-**Coming next:** the checks the trials still miss (old data under new rules, money paths).
+**Coming next:** the checks the trials still miss ("only admins ✓" wording, money paths).
 [Why this order, and what each one needs](docs/languages.md).
 
 On other projects plain won't break, but it won't have much to say yet.
@@ -135,6 +135,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 npm install
 npm test                      # fixtures with planted problems, one per stack
 node test/demos.ts /tmp/a     # plain's card for every branch of the demo apps in examples/
+node test/holds-examples.ts   # the unpaid-checkout rule on edited demo branches (needs examples/)
 ```
 
 How a new stack gets added (research, fixtures, a real app, trials) is in

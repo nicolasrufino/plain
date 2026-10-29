@@ -80,6 +80,8 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 - **Guesses about money, worded as questions.** Each one says it's a guess:
   - A cancel status with no refund anywhere.
   - A sign-up discount that people can claim again with another email.
+  - Unpaid checkouts that now take up a spot (a seat, a time slot, a day's orders) with nothing that
+    frees them, or old unpaid ones already in the database that a new limit starts counting.
 - **Before you ship.** Data that will be deleted, and migrations to run (with the folder, the
   live-site command and what fails until then). Also new env vars without a default, new
   packages, a test payment when payment code changed, and "the agent says it didn't run or
@@ -110,3 +112,5 @@ The process is the same every time:
   is named.
 - `node test/demos.ts <dir>` writes plain's card for every branch of the local demo apps. Run
   it before and after a change and `diff -r` the two folders.
+- `node test/holds-examples.ts` checks the unpaid-checkout rule on edited copies of the demo
+  branches. It skips itself when `examples/` isn't there.

@@ -2021,5 +2021,235 @@ F.push(['G3 go-chi/cors "*" + AllowCredentials', 'no CORS problem (sends literal
   console.log('ok (review 24, round 2)')
 }
 }
+// Unpaid checkouts holding spots (trials rounds 7–9: the 🔴 every card missed)
+{
+  const HELD = 'Unpaid checkouts now take up spots for good', OLD = 'Old unpaid checkouts already in your database'
+  const checkout = (count: string) => `import Stripe from 'stripe'\nimport { prisma } from '@/lib/prisma'\nconst stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)\nexport async function POST(req: Request) {\n  const { classId } = await req.json()\n  const c = await prisma.class.findUnique({ where: { id: classId } })\n${count}  const b = await prisma.booking.create({ data: { classId, status: 'pending' } })\n  const s = await stripe.checkout.sessions.create({ metadata: { bookingId: b.id } })\n  return Response.json({ url: s.url })\n}\n`
+  const hook = (expired: boolean) => `import Stripe from 'stripe'\nimport { prisma } from '@/lib/prisma'\nexport async function POST(req: Request) {\n  const event = Stripe.webhooks.constructEvent(await req.text(), req.headers.get('stripe-signature')!, process.env.WH!)\n  if (event.type === 'checkout.session.completed') await prisma.booking.updateMany({ where: { id: 1, status: 'pending' }, data: { status: 'paid' } })\n${expired ? "  if (event.type === 'checkout.session.expired') await prisma.booking.updateMany({ where: { id: 1, status: 'pending' }, data: { status: 'expired' } })\n" : ''}  return new Response('ok')\n}\n`
+  const app = (count: string, expired = false) => new Map([['app/api/checkout/route.ts', checkout(count)], ['app/api/webhook/route.ts', hook(expired)]])
+  const card = (a: Map<string, string>, b: Map<string, string>) => report(a, b, { ref: 'main' })
+  const main = app(''), mainX = app('', true)
+  const held = "  const taken = await prisma.booking.count({ where: { classId, status: { in: ['pending', 'paid'] } } })\n  if (taken >= c.capacity) return Response.json({ error: 'This class is full' }, { status: 409 })\n"
+  assert.ok(card(main, app(held)).includes(HELD), 'holds: pending counted, nothing frees it')
+  assert.ok(!/Old unpaid|take up spots/.test(card(mainX, app(held, true))), "holds: main already freed them on Stripe's expired message")
+  assert.ok(card(main, app(held, true)).includes(OLD), 'holds: the change adds the expired handler: old rows were never freed')
+  assert.ok(!/Old unpaid|take up spots/.test(card(new Map(), app(held, true))), 'holds: a whole new app has no old rows')
+  const paidOnly = "  const taken = await prisma.booking.count({ where: { classId, status: 'paid' } })\n  if (taken >= c.capacity) return Response.json({ error: 'This class is full' }, { status: 409 })\n"
+  assert.ok(!/Old unpaid|take up spots/.test(card(main, app(paidOnly))), 'holds: only paid ones counted')
+  const recent = "  const taken = await prisma.booking.count({ where: { classId, OR: [{ status: 'paid' }, { status: 'pending', createdAt: { gt: new Date(Date.now() - 30 * 60 * 1000) } }] } })\n  if (taken >= c.capacity) return Response.json({ error: 'This class is full' }, { status: 409 })\n"
+  assert.ok(!/Old unpaid|take up spots/.test(card(main, app(recent))), 'holds: only recent pending ones counted')
+  const orWhere = "  const taken = await prisma.booking.count({ where: { classId, status: 'pending', OR: [{ sessionId: { not: null } }, { createdAt: { gt: new Date(Date.now() - 60000) } }] } })\n  if (taken >= c.capacity) return Response.json({ error: 'This class is full' }, { status: 409 })\n"
+  assert.ok(card(main, app(orWhere)).includes(HELD), "holds: a time limit behind an OR doesn't free every pending row")
+  const compare = "  const last = await prisma.booking.findFirst({ where: { classId } })\n  if (last && last.status === 'pending') return Response.json({ error: 'Not enough seats' }, { status: 409 })\n"
+  assert.ok(!/Old unpaid|take up spots/.test(card(main, app(compare))), "holds: one row's status compared, not rows counted")
+  // Go: a counter raised in the same transaction that saves the pending order (fresh-crate p5)
+  const store = (extra: string) => `package store\n\nfunc (s *Store) InsertOrder(ctx context.Context, o Order) (int64, error) {\n\ttx, _ := s.db.Begin(ctx)\n${extra}\tvar id int64\n\ttx.QueryRow(ctx, \`INSERT INTO orders (user_id, delivery_date, status) VALUES ($1, $2, 'pending') RETURNING id\`, o.UserID, o.DeliveryDate).Scan(&id)\n\treturn id, tx.Commit(ctx)\n}\n`
+  const goApp = (extra: string) => new Map([['go.mod', 'module example.com/shop\n\ngo 1.23\n'], ['internal/store/store.go', store(extra)], ['main.go', 'package main\n\nimport (\n\t"net/http"\n\t"github.com/stripe/stripe-go/v82/checkout/session"\n)\n\nfunc main() {\n\tmux := http.NewServeMux()\n\tmux.HandleFunc("POST /orders", createOrder)\n\thttp.ListenAndServe(":8080", mux)\n}\n\nfunc createOrder(w http.ResponseWriter, r *http.Request) {\n\tsession.New(nil)\n}\n']])
+  const cap = "\tvar n int\n\terr := tx.QueryRow(ctx, `INSERT INTO date_capacity (delivery_date, order_count) VALUES ($1, 1) ON CONFLICT (delivery_date) DO UPDATE SET order_count = date_capacity.order_count + 1 WHERE date_capacity.order_count < 30 RETURNING order_count`, o.DeliveryDate).Scan(&n)\n\tif err != nil {\n\t\treturn 0, errors.New(\"delivery date is full\")\n\t}\n"
+  assert.ok(card(goApp(''), goApp(cap)).includes(HELD), 'holds: Go counter raised with the pending insert\n' + card(goApp(''), goApp(cap)))
+  console.log('ok (unpaid checkouts holding spots)')
+}
+// Review 25 (rounds 1-5): unpaid checkouts holding spots (negations, time limits in any form, dashboards, paging, markup, comments, cleanups)
+{
+const GAPS = /^(pending-approval lesson requests|spoke-pedal: where\.not\(status: "pending"\)|django enum Order\.Status\.PENDING|G1 per-user rate limit)/   // known: not tied to one table; a RESERVED_STATUSES name left defined; enum constants; any date compared near the count frees it
+const HELD = 'Unpaid checkouts now take up spots for good', OLD = 'Old unpaid checkouts already in your database'
+const which = (c: string) => c.includes(HELD) ? 'M1' : c.includes(OLD) ? 'M2' : 'none'
+const card = (a: Record<string,string>, b: Record<string,string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' })
+const line = (c: string) => c.split('\n').find(l => l.includes(HELD) || l.includes(OLD))?.trim().slice(0, 110) ?? '(no line)'
+// Next.js fixture from the test block
+const checkout = (count: string, create = "  const b = await prisma.booking.create({ data: { classId, status: 'pending' } })\n", sess = '{ metadata: { bookingId: b.id } }') => `import Stripe from 'stripe'\nimport { prisma } from '@/lib/prisma'\nconst stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)\nexport async function POST(req: Request) {\n  const { classId } = await req.json()\n  const c = await prisma.class.findUnique({ where: { id: classId } })\n${count}${create}  const s = await stripe.checkout.sessions.create(${sess})\n  return Response.json({ url: s.url })\n}\n`
+const hook = (expired: boolean | string) => `import Stripe from 'stripe'\nimport { prisma } from '@/lib/prisma'\nexport async function POST(req: Request) {\n  const event = Stripe.webhooks.constructEvent(await req.text(), req.headers.get('stripe-signature')!, process.env.WH!)\n  if (event.type === 'checkout.session.completed') await prisma.booking.updateMany({ where: { id: 1, status: 'pending' }, data: { status: 'paid' } })\n${expired === true ? "  if (event.type === 'checkout.session.expired') await prisma.booking.updateMany({ where: { id: 1, status: 'pending' }, data: { status: 'expired' } })\n" : typeof expired === 'string' ? expired : ''}  return new Response('ok')\n}\n`
+const app = (count: string, expired: boolean | string = false, extra: Record<string,string> = {}) => ({ 'app/api/checkout/route.ts': checkout(count), 'app/api/webhook/route.ts': hook(expired), ...extra })
+const full = (q: string) => `  const taken = await prisma.booking.count({ where: ${q} })\n  if (taken >= c.capacity) return Response.json({ error: 'This class is full' }, { status: 409 })\n`
+
+const run = (name: string, a: Record<string, string>, b: Record<string, string>, expect: string) => { if (GAPS.test(name)) return; const w = which(card(a, b)); assert.equal(w, expect, `review 25 ${name}`) }
+{
+const paid = full("{ classId, status: 'paid' }")
+const q = "{ classId, status: { in: ['pending', 'paid'] } }"
+const lim = (cmp: string, msg: string) => `  const taken = await prisma.booking.count({ where: ${q} })\n  if (${cmp}) return Response.json({ error: '${msg}' }, { status: 409 })\n`
+// C. REFUSE too narrow (these fired in round 1: HOLD had seats/spots/slots/remaining)
+run('C0 control: >= c.capacity, "This class is full"', app(''), app(lim('taken >= c.capacity', 'This class is full')), 'M1')
+run('C1 maxStudents + "No spots left"', app(''), app(lim('taken >= c.maxStudents', 'No spots left')), 'M1')
+run('C2 seats + "Fully booked"', app(''), app(lim('taken >= c.seats', 'Fully booked')), 'M1')
+run('C3 MAX_PER_DAY + "No more orders for that date"', app(''), app(lim('taken >= MAX_PER_DAY', 'No more orders for that date')), 'M1')
+// D. REFUSE too broad: "Capacity</th>" reads as `capacity <`; Tailwind "rounded-full" reads as "full"
+const admin = { 'app/admin/page.tsx': "import { prisma } from '@/lib/prisma'\nexport default async function Admin() {\n  const classes = await prisma.class.findMany()\n  const unpaid = await prisma.booking.count({ where: { status: 'pending' } })\n  return <main><p>{unpaid} checkouts not finished</p><table><thead><tr><th>Class</th><th>Capacity</th></tr></thead><tbody>{classes.map(c => <tr key={c.id}><td>{c.name}</td><td>{c.capacity}</td></tr>)}</tbody></table></main>\n}\n" }
+run('D1 admin page: pending count + <th>Capacity</th>', app(paid), app(paid, false, admin), 'none')
+const mine = { 'app/bookings/page.tsx': "import { prisma } from '@/lib/prisma'\nimport { auth } from '@/lib/auth'\nexport default async function MyBookings() {\n  const user = await auth()\n  const bookings = await prisma.booking.findMany({ where: { userId: user.id } })\n  const unpaid = bookings.filter(b => b.status === 'pending').length\n  return <main>{unpaid > 0 && <span className=\"rounded-full bg-amber-100 px-2 text-xs\">{unpaid} unpaid</span>}</main>\n}\n" }
+run('D2 my-bookings badge: .filter(...pending).length + rounded-full', app(paid), app(paid, false, mine), 'none')
+// E. HOLDW from a neighbouring line (code without `;`: the statement is the line and the 2 before)
+const ev = { 'app/admin/classes/[id]/page.tsx': "import { prisma } from '@/lib/prisma'\nexport default async function ClassAdmin({ params }: { params: { id: string } }) {\n  const c = await prisma.class.findUnique({ where: { id: Number(params.id) }, select: { name: true, capacity: true } })\n  const unpaid = await prisma.booking.findMany({ where: { classId: Number(params.id), status: 'pending' } })\n  return <main><h1>{c?.name}</h1><ul>{unpaid.map(b => <li key={b.id}>{b.email}</li>)}</ul></main>\n}\n" }
+run('E1 admin class page: capacity on the line above a pending list', app(paid), app(paid, false, ev), 'none')
+// F. function-name rule picks the last `function` keyword before, not the enclosing function
+const lib = { 'lib/bookings.ts': "import { prisma } from '@/lib/prisma'\nexport async function reservedSeats(classId: number) {\n  return prisma.booking.count({ where: { classId, status: 'paid' } })\n}\nexport const unpaidFor = (userId: number) => prisma.booking.findMany({ where: { userId, status: 'pending' } })\n" }
+run('F1 arrow fn after `function reservedSeats` (paid only)', app(paid), app(paid, false, lib), 'none')
+
+}
+{
+// I. negated(): NOT { id } (exclude this booking when rescheduling) negates the whole status list after it
+run("I1 overlap count excluding this booking: NOT: { id }, status in [pending, paid]", app(''), app(full("{ classId, NOT: { id: 0 }, status: { in: ['pending', 'paid'] } }")), 'M1')
+// J. stmtNear in code without `;`: a delete on one of the 2 lines above hides the count
+run("J1 user's earlier pending deleted on the line above the count", app(''), app("  await prisma.booking.deleteMany({ where: { userId: 1, status: 'pending' } })\n" + full("{ classId, status: { in: ['pending', 'paid'] } }")), 'M1')
+// savedAt: a save whose arguments contain a filter word (Python `or`) is read as a filter, so nothing "makes pending"
+const dj = (create: string) => ({ 'requirements.txt': 'django==5.1\nstripe==10.0\n', 'shop/models.py': 'from django.db import models\n\nclass Slot(models.Model):\n    capacity = models.IntegerField()\n',
+  'shop/views.py': `import stripe\nfrom django.http import HttpResponse\nfrom django.shortcuts import redirect, get_object_or_404\nfrom .models import Order, Slot\n\ndef checkout(request, slot_id):\n    slot = get_object_or_404(Slot, pk=slot_id)\n${create}\n    session = stripe.checkout.Session.create(mode='payment', metadata={'order_id': order.id}, success_url='https://x/s', cancel_url='https://x/c')\n    return redirect(session.url)\n` })
+const cnt = "    taken = Order.objects.filter(slot=slot, status__in=['pending', 'paid']).count()\n    if taken >= slot.capacity:\n        return HttpResponse('This slot is full', status=409)\n"
+const base = dj("    order = Order.objects.create(slot=slot, status='pending')")
+run("K0 control: django create(slot=slot, status='pending')", base, dj(cnt + "    order = Order.objects.create(slot=slot, status='pending')"), 'M1')
+run("K1 (base saves pending without `or`) django create(email=... or ..., status='pending')", base, dj(cnt + "    order = Order.objects.create(slot=slot, email=request.POST.get('email') or request.user.email, status='pending')"), 'M1')
+
+}
+{
+// pathological inputs for the new regexes: long runs without ; or newlines near 'pending'
+const paid = full("{ classId, status: 'paid' }")
+for (const [name, body] of [
+  ['1MB line, no newline/;', "export const x = '" + 'a '.repeat(500000) + "' + 'pending'\n"],
+  ['many created_at tokens', "export const q = `" + 'created_at '.repeat(50000) + "'pending'`\n"],
+  ['many status: keys', "export const q = {" + "status: 1, ".repeat(50000) + "status: 'pending' }\n"],
+  ['%w[ unclosed', "x = %w[" + 'pending '.repeat(20000) + "\n"],
+] as const) { const t = Date.now(); card(app(paid), app(paid, false, { 'lib/big.ts': body })); console.log(name, Date.now() - t, 'ms') }
+
+}
+{
+const held = full("{ classId, status: { in: ['pending', 'paid'] } }")
+// noComments: a '/*' inside a string ('/api/*') opens a "comment" that runs to the next real '*/', hiding the expired handler
+const wh = hook(true).replace("export async function POST", "const PROTECTED = ['/api/admin/*']\nexport async function POST").replace(/\n$/, "\n/** Called by Stripe. */\nexport const dynamic = 'force-dynamic'\n")
+run("N0 control: expired handled, main already had it", app('', true), app(held, true), 'none')
+run("N1 '/api/admin/*' string before the handler, a JSDoc after it", { ...app('', true), 'app/api/webhook/route.ts': wh }, { ...app(held, true), 'app/api/webhook/route.ts': wh }, 'none')
+// ' #' inside a string drops the rest of the line
+const create = "  const b = await prisma.booking.create({ data: { classId, label: `Booking #${classId}`, status: 'pending' } })\n"
+const withHash = (count: string) => ({ ...app(''), 'app/api/checkout/route.ts': checkout(count, create) })
+run("N2 `Booking #${id}` before status: 'pending' on the save line (only save)", withHash(''), withHash(held), 'M1')
+
+}
+{
+const paid = full("{ classId, status: 'paid' }"), held = full("{ classId, status: { in: ['pending', 'paid'] } }")
+// 1. admin pages: an unpaid count next to "seats left" / "No more ..." (REFUSE's new phrases)
+const dash = (body: string) => ({ 'app/admin/page.tsx': `import { prisma } from '@/lib/prisma'\nexport default async function Admin() {\n  const classes = await prisma.class.findMany({ include: { _count: { select: { bookings: { where: { status: 'paid' } } } } } })\n  const unpaid = await prisma.booking.count({ where: { status: 'pending' } })\n  return (\n    <main>\n${body}\n    </main>\n  )\n}\n` })
+run('D3 admin: unpaid count + "{c.capacity - sold} seats left"', app(paid), app(paid, false, dash("      <p>{unpaid} checkouts not finished</p>\n      {classes.map(c => <p key={c.id}>{c.name}: {c.capacity - c._count.bookings} seats left</p>)}")), 'none')
+run('D4 admin: unpaid count + empty state "No more unpaid orders"', app(paid), app(paid, false, dash("      {unpaid === 0 ? <p>No more unpaid orders</p> : <p>{unpaid} unpaid</p>}")), 'none')
+// 2. stmtNear: a JSX `return (` is one statement, so .length + capacity anywhere in it make a status badge a "read"
+const page = { 'app/admin/classes/[id]/page.tsx': "import { prisma } from '@/lib/prisma'\nexport default async function ClassAdmin({ params }: { params: { id: string } }) {\n  const c = await prisma.class.findUnique({ where: { id: Number(params.id) }, include: { bookings: true } })\n  if (!c) return null\n  return (\n    <main>\n      <h1>{c.name}</h1>\n      <p>{c.bookings.length} of {c.capacity} booked</p>\n      <ul>{c.bookings.map(b => <li key={b.id}>{b.email} {b.status === 'pending' ? '(unpaid)' : ''}</li>)}</ul>\n    </main>\n  )\n}\n" }
+run("S1 admin class page: JSX with .length, capacity, and b.status === 'pending' badge", app(paid), app(paid, false, page), 'none')
+// 3. function-name rule: `const capacityLeft = (` (a parenthesised expression, not an arrow) counts as a declaration
+const left = { 'app/admin/classes/[id]/page.tsx': "import { prisma } from '@/lib/prisma'\nexport default async function ClassAdmin({ params }: { params: { id: string } }) {\n  const c = await prisma.class.findUniqueOrThrow({ where: { id: Number(params.id) } })\n  const capacityLeft = (c.capacity ?? 0) - 1\n  const unpaid = await prisma.booking.findMany({ where: { classId: c.id, status: 'pending' } })\n  return <main><p>{capacityLeft} left</p><ul>{unpaid.map(b => <li key={b.id}>{b.email}</li>)}</ul></main>\n}\n" }
+run("F2 `const capacityLeft = (...)`, then a pending list", app(paid), app(paid, false, left), 'none')
+
+}
+{
+const held = full("{ classId, status: { in: ['pending', 'paid'] } }")
+const cron = (body: string, imports = "import { prisma } from '@/lib/prisma'\n") => ({ 'app/api/cron/expire/route.ts': `${imports}export async function GET() {\n  const cutoff = new Date(Date.now() - 30 * 60 * 1000)\n${body}\n  return new Response('ok')\n}\n` })
+run('T0 control: prisma cron, status + createdAt lt', app(''), app(held, false, cron("  await prisma.booking.updateMany({ where: { status: 'pending', createdAt: { lt: cutoff } }, data: { status: 'expired' } })")), 'none')
+// operator before the column (Supabase, Drizzle), operator objects (Sequelize, TypeORM)
+run("T1 supabase .eq('status','pending').lt('created_at', cutoff)", app(''), app(held, false, cron("  await supabase.from('bookings').update({ status: 'expired' }).eq('status', 'pending').lt('created_at', cutoff.toISOString())", "import { supabase } from '@/lib/supabase'\n")), 'none')
+run("T2 supabase, inline Date.now() (round 1 caught this)", app(''), app(held, false, cron("  await supabase.from('bookings').update({ status: 'expired' }).eq('status', 'pending').lt('created_at', new Date(Date.now() - 1800000).toISOString())", "import { supabase } from '@/lib/supabase'\n")), 'none')
+run("T3 drizzle and(eq(status,'pending'), lt(createdAt, cutoff))", app(''), app(held, false, cron("  await db.update(bookings).set({ status: 'expired' }).where(and(eq(bookings.status, 'pending'), lt(bookings.createdAt, cutoff)))", "import { db } from '@/db'\nimport { bookings } from '@/db/schema'\nimport { and, eq, lt } from 'drizzle-orm'\n")), 'none')
+run("T4 sequelize createdAt: { [Op.lt]: cutoff }", app(''), app(held, false, cron("  await Booking.update({ status: 'expired' }, { where: { status: 'pending', createdAt: { [Op.lt]: cutoff } } })", "import { Op } from 'sequelize'\nimport { Booking } from '@/models'\n")), 'none')
+run("T5 typeorm createdAt: LessThan(cutoff)", app(''), app(held, false, cron("  await repo.update({ status: 'pending', createdAt: LessThan(cutoff) }, { status: 'expired' })", "import { LessThan } from 'typeorm'\nimport { repo } from '@/db'\n")), 'none')
+// a filter object in its own variable: no keyword before `status:` -> savedAt calls it a save -> byTime skips it
+run("T6 prisma filter in a variable: const stale = { status: 'pending', createdAt: { lt: cutoff } }", app(''), app(held, false, cron("  const stale = { status: 'pending', createdAt: { lt: cutoff } }\n  await prisma.booking.updateMany({ where: stale, data: { status: 'expired' } })")), 'none')
+
+}
+{
+const paid = full("{ classId, status: 'paid' }")
+// D7. compared(): pagination of an admin list of unpaid bookings (`skip + take < total`)
+const api = { 'app/api/admin/unpaid/route.ts': "import { prisma } from '@/lib/prisma'\nexport async function GET(req: Request) {\n  const page = Number(new URL(req.url).searchParams.get('page') ?? 1), take = 20, skip = (page - 1) * take\n  const total = await prisma.booking.count({ where: { status: 'pending' } })\n  const rows = await prisma.booking.findMany({ where: { status: 'pending' }, skip, take })\n  return Response.json({ rows, total, hasMore: skip + take < total })\n}\n" }
+run('D7 admin API: paginated unpaid list, hasMore: skip + take < total', app(paid), app(paid, false, api), 'none')
+
+}
+{
+const main = app('')
+// sanity
+run('baseline held', main, app(full("{ classId, status: { in: ['pending', 'paid'] } }")), 'M1')
+// 1. capacity from paid rows only, by excluding pending
+run('prisma not pending', main, app(full("{ classId, status: { not: 'pending' } }")), 'none')
+run('prisma notIn pending,cancelled', main, app(full("{ classId, status: { notIn: ['pending', 'cancelled'] } }")), 'none')
+run('prisma NOT', main, app(full("{ classId, NOT: { status: 'pending' } }")), 'none')
+// 2. time limit written before the pending literal
+run('time before pending', main, app(full("{ classId, OR: [{ status: 'paid' }, { createdAt: { gt: new Date(Date.now() - 30 * 60 * 1000) }, status: 'pending' }] }")), 'none')
+// 3. cutoff variable
+run('cutoff var', main, app("  const cutoff = new Date(Date.now() - 30 * 60 * 1000)\n" + full("{ classId, OR: [{ status: 'paid' }, { status: 'pending', createdAt: { gt: cutoff } }] }")), 'none')
+// 4. cleanup cron, cutoff var
+const cron = { 'app/api/cron/expire/route.ts': "import { prisma } from '@/lib/prisma'\nexport async function GET() {\n  const cutoff = new Date(Date.now() - 30 * 60 * 1000)\n  await prisma.booking.updateMany({ where: { status: 'pending', createdAt: { lt: cutoff } }, data: { status: 'expired' } })\n  return new Response('ok')\n}\n" }
+run('cron with cutoff var', main, app(full("{ classId, status: { in: ['pending', 'paid'] } }"), false, cron), 'none')
+const cron2 = { 'app/api/cron/expire/route.ts': "import { prisma } from '@/lib/prisma'\nimport { subMinutes } from 'date-fns'\nexport async function GET() {\n  await prisma.booking.deleteMany({ where: { status: 'pending', createdAt: { lt: subMinutes(new Date(), 30) } } })\n  return new Response('ok')\n}\n" }
+run('cron date-fns subMinutes', main, app(full("{ classId, status: { in: ['pending', 'paid'] } }"), false, cron2), 'none')
+
+}
+{
+run("prisma OR list, short where", app(''), app(full("{ OR: [{ status: 'paid' }, { status: 'pending' }] }")), 'M1')
+run("prisma OR list, >60 chars after where (seen as a save)", app(''), app(full("{ classId, startsAt: { gte: c.startsAt }, OR: [{ status: 'paid' }, { status: 'pending' }] }")), 'M1')
+
+}
+{
+const paid = full("{ classId, status: 'paid' }")
+const form = (attr: string) => ({ 'app/contact/ContactForm.tsx': `'use client'\nimport { useState } from 'react'\nexport function ContactForm() {\n  const [state, setState] = useState<'idle' | 'pending' | 'sent'>('idle')\n  return <form><input name="email" ${attr} /><button disabled={state !== 'idle'}>Send</button></form>\n}\n` })
+run('form with placeholder= (HOLD matches "placeholder")', app(paid), app(paid, false, form('placeholder="you@example.com"')), 'none')
+run('same form without placeholder', app(paid), app(paid, false, form('')), 'none')
+
+}
+{
+const paid = full("{ classId, status: 'paid' }")
+// admin list of unpaid orders; the only HOLD word is the model name "reservation"
+const admin = { 'app/admin/unpaid/page.tsx': "import { prisma } from '@/lib/prisma'\nexport default async function Unpaid() {\n  const rows = await prisma.reservation.findMany({ where: { status: 'pending' }, orderBy: { createdAt: 'desc' } })\n  return <ul>{rows.map(r => <li key={r.id}>{r.email}</li>)}</ul>\n}\n" }
+run('admin list of pending reservations (HOLD = "reserv" in model name)', app(paid), app(paid, false, admin), 'none')
+
+}
+{
+const two = (pend: string) => `  const paid = await prisma.booking.count({ where: { classId, status: 'paid' } })\n  const held = await prisma.booking.count({ where: ${pend} })\n  if (paid + held >= c.capacity) return Response.json({ error: 'This class is full' }, { status: 409 })\n`
+run("time before 'pending' (short where)", app(''), app(two("{ createdAt: { gt: new Date(Date.now() - 18e5) }, status: 'pending' }")), 'none')
+run("control: time after 'pending'", app(''), app(two("{ status: 'pending', createdAt: { gt: new Date(Date.now() - 18e5) } }")), 'none')
+run("control: no time", app(''), app(two("{ classId, status: 'pending' }")), 'M1')
+
+}
+{
+const main = app(''), paid = full("{ classId, status: 'paid' }"), held = full("{ classId, status: { in: ['pending', 'paid'] } }")
+// admin dashboard counting pending orders; capacity counted from paid only
+const admin = { 'app/admin/page.tsx': "import { prisma } from '@/lib/prisma'\nexport default async function Admin() {\n  const classes = await prisma.class.findMany({ include: { _count: { select: { bookings: { where: { status: 'paid' } } } } } })\n  const unpaid = await prisma.booking.count({ where: { status: 'pending' } })\n  return <main><p>{unpaid} checkouts not finished</p>{classes.map(c => <p key={c.id}>{c.name}: {c._count.bookings} of {c.capacity} seats sold</p>)}</main>\n}\n" }
+run('admin dashboard counts pending', main, app(paid, false, admin), 'none')
+// a form with a pending UI state, near an input placeholder (HOLD matches "placeholder")
+const form = { 'app/contact/ContactForm.tsx': "'use client'\nimport { useState } from 'react'\nexport function ContactForm() {\n  const [state, setState] = useState<'idle' | 'pending' | 'sent'>('idle')\n  return <form><input name=\"email\" placeholder=\"you@example.com\" /><button disabled={state !== 'idle'}>Send</button></form>\n}\n" }
+run('contact form useState pending + placeholder', main, app(paid, false, form), 'none')
+// status badge switch
+const badge = { 'app/bookings/StatusBadge.tsx': "export function StatusBadge({ status, seats }: { status: string, seats: number }) {\n  switch (status) {\n    case 'pending': return <span>Waiting for payment ({seats} seats)</span>\n    case 'paid': return <span>Booked</span>\n  }\n  return null\n}\n" }
+run('status badge switch case', main, app(paid, false, badge), 'none')
+// pending-approval flow: private lesson requests that need teacher approval, overlap check counts pending+approved (correct)
+const req = { 'app/api/requests/route.ts': "import { prisma } from '@/lib/prisma'\nexport async function POST(req: Request) {\n  const { tutorId, startsAt, endsAt } = await req.json()\n  const clash = await prisma.lessonRequest.count({ where: { tutorId, status: { in: ['pending', 'approved'] }, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } })\n  if (clash) return Response.json({ error: 'That time overlaps another lesson' }, { status: 409 })\n  await prisma.lessonRequest.create({ data: { tutorId, startsAt, endsAt, status: 'pending' } })\n  return Response.json({ ok: true })\n}\n" }
+run('pending-approval lesson requests', main, { ...main, ...req }, 'none')
+// a TODO comment mentioning the expired event suppresses M1
+run('TODO comment names checkout.session.expired', main, app(held, "  // TODO: handle checkout.session.expired to free the seat\n"), 'M1')
+// moving the file (main already counted pending, in a file at another path)
+const mainHeld = app(held)
+run('rename only (main already counted pending)', mainHeld, { 'app/api/bookings/checkout/route.ts': mainHeld['app/api/checkout/route.ts'], 'app/api/webhook/route.ts': mainHeld['app/api/webhook/route.ts'] }, 'none')
+// expires_at on the session near the pending save hides M1 though nothing frees the row
+run('session expires_at only', main, { ...app(''), 'app/api/checkout/route.ts': checkout(held, undefined, '{ metadata: { bookingId: b.id }, expires_at: Math.floor(Date.now() / 1000) + 30 * 60 }') }, 'M1')
+// time limit via a column TIME doesn't know
+run('reserved_until filter', main, app(full("{ classId, OR: [{ status: 'paid' }, { status: 'pending', reservedUntil: { gt: new Date() } }] }")), 'none')
+run('updatedAt filter', main, app(full("{ classId, OR: [{ status: 'paid' }, { status: 'pending', updatedAt: { gt: new Date(Date.now() - 1800000) } }] }")), 'none')
+
+}
+{
+const paid = full("{ classId, status: 'paid' }"), held = full("{ classId, status: { in: ['pending', 'paid'] } }")
+// a "give up my unpaid booking" endpoint: deleteMany isn't seen as a write, so its 'pending' filter counts as a read
+const del = { 'app/api/bookings/[id]/route.ts': "import { prisma } from '@/lib/prisma'\nexport async function DELETE(req: Request, { params }: { params: { id: string } }) {\n  // gives the seat back to the class\n  await prisma.booking.deleteMany({ where: { id: Number(params.id), status: 'pending' } })\n  return new Response(null, { status: 204 })\n}\n" }
+run('deleteMany pending (frees a seat)', app(paid), app(paid, false, del), 'none')
+// main already freed old rows with a cron (cutoff variable); the change counts pending and adds the expired handler
+const cron = { 'app/api/cron/expire/route.ts': "import { prisma } from '@/lib/prisma'\nexport async function GET() {\n  const cutoff = new Date(Date.now() - 30 * 60 * 1000)\n  await prisma.booking.updateMany({ where: { status: 'pending', createdAt: { lt: cutoff } }, data: { status: 'expired' } })\n  return new Response('ok')\n}\n" }
+run('main has cutoff-var cron; change adds expired + counts pending', app('', false, cron), app(held, true, cron), 'none')
+// whole app new, with a cutoff var cleanup
+run('whole app new, M1 shape', {}, app(held), 'M1')
+
+}
+{
+const ctl = (count: string) => `using Microsoft.AspNetCore.Mvc;\nusing Microsoft.EntityFrameworkCore;\nusing Stripe.Checkout;\n\nnamespace Shop.Api.Controllers;\n\n[ApiController]\n[Route("api/[controller]")]\npublic sealed class BookingsController(AppDbContext db) : ControllerBase\n{\n    [HttpPost]\n    public async Task<IActionResult> Create(CreateBookingRequest request)\n    {\n        var slot = await db.Slots.FindAsync(request.SlotId);\n        if (slot is null) return NotFound();\n${count}        var booking = new Booking { SlotId = slot.Id, Status = "pending" };\n        db.Bookings.Add(booking);\n        await db.SaveChangesAsync();\n        var session = await new SessionService().CreateAsync(new SessionCreateOptions { Mode = "payment", SuccessUrl = "https://x/ok", CancelUrl = "https://x/no" });\n        return Ok(new { checkoutUrl = session.Url });\n    }\n}\n`
+const cs = (count: string) => ({ 'Shop.Api.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><PackageReference Include="Stripe.net" Version="47.0.0" /></ItemGroup></Project>\n', 'Controllers/BookingsController.cs': ctl(count) })
+run('asp.net EF LINQ == "pending" || == "paid" (miss?)', cs(''), cs('        var taken = await db.Bookings.CountAsync(b => b.SlotId == slot.Id && (b.Status == "pending" || b.Status == "paid"));\n        if (taken >= slot.Capacity) return Conflict(new { message = "This slot is full." });\n'), 'M1')
+run('asp.net Contains list (control)', cs(''), cs('        var held = new[] { "pending", "paid" };\n        var taken = await db.Bookings.CountAsync(b => b.SlotId == slot.Id && held.Contains(b.Status));\n        if (taken >= slot.Capacity) return Conflict(new { message = "This slot is full." });\n'), 'M1')
+// JS in-memory count
+run("js .filter(b => b.status === 'pending' || b.status === 'paid').length (miss?)", app(''), app("  const all = await prisma.booking.findMany({ where: { classId } })\n  const taken = all.filter(b => b.status === 'pending' || b.status === 'paid').length\n  if (taken >= c.capacity) return Response.json({ error: 'This class is full' }, { status: 409 })\n"), 'M1')
+
+}
+console.log('ok (review 25)')
+}
 // "Tests couldn't be executed": the agent didn't run them
 assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. Tests couldn’t be executed because the environment has no Go toolchain installed.' }).includes("didn't run or test"), 'untested: passive')

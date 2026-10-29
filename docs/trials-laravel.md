@@ -334,7 +334,7 @@ were about old data meeting a new rule, which no reader catches yet.
 
 ## Still open
 
-1. **Old data under new rules** (the two 🔴): `pending` orders counted as held seats with no age limit.
+1. ✅ **Old data under new rules** (the two 🔴): `pending` orders counted as held seats with no age limit. Fixed later; see [trials-go.md](trials-go.md#fixed-after-the-trials).
 2. **"Only admins ✓"** for the `admin` middleware, and the controller's own extra checks (p3: ticket holders, after the show).
 3. **💰 for refunds** and for price changes (p4, p5); a webhook that drops a payment whose amount doesn't match (p5).
 4. **Blade pages** aren't read yet: layout changes, forms inside `@auth` / `@if` (p2, p3).
