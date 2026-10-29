@@ -1981,7 +1981,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       : sends ? `sends ${noun} to your server` : `loads ${noun} from your server`
   }
   const newOnly = <T,>(a: Set<T> | undefined, b: Set<T>) => [...b].filter(x => !a?.has(x))
-  const newPage = (name: string, f: FileFacts, clauses: string[]) => {
+  const newPage = (name: string, url: string, f: FileFacts, clauses: string[]) => {
     const title = f.headings.find(h => h.startsWith('h1:'))?.slice(3)
     const sections = f.headings.filter(h => !h.startsWith('h1:')).map(h => h.slice(3).replace(/[.!]$/, ''))
     const rest = merge(clauses.filter(c => c !== 'requires login ✓' && c !== 'is for admins only ✓'))
@@ -1990,12 +1990,75 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       sections.length ? `It has sections for ${list(sections)}.` : '',
       rest.length ? `It ${list(rest)}.` : '',
       viewOnly(f) ? 'It only shows information: nothing on it lets you change anything.' : '',
-      f.auth ? (f.admin ? 'Only admins can open it ✓' : 'You have to log in to open it ✓') : '',
+      f.auth ? (f.admin ? 'Only admins can open it ✓' : 'You have to log in to open it ✓') : privateLink(url, f) ? 'It opens from a private link, so only people who have the link can find it.' : '',
     ].filter(Boolean).join(' ')
   }
   // Server code that an admin page calls is admin-only, whatever its name.
   const adminCalls = (url: string) => [...B.files].some(([p, f]) => route(p)?.kind === 'page' && /(^|\/)(admin|dashboard)(\/|$)/.test(route(p)!.url)
     && [...f.fetches].some(x => norm(x.slice(x.indexOf(' ') + 1)) === norm(url)))
+  // A private link: the address carries a secret (/share/[token], /s/{public_id}) and the lookup uses it (`where: { token }`,
+  // `.where(Document.public_id == public_id)`, on one line). Only people holding the link find it, whether or not they also log in. (Pages say
+  // only that: an app-wide guard plain can't read, Next's middleware, Nuxt's Supabase module, a SvelteKit hook, may still ask for login.)
+  // Only tokens named for a link (not a cursor's [nextToken], a phone's [deviceToken], a coin's or an API key's [token]), a public_id only in
+  // a share address (elsewhere it's often just the id in URLs), and not a number (`Number(shareId)` can be guessed).
+  const privateLink = (url: string, f: FileFacts) => {
+    const m = /\[(token|secret|(?:share|invite|access|magic|link|view|guest|public|reset|verify|verification|confirm|confirmation|unsubscribe|download|embed|portal)_?token|(?:share|access|invite)_?(?:id|key|code))\]/i.exec(url)
+      ?? /\/(?:s|share|shared|public|links?)\/\[(public_?id)\]/i.exec(url)
+    if (!m || !f.tables.size || /(^|\/)(admin|dashboard|tokens?|coins?|nfts?|secrets|keys|api[-_]?tokens|api[-_]?keys)(\/|$)/i.test(url)) return false
+    // the field the param is compared with: `where: { token }`, `{ code: req.params.inviteCode }`, `Document.public_id == public_id`,
+    // `find_by(share_token: params[:token])`, `->where('share_token', $token)`, `.eq('token', token)`, `objects.get(token=token)`
+    const code = [...f.fns.values()].join('\n'), n = m[1], v = String.raw`(?:[\w$]+(?:\.|\[:?))*\$?${n}\]?\b`
+    const fields = [
+      ...[...code.matchAll(new RegExp(String.raw`\bwhere\s*:\s*\{(?:[^{}]*,)?\s*(${n})\s*[,}]`, 'g'))].map(x => x[1]),   // (not `const { token } = await params`)
+      // (a field named like the param counts only on a lookup's line: `where: { shareId: shareId }`, not `const shareId = params.shareId`,
+      // `url_for(..., share_id=share_id)` or `{ token: token }` in props)
+      ...[...code.matchAll(new RegExp(String.raw`(?<!\b(?:const|let|var)\s+)\b(\w+)\s*(?::|=(?!=)|==|===)\s*${v}`, 'g'))].filter(x => x[1] !== n
+        || /\b(?:where|filter|filter_by|find_by|findBy|findUnique|findFirst|findOne|get|eq|objects)\b/.test(code.slice(code.lastIndexOf('\n', x.index) + 1, x.index))).map(x => x[1]),
+      ...[...code.matchAll(new RegExp(String.raw`['"](\w+)['"]\s*,\s*${v}`, 'g'))].map(x => x[1]),
+    ]
+    // a field named for a link, or a bare token / code / secret on a table that holds links (not a coin's symbol, not a row's own id)
+    return fields.some(x => /^(?:(?:share|public|access|invite|link|magic|download|reset|verify|verification|guest|view)_?(?:token|id|code|key)|(?:share|public|access|invite|link|magic|download|reset|verify|verification|guest|view)(?:Token|Id|Code|Key))$/.test(x)
+      || /^(?:token|code|secret)$/.test(x) && [...f.tables].some(t => /share|link|invite|reset|verif|magic|download|access|guest|portal/i.test(t)))
+  }
+  // login-ish words in the code (`const u = await auth(); if (!u) ...`, `export const GET = withAuth(...)`: checks plain can't read)
+  const loginish = (f: FileFacts) => [...f.fns.values(), f.printed.replace(/\[login: \w+\]/g, '')].some(x =>
+    /auth|session|user|account|team|login|sign_?in|require_?[a-z]|ensure|guard|protect|member|permission|role|admin|clerk|verify|jwt|viewer|cookie|middleware|api_?key|password|headers?\b|export\s+const\s+(?:GET|POST|PUT|PATCH|DELETE)\s*=\s*[\w$.]+\(/i.test(x.replace(/\bSession\b/g, '')))   // (SQLAlchemy's db: Session; a wrapper: `export const POST = withWorkspace(...)`)   // (SQLAlchemy's db: Session)
+  // Somewhere the app may ask for login before any route runs, in a way plain can't map to one address: Next's middleware or proxy, a
+  // SvelteKit hook, Nuxt server middleware, `app.use(...)`, FastAPI `dependencies=[...]`, Flask `before_request`, Rails `before_action`
+  const appGuardMaybe = [...B.files].some(([k, f]) => /(^|\/)(?:(?:middleware|proxy|hooks\.server)\.[cm]?[jt]s|server\/middleware\/[^/]+)$/.test(k)
+    || /\.use\s*\(|\.middleware\s*\(|add_middleware\s*\((?!\s*(?:Session|CORS|GZip|TrustedHost|HTTPSRedirect|ProxyHeaders)Middleware)|\bMiddleware\s*\(|\bmiddleware\s*=\s*\[|addHook|useGlobalGuards|APP_GUARD|dependencies\s*=\s*\[|before_request|before_action|MIDDLEWARE/.test(f.printed))
+  // Server code that only reads, every read open, nothing login-ish anywhere: anyone with the link gets it, no login needed. (Not login,
+  // reset or webhook addresses: there the token is the check.)
+  const linkOnly = (url: string, f: FileFacts) => privateLink(url, f) && !isPublic(url) && !f.auth && !(f as FileFacts & { guardUnknown?: boolean }).guardUnknown
+    && !f.written.size && !f.writes && !METHODS.slice(1).some(m => f.fns.has(m)) && ((f as FileFacts & { ru?: string[] }).ru ?? ['open']).every(x => x === 'open')
+    && !loginish(f) && !appGuardMaybe && [...f.fns.values()].every(onlyKnownCalls)   // (a helper may write, a file download isn't "shows")
+  // An address ending in /share whose every changing handler only sets link fields (a token, a public id, an is-public flag) on its one table
+  // and calls nothing else plain can't account for: it turns sharing on or off (its DELETE removes the link, not the document). The fields
+  // read are the ones written: Prisma `data: {...}` (flat, not a variable), `x.field = ...`, Rails `update(field: ...)` / Laravel
+  // `update(['field' => ...])`, never a `where`. Not a share counter (shares, shareCount), sharing with a person (sharedWith), several rows
+  // (updateMany), outside services, or any other call (a helper may delete or email): only lookups, login checks (named for one: requireOwner,
+  // not ensureNoVersions), responses and new tokens.
+  const LINK_FIELD = /^['"]?(?:share_?(?:token|id|key|slug|code)|share(?:Token|Id|Key|Slug|Code)|public_?id|publicId|public_?token|publicToken|link_?token|linkToken|is_?public|isPublic|is_?shared|isShared|public|shared|sharing_?enabled|sharingEnabled)['"]?$/
+  const writtenFields = (x: string) => [
+    ...[...x.matchAll(/\bdata\s*:\s*\{([^{}]*)\}/g)].flatMap(m => m[1].split(',').map(kv => kv.split(':')[0].trim()).filter(Boolean)),
+    ...[...x.matchAll(/\b\w+\.(\w+)\s*=(?![=>])/g)].map(m => m[1]),
+    // (`update(share_params)`, `update(**body)`: fields plain can't see, so not only link fields)
+    ...[...x.matchAll(/\.update!?\s*\((?!\s*\{)\s*\[?([^()]*)\]?\s*\)/g)].flatMap(m => { const ks = [...m[1].matchAll(/(['"]?\w+['"]?)\s*(?::(?!:)|=>)/g)].map(k => k[1])
+      return ks.length && !/\*\*|\.\.\./.test(m[1]) ? ks : ['*'] }),
+  ]
+  const SHARE_CALL = /^(?:if|for|while|switch|catch|return|function|async|await|typeof|def|update!?|save|commit|refresh|flush|findUnique|findFirst|findUniqueOrThrow|findFirstOrThrow|get|get_object_or_404|scalar|scalars|select|where|first|one|one_or_none|filter_by|find|find_by!?|findOrFail|firstOrFail|json|jsonify|redirect|revalidatePath|revalidateTag|url_for|render|abort|abort_unless|abort_if|notFound|response|noContent|head|randomUUID|randomBytes|toString|token_urlsafe|token_hex|urlsafe_base64|nanoid|cuid|createId|uuid4?|hex|random|random_bytes|bin2hex|str|String|Depends|Request|params|status|Error|HTTPException|\w*Response|auth|getServerSession|currentUser|current_user|get_db)$/i
+  // a login check named for one (requireUser, owned_document, require_api_csrf: a guard verb and a login word), or a lookup that does
+  // nothing else (getDocument, not fetchAndPurgeVersions, getOrCreateShare or a bare fetch(), which may post anywhere)
+  const knownCall = (n: string) => SHARE_CALL.test(n)
+    || /^(?:require|ensure|assert|check|verify|authorize|authenticate|get_?current|getCurrent|current|get_?owned|getOwned|owned)/i.test(n) && /user|owner|owned|auth|session|member|login|csrf|permission|viewer|account|access|signed/i.test(n) && !/delete|remove|purge|archive|create|transfer|invite|grant|revoke|send|notify|mail/i.test(n)
+    || /^(?:get|find|fetch|load)\w/i.test(n) && n !== 'fetch' && !/And[A-Z]|_and_|Or[A-Z]|_or_|delete|remove|purge|archive|create|update|save|transfer|invite|grant|revoke|send|notify|mail|set[A-Z_]/i.test(n)
+  const onlyKnownCalls = (x: string) => [...x.replace(/^[^\n]*\n/, '').matchAll(/(?<![\w$])([A-Za-z_$][\w$]*!?)\s*\(/g)].every(c => knownCall(c[1]))
+  const shareRoute = (url: string, f: FileFacts, t?: string) => !!t && /^(?:share|sharing|share[-_]?links?)$/.test(url.split('/').at(-1) ?? '') && !f.outside.size
+    && [...f.ops].every(o => o === 'update') && [...f.written].every(x => x === t) && ['POST', 'PUT', 'PATCH', 'DELETE'].some(m => f.fns.has(m))
+    && ['POST', 'PUT', 'PATCH', 'DELETE'].every(m => { const x = f.fns.get(m); if (x === undefined) return true
+      const fs = writtenFields(x)
+      return fs.length > 0 && fs.every(k => LINK_FIELD.test(k)) && !/updateMany|update_all|setattr|\$executeRaw|\$queryRaw|\bsql`|\bdata\s*:(?!\s*\{)|\bdata\s*:\s*\{[^{}]*\{/.test(x)
+        && onlyKnownCalls(x) })
   const viewOnly = (f: FileFacts) => ![...f.fetches].some(x => !x.startsWith('GET ')) && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
 
   const changes: Change[] = [], problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []
@@ -2029,12 +2092,14 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
       if (!a) {
         const can: string[] = [], creates = b.ops.has('create') || (b.writes && !b.ops.size)
-        if (b.fns.has('GET')) can.push(`lists ${noun}`)
-        if (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m))) can.push(creates ? (can.length && (!t || b.written.has(t)) ? 'saves new ones' : `saves new ${t && !b.written.has(t) && b.written.size ? things([...b.written][0]) : noun}`)
+        const link = linkOnly(r.url, b), share = shareRoute(r.url, b, t)
+        if (b.fns.has('GET')) can.push(link ? `shows ${noun} to anyone with the link, no login needed` : `lists ${noun}`)
+        if (share) can.push(`turns sharing on or off for ${noun}`)   // (not which: a POST may set the token to nothing)
+        if (!share && (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m)))) can.push(creates ? (can.length && (!t || b.written.has(t)) ? 'saves new ones' : `saves new ${t && !b.written.has(t) && b.written.size ? things([...b.written][0]) : noun}`)
           : b.ops.has('update') && b.ops.has('delete') && !['PUT', 'PATCH', 'DELETE'].some(m => b.fns.has(m)) ? `updates and deletes ${list([...(b.written.size ? b.written : [t ?? 'data'])].map(x => x === 'data' ? x : things(x)))}`   // (not which one each: plain doesn't keep that)
           : b.ops.has('update') ? `updates ${noun}` : b.ops.has('delete') ? `deletes ${noun}` : t ? `looks up ${noun}` : 'accepts requests')
-        if (b.fns.has('PUT') || b.fns.has('PATCH')) can.push(`updates ${noun}`)
-        if (b.fns.has('DELETE')) can.push(`deletes ${noun}`)
+        if (!share && (b.fns.has('PUT') || b.fns.has('PATCH'))) can.push(`updates ${noun}`)
+        if (!share && b.fns.has('DELETE')) can.push(`deletes ${noun}`)
         clauses.push(...new Set(can))
         if (b.money) clauses.push('charges customers 💰')
         // (when only its changes need login, and reading it doesn't, say so: one ✓ for both would hide the open part)
@@ -2046,7 +2111,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         if (b.auth && !isPublic(r.url)) clauses.push(b.admin ? (reads.includes('open') ? 'lets only admins change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'lets only admins change anything ✓'
             : readsAdmin ? 'is for admins only ✓' : 'lets only admins change anything ✓ (anyone logged in can view it)')
           : reads.includes('open') ? 'needs login to change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'needs login to change anything ✓' : 'requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
-        else if (!b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown) clauses.push('works without logging in')   // (not when plain can't tell)   // read-only; changing ones get a warning instead
+        else if (!link && !b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown) clauses.push('works without logging in')   // (not when plain can't tell)   // read-only; changing ones get a warning instead
       } else {
         // what it now does to them: an address that gains update and delete doesn't "save" anything new
         // (ops aren't kept per table, so only when it writes to that one table alone)
@@ -2064,7 +2129,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const lead = !a ? '' : a.auth && !b.auth ? `${cap(name)} no longer requires login.` : !a.auth && b.auth ? `${cap(name)} now ${b.admin ? 'only lets admins in' : 'requires login'} ✓`
       : a.auth && b.auth && a.admin && !b.admin ? `${cap(name)} may no longer be limited to admins.` : a.auth && b.auth && !a.admin && b.admin ? `${cap(name)} is now limited to admins ✓` : ''
     const text = !a
-      ? (r.kind === 'page' ? newPage(name, b, clauses) : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
+      ? (r.kind === 'page' ? newPage(name, r.url, b, clauses) : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
       : (lead ? `${lead}${clauses.length ? ' It also' : ''}` : '')
         + (clauses.length ? `${lead ? ' now ' : `${cap(name)} now `}${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : lead ? '' : `${cap(name)} changed in a way plain can't describe yet.${b.money ? '' : ' Ask the agent what it does differently.'}`)
     changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰 Make a test payment before you ship.' : ''), detail: r.url, name: r.kind === 'page' ? pageName(r.url) + (!a && b.headings.find(h => h.startsWith('h1:')) ? ` ("${b.headings.find(h => h.startsWith('h1:'))!.slice(3)}")` : '') : named(r.url).join(' ') || 'main', money: b.money, vague: !!a && !clauses.length && a.auth === b.auth && !b.money })
@@ -2086,6 +2151,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         problems.push({ kind: 'Unsafe', text: `Anyone can use ${name} without logging in.` })
       else if (r.kind === 'endpoint' && writes && (SENSITIVE.test(r.url) || [...b.written].some(t => SENSITIVE.test(t)) || adminCalls(r.url)))
         problems.push({ kind: 'Unsafe', text: `Anyone can use ${name} without logging in.` })
+      // anyone can publish anyone's documents (not when its code has login-ish words, or a Next middleware may ask: then the Check below)
+      else if (r.kind === 'endpoint' && shareRoute(r.url, b, mainTable(b, r.url)) && !loginish(b) && !appGuardMaybe)
+        problems.push({ kind: 'Unsafe', text: `Anyone can turn sharing on or off for your ${things(mainTable(b, r.url)!)} without logging in.` })
       else if (r.kind === 'endpoint' && writes) {
         const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
         problems.push({ kind: 'Check', text: `Anyone can ${b.ops.has('create') || !b.ops.size ? 'post' : 'change'} ${noun} without logging in, and nothing limits spam or fake ${noun}. That's normal for things like sign-ups or reviews, but make sure it's what you want.` })

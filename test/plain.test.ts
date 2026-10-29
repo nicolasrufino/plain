@@ -3361,3 +3361,115 @@ assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 
 for (const said of ['Full runtime testing wasn’t possible because dependencies aren’t installed.', 'Full runtime tests weren’t available because dependencies aren’t installed locally.', 'Full builds could not run because dependencies are not installed.'])
   assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: said }).includes("didn't run or test"), `untested: ${said}`)
 assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. A refund wasn’t possible for free orders, so they are skipped. Tests pass.' }).includes("didn't run or test"), 'untested: not about tests')
+// Share links: a page with a token in the address and a lookup with it opens from a private link (no login claim: an app-wide guard plain
+// can't read may still ask); open read-only server code says "anyone with the link"; an address ending in /share that only sets a token
+// or public field turns the link on and off (its DELETE doesn't delete the document)
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const next = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}' }
+  const page = (param: string) => `export default async function P({ params }: { params: Promise<{ ${param}: string }> }) {\n  const { ${param} } = await params\n  const s = await prisma.projectShare.findUnique({ where: { token: ${param} } })\n  return <main><h1>{s?.name}</h1></main>\n}\n`
+  let c = card(next, { ...next, 'app/share/[token]/page.tsx': page('token') })
+  assert.ok(c.includes('It opens from a private link, so only people who have the link can find it.') && !c.includes('no login'), c)
+  c = card(next, { ...next, 'app/p/[shareId]/page.tsx': page('shareId') })
+  assert.ok(c.includes('private link'), c)
+  // (review 32) under a middleware plain can't map: still only "private link"
+  c = card(next, { ...next, 'middleware.ts': 'export { auth as middleware } from "@/auth"\n', 'app/share/[token]/page.tsx': page('token') })
+  assert.ok(c.includes('private link') && !c.includes('no login'), c)
+  // a page cursor isn't a secret
+  c = card(next, { ...next, 'app/feed/[pageToken]/page.tsx': page('pageToken') })
+  assert.ok(!c.includes('private link'), c)
+  // not a secret: an id, a slug
+  for (const x of ['[id]', '[slug]']) { c = card(next, { ...next, [`app/projects/${x}/page.tsx`]: page(x.slice(1, -1)) }); assert.ok(!c.includes('private link'), `${x}: ${c}`) }
+  // logged in: no "no login needed"
+  const na = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"6.0.0"}}' }
+  c = card(na, { ...na, 'app/share/[token]/page.tsx': 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\n' + page('token').replace('{\n', '{\n  const session = await auth()\n  if (!session?.user) redirect("/login")\n') })
+  assert.ok(!c.includes('private link') && c.includes('log in to open it ✓'), c)
+  // nothing looked up: no claim
+  c = card(next, { ...next, 'app/share/[token]/page.tsx': 'export default function P() { return <main><h1>Hi</h1></main> }\n' })
+  assert.ok(!c.includes('private link'), c)
+
+  // FastAPI: the public page and the on/off address
+  const req = { 'requirements.txt': 'fastapi\nsqlalchemy\n', 'app/models.py': 'class Document(Base):\n    __tablename__ = "documents"\n    id: Mapped[int] = mapped_column(primary_key=True)\n    public_id: Mapped[str | None] = mapped_column(String(64))\n' }
+  const api = 'from fastapi import APIRouter, Depends\nfrom .models import Document\nrouter = APIRouter()\n\n'
+    + '@router.post("/documents/{document_id}/share")\ndef share(document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):\n    d = db.get(Document, document_id)\n    d.public_id = secrets.token_urlsafe(32)\n    db.commit()\n\n'
+    + '@router.delete("/documents/{document_id}/share")\ndef unshare(document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):\n    d = db.get(Document, document_id)\n    d.public_id = None\n    db.commit()\n\n'
+    + '@router.get("/s/{public_id}")\ndef public_page(public_id: str, db: Session = Depends(get_db)):\n    return db.scalar(select(Document).where(Document.public_id == public_id))\n'
+  c = card(req, { ...req, 'app/api.py': api })
+  assert.ok(c.includes('turns sharing on or off for documents and requires login ✓'), c)
+  assert.ok(c.includes('shows documents to anyone with the link, no login needed'), c)
+  assert.ok(!c.includes('deletes documents') && !c.includes('lists documents'), c)
+  // a /share address that really deletes something keeps saying so
+  c = card(req, { ...req, 'app/api.py': api.replace('    d.public_id = None\n', '    db.delete(d)\n') })
+  assert.ok(c.includes('deletes documents') && !c.includes('sharing on'), c)
+  // (review 32) a handler that sets no token field (a helper plain can't follow), or emails someone: not a share link
+  c = card(req, { ...req, 'app/api.py': api.replace('    d.public_id = None\n', '    purge(d)\n') })
+  assert.ok(!c.includes('sharing on'), c)
+  // open: anyone can publish anyone's documents
+  c = card(req, { ...req, 'app/api.py': api.replaceAll('user: User = Depends(get_current_user), ', '') })
+  assert.ok(c.includes('⚠ Anyone can turn sharing on or off for your documents without logging in.') && !c.includes('spam'), c)
+  // a GET whose own handler checks a login plain can't read: no "no login needed"
+  c = card(req, { ...req, 'app/api.py': api.replace('db: Session = Depends(get_db)):\n    return', 'db: Session = Depends(get_db), me = Depends(require_viewer)):\n    return') })
+  assert.ok(!c.includes('no login needed'), c)
+
+  // Express: /invite/:inviteCode
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","@prisma/client":"6.0.0"}}' }
+  c = card(ex, { ...ex, 'server.js': 'const express = require("express")\nconst app = express()\napp.get("/invites/:inviteCode", async (req, res) => {\n  res.json(await prisma.invite.findUnique({ where: { code: req.params.inviteCode } }))\n})\napp.listen(3000)\n' })
+  assert.ok(c.includes('shows invites to anyone with the link, no login needed'), c)
+  // (review 32) a guarded GET next to an open POST: the address isn't "no login needed"
+  c = card(ex, { ...ex, 'server.js': 'const express = require("express")\nconst app = express()\napp.get("/invites/:inviteCode", requireAuth, async (req, res) => {\n  res.json(await prisma.invite.findUnique({ where: { code: req.params.inviteCode } }))\n})\napp.post("/invites/:inviteCode", async (req, res) => {\n  res.json(await prisma.member.create({ data: { code: req.params.inviteCode } }))\n})\napp.listen(3000)\n' })
+  assert.ok(!c.includes('with the link'), c)
+  // a visible update that clears the token: still a share link
+  c = card(next, { ...next, 'app/api/documents/[id]/share/route.ts': 'import { auth } from "@/auth"\nexport async function DELETE(req: Request, { params }: { params: { id: string } }) {\n  const s = await auth()\n  if (!s?.user) return new Response(null, { status: 401 })\n  await prisma.document.update({ where: { id: params.id }, data: { publicId: null } })\n  return new Response(null, { status: 204 })\n}\n' })
+  assert.ok(c.includes('turns sharing on or off for documents') && !c.includes('deletes documents'), c)
+  // (review 32b) not secrets: a cursor, a phone's push token, a public_id outside a share address
+  for (const [dir, prm] of [['feed', 'syncToken'], ['devices', 'deviceToken'], ['products', 'public_id']]) {
+    c = card(next, { ...next, [`app/${dir}/[${prm}]/page.tsx`]: page(prm) }); assert.ok(!c.includes('private link'), `${prm}: ${c}`) }
+  // a share counter, a where filter, another field written alongside, every row at once: not a share link, the spam Check stays
+  const share = (body: string) => card(next, { ...next, 'app/api/documents/[id]/share/route.ts': `export async function POST(req: Request, { params }: { params: { id: string } }) {\n  ${body}\n  return Response.json({})\n}\n` })
+  for (const body of ['await prisma.document.update({ where: { id: params.id }, data: { shares: { increment: 1 } } })', 'await prisma.document.update({ where: { id: params.id, shareToken: "t" }, data: { title: "x" } })',
+    'await prisma.document.update({ where: { id: params.id }, data: { shareToken: "t", ownerId: "u" } })', 'await prisma.document.updateMany({ data: { isPublic: true } })']) {
+    c = share(body); assert.ok(!c.includes('sharing on') && !c.includes('⚠') && c.includes('nothing limits spam'), `${body}: ${c}`) }
+  c = share('await prisma.document.update({ where: { id: params.id }, data: { shareToken: crypto.randomUUID() } })')
+  assert.ok(c.includes('turns sharing on or off for documents') && c.includes('⚠ Anyone can turn sharing on or off for your documents without logging in.'), c)
+  // a wrapper plain can't read: the Check, not the ⚠
+  c = card(next, { ...next, 'app/api/documents/[id]/share/route.ts': 'export const POST = withAuth(async (req: Request, { params }: { params: { id: string } }) => {\n  await prisma.document.update({ where: { id: params.id }, data: { shareToken: "t" } })\n  return Response.json({})\n})\n' })
+  assert.ok(!c.includes('⚠'), c)
+  // (review 32c) the token isn't used in the lookup, or is a number, or isn't a link's: no claim
+  c = card(next, { ...next, 'app/share/[token]/page.tsx': page('token').replace('findUnique({ where: { token: token } })', 'findMany()') })
+  assert.ok(!c.includes('private link'), c)
+  c = card(next, { ...next, 'app/s/[shareId]/page.tsx': page('shareId').replace('token: shareId', 'id: Number(shareId)') })
+  assert.ok(!c.includes('private link'), c)
+  for (const dir of ['nft', 'token', 'secrets']) { c = card(next, { ...next, [`app/${dir}/[token]/page.tsx`]: page('token') }); assert.ok(!c.includes('private link'), `${dir}: ${c}`) }
+  // another call (a helper that may delete), a body written whole, raw SQL: not "sharing on or off"
+  for (const body of ['await prisma.document.update({ where: { id: params.id }, data: { shareToken: null } })\n  await purgeVersions(params.id)',
+    'const body = await req.json()\n  body.isPublic = true\n  await prisma.document.update({ where: { id: params.id }, data: body })',
+    'await prisma.document.update({ where: { id: params.id }, data: { shareToken: null } })\n  await prisma.$executeRaw`DELETE FROM versions`']) {
+    c = share(body); assert.ok(!c.includes('sharing on') && !c.includes('⚠'), `${body}: ${c}`) }
+  // a POST that revokes: "on or off", never "makes"
+  c = share('await prisma.document.update({ where: { id: params.id }, data: { shareToken: null } })')
+  assert.ok(c.includes('turns sharing on or off for documents'), c)
+  // an app-wide hook plain can't map: the Check, not the ⚠
+  c = card(next, { ...next, 'src/hooks.server.ts': 'export const handle = sequence(gate)\n', 'app/api/documents/[id]/share/route.ts': 'export async function POST(req: Request, { params }: { params: { id: string } }) {\n  await prisma.document.update({ where: { id: params.id }, data: { shareToken: "t" } })\n  return Response.json({})\n}\n' })
+  assert.ok(!c.includes('⚠') && c.includes('nothing limits spam'), c)
+  // (review 32d) a coin's [token] (looked up by symbol), a share id that is the document's own id or a number: no claim
+  for (const [path, body] of [['app/swap/[token]/page.tsx', 'prisma.token.findUnique({ where: { symbol: token } })'], ['app/share/[shareId]/page.tsx', 'prisma.document.findUnique({ where: { id: shareId } })'],
+    ['app/share/[shareId]/page.tsx', 'prisma.share.findUnique({ where: { id: +shareId } })']]) {
+    const prm = path.match(/\[(\w+)\]/)![1]
+    c = card(next, { ...next, [path]: page(prm).replace(`prisma.projectShare.findUnique({ where: { token: ${prm} } })`, body) }); assert.ok(!c.includes('private link'), `${path} ${body}: ${c}`) }
+  // (review 32e) a local copy of the param isn't a link field
+  c = card(next, { ...next, 'app/share/[shareId]/page.tsx': page('shareId').replace('const { shareId } = await params', 'const shareId = (await params).shareId').replace('token: shareId', 'id: shareId') })
+  assert.ok(!c.includes('private link'), c)
+  // helpers named like a login check or a lookup that do more, and an update with fields plain can't see: not "sharing on or off"
+  for (const body of ['await transferOwnership(params.id)\n  await prisma.document.update({ where: { id: params.id }, data: { shareToken: "t" } })',
+    'await fetchAndPurgeVersions(params.id)\n  await prisma.document.update({ where: { id: params.id }, data: { shareToken: "t" } })',
+    'await fetch("https://hooks.example.com", { method: "POST" })\n  await prisma.document.update({ where: { id: params.id }, data: { shareToken: "t" } })', 'await inviteUser(params.id)\n  await prisma.document.update({ where: { id: params.id }, data: { shareToken: "t" } })']) {
+    c = share(body); assert.ok(!c.includes('sharing on'), `${body}: ${c}`) }
+  // a wrapper plain can't read, a password the visitor sends: no "no login needed"
+  c = card(next, { ...next, 'app/api/s/[shareToken]/route.ts': 'export const GET = withWorkspace(async (req: Request, { params }: { params: { shareToken: string } }) => {\n  return Response.json(await prisma.document.findFirst({ where: { shareToken: params.shareToken } }))\n})\n' })
+  assert.ok(!c.includes('no login needed'), c)
+  c = card(next, { ...next, 'app/api/s/[shareToken]/route.ts': 'export async function GET(req: Request, { params }: { params: { shareToken: string } }) {\n  const d = await prisma.document.findFirst({ where: { shareToken: params.shareToken } })\n  if (req.headers.get("x-share-password") !== d?.password) return new Response(null, { status: 403 })\n  return Response.json(d)\n}\n' })
+  assert.ok(!c.includes('no login needed'), c)
+  c = card(next, { ...next, 'app/api/s/[shareToken]/route.ts': 'export async function GET(req: Request, { params }: { params: { shareToken: string } }) {\n  return Response.json(await prisma.document.findFirst({ where: { shareToken: params.shareToken } }))\n}\n' })
+  assert.ok(c.includes('shows documents to anyone with the link, no login needed'), c)
+  console.log('ok (share links)')
+}

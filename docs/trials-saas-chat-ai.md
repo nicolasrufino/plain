@@ -659,8 +659,26 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
      - a date-check helper whose variable has a function type (`const h: (id: string) => … = async …`) isn't followed.
    - **Still open:** budget settings read from the environment (per person or total, and the default).
 4. 🟡 **Login claims through helpers.** Partly fixed later: a server action now reads "requires login ✓" when its first awaited call is a helper of the app that turns guests away itself (a redirect, a throw or `notFound()`; not `return null`), directly or one helper further down. All of Huddle's actions now get it. Review 31 took six rounds (12, 10, 3, 1, 2, then clean). It made the check structural: only awaited calls at the top of the action, before any write, loop, try or branch. A helper whose own check sits in a try, with a catch that doesn't rethrow the redirect first, doesn't count. Still open: the stronger wording, "only members of this workspace ✓" and "only owners and admins ✓".
-5. **Public share-link pages** (Huddle p1, Quill p3): "Anyone with the link can open this without
-   logging in", what it shows, whether the link can be guessed, and whether it expires.
+5. ✅ **Public share-link pages** (Huddle p1, Quill p3). Fixed later.
+   - Huddle p1's page now adds "It opens from a private link, so only people who have the link can find it."
+   - Quill p3 now reads "turns sharing on or off for documents and requires login ✓" (it was "deletes
+     documents") and "shows documents to anyone with the link, no login needed" (it was "lists documents").
+   - **Review 32** took six rounds (6, 8, 7, 7, 1, then clean). It made every part strict:
+     - Pages make no login claim. Next.js middleware, Nuxt's Supabase module and SvelteKit hooks can ask for
+       login where plain can't see it, and "only people who have the link" stays true either way.
+     - A param counts as a secret only when the lookup compares it with a field named for a link
+       (`shareToken`, `public_id`), or a bare `token` on a share, invite or reset table. A coin's
+       `[token]`, a cursor, a device token, a row's own id, a number, or a copy of the param doesn't count.
+     - "Turns sharing on or off" needs every changing handler to write only link fields, with no
+       variables, no raw SQL and no several-row updates. It may call only lookups, login checks named
+       for one, responses and token makers: a helper may delete or email.
+     - The ⚠ "Anyone can turn sharing on or off" is skipped when the app may guard everything elsewhere
+       (`app.use`, FastAPI dependencies or custom middleware, Rails `before_action`, a route wrapper).
+   - Known misses: Django `get_object_or_404`, TypeORM `findOneBy`, Mongoose `findOne({ shareToken })` and a
+     multi-line `where` with a same-name field aren't read as lookups, so those cards keep the old wording.
+     A Rails job queued without parentheses beside a share update isn't seen.
+   - Still open: whether the link can be guessed from how it's made, whether it expires, and what the
+     page shows ("It shows project shares" on Huddle p1 is really the project board).
 6. **"Only people in this room"** (Porch p2, p3): a membership check before a 403 should upgrade
    "requires login ✓".
 7. **Migration wording.**
@@ -669,8 +687,7 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
    - When the project's only migrate script is `prisma migrate dev`, say it isn't for live servers.
 
 Smaller items seen on the regenerated cards: the guest sign-in is still a "⚠ problem" (Porch p1); the
-"empty catch" false alarm is still there (Quill p5); some wrong nouns remain ("lists documents" and
-"deletes documents" on Quill p3, "lists memberships" on Huddle p5).
+"empty catch" false alarm is still there (Quill p5); some wrong nouns remain ("lists memberships" on Huddle p5).
 
 ---
 

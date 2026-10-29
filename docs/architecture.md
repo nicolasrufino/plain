@@ -92,6 +92,11 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 - **Uploads.** A new way for people to send files is described: what's accepted, how big, and where files go. It's a
   guess-worded problem when nothing caps the size, or how much one person can upload (except admin-only uploads), or when
   SVG is allowed.
+- **Share links.** A new page whose address carries a secret (`/share/[token]`, `/s/[public_id]`) and looks up a link
+  field with it "opens from a private link". No login claim on pages, since an app-wide guard plain can't read may
+  still ask. Read-only server code with nothing login-ish anywhere says "anyone with the link, no login needed". An
+  address ending in `/share` that only sets a link field (a token, a public id, an is-public flag) and calls nothing
+  else "turns sharing on or off", not "deletes documents". When it's open, that's a ⚠.
 - **Before you ship.** Data that will be deleted, and migrations to run (with the folder, the
   live-site command and what fails until then). Also new env vars without a default, new
   packages, a test payment when payment code changed, and "the agent says it didn't run or
