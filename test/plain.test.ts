@@ -3735,6 +3735,24 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   // a plain field of the author is fine
   c = card(file(helper, ok.replace('body: String(payload.body) } })', 'body: String(payload.body) }, include: { user: { select: { displayName: true } } } })')))
   assert.ok(c.includes('room members only ✓'), c)
+  // Changed events: a room check that's gone, a weaker one (the rooms the socket joined), or one moved to a helper or inline
+  const before = file(helper, ok)
+  const after = (body: string) => file(helper, body)
+  const changed = (body: string) => report(new Map(Object.entries({ ...pkg, ...before })), new Map(Object.entries({ ...pkg, ...after(body) })), { ref: 'main' }).replace(/\s+/g, ' ')
+  c = changed(ok.replace('      if (!(await isMember(roomId, user.id))) {\n        ack?.({ ok: false })\n        return\n      }\n', ''))
+  assert.ok(c.includes(`plain can't see the room check on the "send message" event anymore`), c)
+  c = changed(ok.replace('if (!(await isMember(roomId, user.id)))', 'if (!socket.rooms.has(`room:${roomId}`))'))
+  assert.ok(c.includes('The "send message" event no longer checks room membership each time'), c)
+  for (const body of [ok.replace('      if (!(await isMember(roomId, user.id))) {\n        ack?.({ ok: false })\n        return\n      }\n', '      await send(io, { roomId, userId: user.id })\n'),
+    ok.replace('if (!(await isMember(roomId, user.id)))', 'if (!(await prisma.roomMember.findFirst({ where: { roomId, userId: user.id } })))')]) {
+    c = changed(body); assert.ok(!c.includes('room check') && !c.includes('no longer checks room membership'), `${body}: ${c}`) }
+  // (review 44b) a check called inside the if; a room-name helper inside socket.rooms.has(...) doesn't hide the weaker check
+  c = changed(ok.replace('if (!(await isMember(roomId, user.id)))', 'if (!isInRoom(roomId, user.id))'))
+  assert.ok(!c.includes('room check'), c)
+  c = changed(ok.replace('if (!(await isMember(roomId, user.id)))', 'if (!socket.rooms.has(roomKey(roomId)))'))
+  assert.ok(c.includes('no longer checks room membership each time'), c)
+  c = changed(ok.replace('String(payload.body)', 'String(payload.body).trim()'))
+  assert.ok(c.includes('"send message" on your live connection changed') && !c.includes('room check'), c)
   console.log('ok (room members)')
 }
 // Migrations that only change rules: dropping a constraint or an index doesn't delete data, a unique rule with the id in it can't fail,

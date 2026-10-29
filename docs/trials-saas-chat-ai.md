@@ -773,7 +773,10 @@ cards were made with plain as pushed at that time (commit 6b3f57c).
 4. ✅ Done later (review 42, two rounds): "Long AI answers may now always fail" when an AI client's timeout is lowered
    to well under the time its largest `max_tokens` takes to write (at 60 tokens a second, with a 1.5× margin) and
    nothing streams. A per-call timeout, a stream flag in a variable, or no cap at all means no guess. Quill p6 gets it.
-5. Changed Socket.IO events (not only new ones) get a line.
+5. ✅ Done later (review 44): changed Socket.IO events get a line, and one that had "room members only ✓" and now
+   checks only the rooms the socket joined reads "no longer checks room membership each time: it trusts the room the
+   person joined…" (Porch p6's 🟡). A check plain can't see anymore is a Check, unless the handler still mentions
+   membership or hands the room to another function.
 6. ✅ Done later (review 43, two rounds): an inline `router.use((req, res, next) => …)` admin check now counts for the
    routes after it (Porch p4's admin routes read "is for admins only ✓"). Only a pathless one written straight in the
    function, per router. The admin check itself got stricter for every stack that uses it: not inside a callback, no

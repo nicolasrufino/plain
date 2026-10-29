@@ -3033,27 +3033,51 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // io.use guard). A guard that's gone is a problem.
   // ponytail: per event name; room members are read (roomOnly), moderators aren't; plain WebSockets (ws) aren't read
   const evsBefore = new Set([...A.files.values()].flatMap(f => [...f.socketEvents?.keys() ?? []]))
-  for (const p of real) { const b = B.files.get(p)
-    const evs = [...b?.socketEvents ?? []].filter(([ev]) => !evsBefore.has(ev))
-    if (!b || !evs.length) continue
-    const facts = (ev: string, g: FileFacts) => { const r = b.socketRefs?.get(ev); return r ? b.locals.get(r) ?? g : g }
-    const one = ([ev, g0]: [string, FileFacts]) => { const g = facts(ev, g0), ts_ = list([...g.written].map(things))
-      // (one kind of write: its verb; more than one: "changes", since plain doesn't keep which table gets which)
-      const v = !g.written.size ? '' : g.ops.size > 1 ? `changes ${ts_}` : g.ops.has('create') ? `saves new ${ts_}` : g.ops.has('delete') ? `deletes ${ts_}` : g.ops.has('update') ? `updates ${ts_}` : `saves ${ts_}`
-      // (room members only: its first step turns away anyone not in the room it names, and it stays in that room; src/members.ts)
-      const ft = after.get(p) ?? '', tl = topLevel(ft), scalars = new Set([...B.models.values()].flat().filter(x => !x.startsWith('→')))
-      // (a function it calls: one of this file or one it imports, read, that does nothing: no database, no sockets, no network)
-      // (it takes nothing from around it but JavaScript's own built-ins: no other helper, no database, no sockets)
-      const callOk = (n: string) => { const q = b.locals.has(n) ? p : B.target(p, n), c = q ? B.files.get(q)?.locals.get(n) : undefined
-        // (and binds no name its own file declares at the top, which would make `free` miss a use of the outer one)
-        const tops = q ? aroundNames(after.get(q) ?? '').top : new Set<string>()
-        return !!c && !c.tables.size && !c.writes && !c.outside.size && !/prisma|\bawait\b|\.emit\s*\(|\.to\s*\(|\.join\s*\(|\.send\s*\(|\.write\s*\(|fetch\s*\(|\.constructor\b/.test(c.printed)
-          && [...free(c.printed)].every(x => x === n) && ![...boundAll(c.printed)].some(x => x !== n && tops.has(x)) }
-      const room = b.socketAuth && roomOnly(g.printed, ft, new Map([...tl, ...[...b.binds.keys()].map(k => [k, { fn: true, text: '' }] as [string, { fn: boolean; text: string }])].filter(([k]) => k !== 'prisma')),
-        { callOk, scalars, fields: m => B.models.get(m), ev })
-      const what = [v, room ? 'room members only ✓' : ''].filter(Boolean).join(', ')
+  // (room members only: its first step turns away anyone not in the room it names, and it stays in that room; src/members.ts. Read on
+  // either side of the change: F is the app's facts, S its files)
+  const roomFor = (F: typeof B, S: Snap, p: string, ev: string, g: FileFacts) => { const b = F.files.get(p)!
+    const ft = S.get(p) ?? '', tl = topLevel(ft), scalars = new Set([...F.models.values()].flat().filter(x => !x.startsWith('→')))
+    // (a function it calls: one of this file or one it imports, read, that takes nothing from around it but JavaScript's built-ins, and
+    // binds no name its own file declares at the top, which would make `free` miss a use of the outer one)
+    const callOk = (n: string) => { const q = b.locals.has(n) ? p : F.target(p, n), c = q ? F.files.get(q)?.locals.get(n) : undefined
+      const tops = q ? aroundNames(S.get(q) ?? '').top : new Set<string>()
+      return !!c && !c.tables.size && !c.writes && !c.outside.size && !/prisma|\bawait\b|\.emit\s*\(|\.to\s*\(|\.join\s*\(|\.send\s*\(|\.write\s*\(|fetch\s*\(|\.constructor\b/.test(c.printed)
+        && [...free(c.printed)].every(x => x === n) && ![...boundAll(c.printed)].some(x => x !== n && tops.has(x)) }
+    return !!b.socketAuth && roomOnly(g.printed, ft, new Map([...tl, ...[...b.binds.keys()].map(k => [k, { fn: true, text: '' }] as [string, { fn: boolean; text: string }])].filter(([k]) => k !== 'prisma')),
+      { callOk, scalars, fields: m => F.models.get(m), ev }) }
+  const factsOf = (f: FileFacts, ev: string, g: FileFacts) => { const r = f.socketRefs?.get(ev); return r ? f.locals.get(r) ?? g : g }
+  // (one kind of write: its verb; more than one: "changes", since plain doesn't keep which table gets which)
+  const evVerb = (g: FileFacts) => { const ts_ = list([...g.written].map(things))
+    return !g.written.size ? '' : g.ops.size > 1 ? `changes ${ts_}` : g.ops.has('create') ? `saves new ${ts_}` : g.ops.has('delete') ? `deletes ${ts_}` : g.ops.has('update') ? `updates ${ts_}` : `saves ${ts_}` }
+  for (const p of real) { const a = A.files.get(p), b = B.files.get(p)
+    if (!b) continue
+    const evs = [...b.socketEvents ?? []].filter(([ev]) => !evsBefore.has(ev))
+    const one = ([ev, g0]: [string, FileFacts]) => { const g = factsOf(b, ev, g0)
+      const what = [evVerb(g), roomFor(B, after, p, ev, g) ? 'room members only ✓' : ''].filter(Boolean).join(', ')
       return `"${ev}"${what ? ` (${what})` : ''}` }
-    changes.push({ group: 'Server', isNew: true, text: `Your server now takes ${list(evs.map(one))} over its live connection.${b.socketAuth ? ' Connecting needs a login ✓' : ''}`, detail: p }) }
+    if (evs.length) changes.push({ group: 'Server', isNew: true, text: `Your server now takes ${list(evs.map(one))} over its live connection.${b.socketAuth ? ' Connecting needs a login ✓' : ''}`, detail: p })
+    // events it already took whose code changed: what they now do differently, and a room check that's gone
+    const changed = [...b.socketEvents ?? []].filter(([ev]) => a?.socketEvents?.has(ev)).map(([ev, g0]) => [ev, factsOf(b, ev, g0), factsOf(a!, ev, a!.socketEvents!.get(ev)!)] as const)
+      .filter(([, g, h]) => g.printed !== h.printed)
+    if (!changed.length) continue
+    const weaker: string[] = [], gone: string[] = []
+    const said = changed.map(([ev, g, h]) => { const vb = evVerb(g), va = evVerb(h), rb = roomFor(B, after, p, ev, g), ra = roomFor(A, before, p, ev, h)
+      // (only when the handler mentions membership nowhere anymore: one that still calls isMember, or looks the member row up itself
+      // inside a transaction, is quiet, even if plain can't vouch for it)
+      // (nor when it hands the room to a function of the app, `sendMessage(io, { roomId, ... })` or `if (!isInRoom(roomId, ...))`: the
+      // check may live there. Arguments are read ahead so a call inside an if's condition is seen; a room-name helper inside
+      // `.rooms.has(...)` or `.to(...)` isn't a check)
+      const handsRoom = [...g.printed.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\((?=([^()]*(?:\([^()]*\)[^()]*)*)\))/g)].some(x => !/^(?:if|for|while|switch|catch|return|typeof|String|Number|Boolean|ack|next)$/.test(x[1])
+        && /\broom\w*/i.test(x[2]) && !/\.(?:rooms\.has|to|in|join|leave)\s*\(\s*$/.test(g.printed.slice(0, x.index)))
+      // (checking the rooms the socket joined, `socket.rooms.has(...)`, is a weaker check: membership is read once, when joining)
+      if (ra && !rb && !/member/i.test(g.printed) && !handsRoom) (/\.rooms\.has\s*\(/.test(g.printed) ? weaker : gone).push(ev)
+      const bits = [vb && vb !== va ? `now ${vb}` : '', rb && !ra ? 'now lets only room members in ✓' : ''].filter(Boolean)
+      return `"${ev}"${bits.length ? ` (${list(bits)})` : ''}` })
+    const evs_ = (xs: string[]) => `${list(xs.map(e => `"${e}"`))} ${xs.length > 1 ? 'events' : 'event'}`
+    if (weaker.length) problems.push({ kind: 'Check', text: `The ${evs_(weaker)} no longer ${weaker.length > 1 ? 'check' : 'checks'} room membership each time: ${weaker.length > 1 ? 'they trust' : 'it trusts'} the room the person joined. Someone removed from a room (or banned) can keep using ${weaker.length > 1 ? 'them' : 'it'} there until they reconnect. Make sure that's acceptable.` })
+    if (gone.length) problems.push({ kind: 'Check', text: `plain can't see the room check on the ${evs_(gone)} anymore. If it's really gone, anyone logged in can use ${gone.length > 1 ? 'them' : 'it'} in any room, not just rooms they're in. Make sure only room members still can.` })
+    changes.push({ group: 'Server', text: `${cap(list(said))} on your live connection changed${said.some(x => x.includes('(')) ? '' : ` in ${said.length > 1 ? 'ways' : 'a way'} plain can't describe yet. Ask the agent what ${said.length > 1 ? 'they do' : 'it does'} differently`}.`, detail: p })
+  }
   // (gone for real: no guard plain reads anywhere, and no io.use left at all: a moved, renamed or rewritten one isn't gone)
   const anyUse = [...B.files.values()].some(f => f.socketAuth || f.socketGuardish)
   for (const p of real) { const a = A.files.get(p), b = B.files.get(p)
