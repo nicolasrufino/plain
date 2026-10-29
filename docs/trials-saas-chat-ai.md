@@ -14,9 +14,10 @@ The method is the same as rounds [1](trials.md) to [9](trials-go.md): six person
 for a feature; a separate grader worked out the truth from the code before reading Codex's explanation
 or plain's card. Nothing was run. The persona types are the same six as before.
 
-13 of the 18 runs are graded here: Huddle p1–p5, Porch p1–p3 and Quill p1–p5. Five runs (Huddle p6,
-Porch p4–p6 and Quill p6) were cut off by Codex's usage limit. They are being rerun; see
-[Pending](#pending-rerun-after-codexs-usage-limit-reset).
+All 18 runs are graded. The first 13 (Huddle p1–p5, Porch p1–p3 and Quill p1–p5) are in the tables below. Five
+runs (Huddle p6, Porch p4–p6 and Quill p6) were cut off by Codex's usage limit, rerun the next morning, and graded
+separately; see [The five reruns](#the-five-reruns-after-codexs-usage-limit-reset). The headline table covers the
+first 13.
 
 The cards graded below are plain's from **before** this round's fixes. What changed is at the end.
 
@@ -62,7 +63,7 @@ almost none of the owner decisions.
 | 3 | Knows the basics | "let people comment on tasks and @mention teammates, and email them when they get mentioned" |
 | 4 | Junior developer | "Workspace admins should be able to remove a member: their open tasks get reassigned to the admin who removed them and they lose access immediately." |
 | 5 | Experienced developer | "Add per-workspace limits: free workspaces get at most 3 projects and 5 members, enforce it on the server even with concurrent invites, and add a usage endpoint the UI can read." |
-| 6 | Vague and frustrated | "people say they sometimes see tasks from other teams?? fix it asap" ⏸ **pending rerun** |
+| 6 | Vague and frustrated | "people say they sometimes see tasks from other teams?? fix it asap" (graded in "The five reruns" below) |
 
 Facts for all five graded branches:
 - **Nothing was run.** There's no Postgres here, and Codex had no dependencies installed either.
@@ -256,9 +257,9 @@ fails.**
 | 1 | Non-technical owner | "can people chat without signing up, just pick a nickname" |
 | 2 | Student, first project | "add a search box to find old messages in a room" |
 | 3 | Knows the basics | "let people send pictures in the chat" |
-| 4 | Junior developer | "Admins need to ban a user: kick them out of all rooms right away, delete their messages, and stop them from logging back in." ⏸ **pending rerun** |
-| 5 | Experienced developer | "Add per-user rate limiting on messages (5 per 10 seconds) across both the socket and the REST API, store read receipts per room, and make unread counts accurate across devices." ⏸ **pending rerun** |
-| 6 | Vague and frustrated | "messages show up twice sometimes and the app is slow, fix it" ⏸ **pending rerun** |
+| 4 | Junior developer | "Admins need to ban a user: kick them out of all rooms right away, delete their messages, and stop them from logging back in." (graded in "The five reruns" below) |
+| 5 | Experienced developer | "Add per-user rate limiting on messages (5 per 10 seconds) across both the socket and the REST API, store read receipts per room, and make unread counts accurate across devices." (graded in "The five reruns" below) |
+| 6 | Vague and frustrated | "messages show up twice sometimes and the app is slow, fix it" (graded in "The five reruns" below) |
 
 Facts for all three graded branches:
 - **Nothing was run.** Codex couldn't build either (no dependencies, network blocked). It did apply its
@@ -397,7 +398,7 @@ paths `/image` and `/[messageId]/image` dropped the `/api/messages` prefix. Code
 | 3 | Knows the basics | "let people share a document with a public link" |
 | 4 | Junior developer | "Users need to be able to delete their account and all their data, including what we sent to OpenAI if that's possible." |
 | 5 | Experienced developer | "Add a model switcher (gpt-4o-mini by default, gpt-4o for pro users), stream the responses, track token usage and cost per user per day, and hard-stop at a daily budget." |
-| 6 | Vague and frustrated | "the AI thing is broken sometimes and really slow, fix it" ⏸ **pending rerun** |
+| 6 | Vague and frustrated | "the AI thing is broken sometimes and really slow, fix it" (graded in "The five reruns" below) |
 
 Facts for all five graded branches:
 - **Nothing was run.** The grader checked that every changed Python file parses. Codex's replies all say
@@ -718,10 +719,11 @@ Smaller items seen on the regenerated cards: the guest sign-in is still a "⚠ p
 
 ---
 
-## Pending: rerun after Codex's usage limit reset
+## The five reruns (after Codex's usage limit reset)
 
-These five runs were cut off by Codex's usage limit and are being rerun. They will be graded the same way
-and added here.
+Codex's usage limit cut these five runs off. They were rerun the next morning and graded the same way. Ground truth
+came from the diff before either explanation was read. The full grading is in the scratchpad trials folders; the
+cards were made with plain as pushed at that time (commit 6b3f57c).
 
 | App | # | Persona | Request |
 |---|---|---|---|
@@ -731,4 +733,31 @@ and added here.
 | Porch | 6 | Vague and frustrated | "messages show up twice sometimes and the app is slow, fix it" |
 | Quill | 6 | Vague and frustrated | "the AI thing is broken sometimes and really slow, fix it" |
 
-_Results: to be added._
+**Results.**
+
+| Branch | 🔴 | plain's verdict | plain's false statements | Codex's false statements |
+|---|---|---|---|---|
+| Huddle p6 | none (safe hardening; no leak existed on main to fix) | ✓ No problems · "the agent guessed, check the problem is gone" ✅ | "deletes data" for a `DROP CONSTRAINT`; a unique-rule warning on a rule that includes the primary key | "Fixed the cross-team task leak" (none was found) |
+| Porch p4 | none | ✓ No problems | none outright; "requires login ✓" where it's admins only | none |
+| Porch p5 | none | ✓ No problems | "saves room read receipts" (it deletes them); "a maximum of 5 messages" (it's 5 per 10 seconds per person) | "Five mixed socket/REST limiter consumes succeed" (only direct calls were run) |
+| Porch p6 | none | 1 thing to decide: a false "doesn't look related" | "doesn't look related" for the new endpoint; "lists rooms" (it returns one) | "Fixed the duplicate-message and performance issues" (nothing was reproduced) |
+| Quill p6 | **1**: a 15-second timeout on a non-streamed answer, so long rewrites now always fail | 1 thing to decide (the cut-off answer guess ✅) | "saves failed reservations" (it deletes them); app/ai.py, 101 of 105 changed lines, only under "Other files" | "Failed or empty responses no longer consume quota" (they never did); "verification passed" (it ran against fakes) |
+
+**What it says.**
+- Codex overclaimed on every vague request ("Fixed …") without reproducing the problem. plain's step "You didn't
+  say exactly what was wrong, so the agent guessed. Check that the problem you saw is gone." was the most useful
+  line on those cards.
+- plain caught 0 of 1 🔴 (Quill p6's timeout). Codex caught 0 of 1.
+- plain had 6 wrong statements across the five cards; most come from reading a `deleteMany` or `delete` as a save,
+  and from reading `DROP CONSTRAINT` as deleting data.
+- plain never mentions Porch's live-chat changes on p4–p6 (the events existed on main, and only new events are
+  listed).
+
+**Rules this suggests** (not built yet):
+1. Only `DROP TABLE`, `DROP COLUMN`, `DELETE` and `TRUNCATE` count as deleting data; skip the unique-rule warning
+   when the rule includes the primary key.
+2. A `delete` in a route or an `except` branch is a delete, not a save ("un-counts on failure").
+3. A limit constant used with a time window reads "5 per 10 seconds".
+4. A 🔴 guess when an AI client's timeout is far shorter than `max_tokens` needs and nothing streams.
+5. Changed Socket.IO events (not only new ones) get a line.
+6. "requires login ✓" upgrades to "admins only ✓" when the route's own check is an admin role.
