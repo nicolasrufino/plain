@@ -26,8 +26,8 @@ Most of it is in [src/plain.ts](../src/plain.ts). Per language or format:
 - [src/supabase.ts](../src/supabase.ts): SQL migrations with the real Postgres parser.
 - [src/sfc.ts](../src/sfc.ts): `.vue` and `.svelte` files turned into TSX, and Nuxt / SvelteKit
   file routes.
-- [src/csharp.ts](../src/csharp.ts), [src/java.ts](../src/java.ts), [src/php.ts](../src/php.ts): ASP.NET Core,
-  Spring Boot and Laravel files with tree-sitter (who each address lets in is then worked out in
+- [src/csharp.ts](../src/csharp.ts), [src/java.ts](../src/java.ts), [src/php.ts](../src/php.ts), [src/rb.ts](../src/rb.ts): ASP.NET Core,
+  Spring Boot, Laravel and Rails files with tree-sitter (who each address lets in is then worked out in
   `appFacts`, across files). [src/treesitter.ts](../src/treesitter.ts) loads the grammars from `vendor/`.
 
 [src/session.ts](../src/session.ts) adds the per-prompt snapshots and `plain recap`;

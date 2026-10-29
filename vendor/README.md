@@ -9,3 +9,5 @@ Vendored files
 - tree-sitter-java.wasm: from the npm package tree-sitter-java@0.23.5 (MIT, see tree-sitter-java.LICENSE). Same setup.
 - tree-sitter-php_only.wasm: from the npm package tree-sitter-php@0.24.2 (MIT, see tree-sitter-php.LICENSE). The package's
   pure-PHP grammar (php_only), for routes, controllers, models, migrations and config; Blade templates aren't read. Same setup.
+- tree-sitter-ruby.wasm: from the npm package tree-sitter-ruby@0.23.1 (MIT, see tree-sitter-ruby.LICENSE), for Rails routes,
+  controllers, models and migrations; ERB views aren't read. Same setup.

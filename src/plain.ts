@@ -14,6 +14,7 @@ import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
 import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
 import { javaFacts, type JavaFacts, type Family } from './java.ts'
 import { STRIPE_EVENTS } from './stripe-events.ts'
+import { rbFacts, rbModelOf, controllerClass, LAMBDA_LOGIN, type RbFacts, type RbRoute, type Cb } from './rb.ts'
 import { phpFacts, modelOf, type PhpFacts, type SchemaOp, type Mw } from './php.ts'
 import { csFacts, mergeAuth, join as csJoin, under, csPath, type CsFacts, type CsClass, type CsRoute, type ExtCall, type Auth } from './csharp.ts'
 
@@ -53,7 +54,7 @@ const HOSTS: Record<string, string> = {
 const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
-const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java)$|(?<!\.blade)\.php$/   // (Blade templates aren't read)
+const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java|rb)$|(?<!\.blade)\.php$/   // (Blade and ERB templates aren't read)
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
 
@@ -649,10 +650,10 @@ const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.
 
 export function appFacts(snap: Snap) {
   const files = new Map<string, FileFacts>()
-  for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/') && !/(^|\/)(vendor|storage|bootstrap\/cache)\//.test(p)) {
+  for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/') && !/(^|\/)(vendor|storage|bootstrap\/cache|tmp|log)\//.test(p)) {
     // (EF migrations and their snapshots are read as migrations, not as code)
     if (/(^|\/)Migrations\/[^/]+\.cs$/.test(p)) continue
-    try { const f = p.endsWith('.php') ? phpFacts(p, t, empty) : p.endsWith('.java') ? javaFacts(p, t, empty) : p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
+    try { const f = p.endsWith('.rb') ? rbFacts(p, t, empty) : p.endsWith('.php') ? phpFacts(p, t, empty) : p.endsWith('.java') ? javaFacts(p, t, empty) : p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
   }
   // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
   const resolve = (from: string, spec: string): string | undefined => {
@@ -689,6 +690,8 @@ export function appFacts(snap: Snap) {
     // Java: pom.xml <artifactId> (with <version>), build.gradle implementation 'group:artifact:version'
     ...[...snap].filter(([p]) => /(^|\/)pom\.xml$/.test(p)).map(([, t]) => Object.fromEntries([...t.replace(/<parent>[\s\S]*?<\/parent>|<plugins>[\s\S]*?<\/plugins>/g, '').matchAll(/<dependency>[\s\S]*?<artifactId>([^<]+)<\/artifactId>(?:[\s\S]*?<version>([^<]+)<\/version>)?[\s\S]*?<\/dependency>/g)].map(m => [m[1], m[2] ?? '*']))),
     ...[...snap].filter(([p]) => /(^|\/)build\.gradle(\.kts)?$/.test(p)).map(([, t]) => Object.fromEntries([...t.matchAll(/(?:implementation|api|runtimeOnly|compileOnly)\s*\(?\s*['"]([\w.-]+):([\w.-]+)(?::([\w.-]+))?['"]/g)].map(m => [m[2], m[3] ?? '*']))),
+    // Ruby: Gemfile `gem "stripe", "~> 13.0"`
+    ...[...snap].filter(([p]) => /(^|\/)Gemfile$/.test(p)).map(([, t]) => Object.fromEntries([...t.matchAll(/^\s*gem\s+["']([\w-]+)["'](?:\s*,\s*["']([^"']+)["'])?/gm)].map(m => [m[1], m[2] ?? '*']))),
     // PHP: composer.json require / require-dev
     ...[...snap].filter(([p]) => /(^|\/)composer\.json$/.test(p) && !/(^|\/)vendor\//.test(p)).map(([, t]) => { try { const j = JSON.parse(t); return Object.fromEntries(Object.entries({ ...j.require, ...j['require-dev'] }).filter(([k]) => k.includes('/'))) } catch { return {} } }),   // (not php, ext-*)
     // .NET: <PackageReference Include="Stripe.net" Version="47.0.0" />
@@ -723,6 +726,7 @@ export function appFacts(snap: Snap) {
   const csModels = new Map<string, string[]>()   // Entity Framework entities (filled in below)
   const javaModels = new Map<string, string[]>()   // JPA @Entity classes
   const phpModels = new Map<string, string[]>()    // Laravel: the tables its migrations build
+  const rbModels = new Map<string, string[]>()     // Rails: the same
   const svelteUrls = new Map<string, string>()   // SvelteKit pages: their <form method="POST"> sends to this address
   // Where a hook's or middleware's login check applies: each checking `if` covers what its path tests allow, and an earlier
   // `if (<path test>) return ...` lets those addresses through unchecked. Tests: startsWith, ===, !==, ['/a', '/b'].includes(path),
@@ -1147,6 +1151,120 @@ export function appFacts(snap: Snap) {
     const unguardAll = phpFiles.some(([, x]) => x.risks.has('unguard'))
     for (const [, x] of phpFiles) for (const r of x.risks) if (r.startsWith('all:') && (unguardAll || [...classes].some(([q, c]) => c.model && c.unguarded && bareName(q) === r.slice(4)))) x.risks.add('mass')
   }
+  // Rails: config/routes.rb in order (the first definition of a method and address wins; drawn files at their place), each route's
+  // controller action and the before_actions it runs (see src/rb.ts), what it does (following calls into other classes), the tables
+  // the migrations build. Test code (test/, spec/) is left out.
+  for (const [p, f] of files) if (p.endsWith('.rb') && /(^|\/)(test|spec)\//.test(p)) { f.env.clear(); f.envReq.clear() }
+  const rbFiles = [...files].filter(([p]) => p.endsWith('.rb') && !/(^|\/)(test|spec)\//.test(p)).map(([p, f]) => [p, (f as RbFacts).rb] as const)
+  if (rbFiles.some(([p]) => /(^|\/)config\/routes\.rb$/.test(p))) {
+    const byPath = new Map(rbFiles)
+    const classes = new Map(rbFiles.flatMap(([p, x]) => [...x.classes].map(([k, v]) => [k, { p, ...v }] as const)))
+    const methods = new Map(rbFiles.flatMap(([, x]) => [...x.methods]))
+    const devise = 'devise' in deps_, deviseScopes = new Set(rbFiles.flatMap(([, x]) => x.devise).map(s => s.replace(/s$/, '')))
+    const apiOnly = [...snap].some(([p, t]) => /(^|\/)config\/application\.rb$/.test(p) && /^\s*config\.api_only\s*=\s*true/m.test(t))
+    // a class name as Ruby finds it from inside `ns` (Admin::BaseController, or BaseController from inside module Admin)
+    const find = (name: string | undefined, ns = ''): string | undefined => { if (!name) return undefined; const parts = ns.split('::').filter(Boolean)
+      for (let i = parts.length; i >= 0; i--) { const k = [...parts.slice(0, i), name.replace(/^::/, '')].join('::'); if (classes.has(k)) return k } return undefined }
+    const chainOf = (c: string | undefined, seen = new Set<string>()): string[] => !c || seen.has(c) ? [] : [c, ...chainOf(find(classes.get(c)!.base, classes.get(c)!.outer), seen.add(c))]
+    const incOf = (c: string, inc: string) => find(inc, classes.get(c)!.outer) ?? find(inc, c)
+    const models = new Set([...classes].filter(([, c]) => c.model).map(([k]) => k.split('::').pop()!))
+    // the routes, in order; drawn files where `draw` is
+    const found = new Map<string, { r: RbRoute; p: string }>()
+    const visit = (file: string, ctx: { path: string; module: string; guard?: 'login' | 'unknown' }, seen: Set<string>) => {
+      const x = byPath.get(file); if (!x || seen.has(file)) return
+      for (const item of [...x.routes, ...x.draws].sort((a, b) => a.at - b.at)) {
+        if ('file' in item) { visit(item.file, { path: ctx.path + item.path, module: ctx.module + item.module, guard: item.guard ?? ctx.guard }, new Set([...seen, file])); continue }
+        if (item.htmlOnly && apiOnly) continue
+        const path = (ctx.path + item.path).replace(/\/+/g, '/').replace(/(.)\/$/, '$1') || '/', key = `${item.method} ${path}`
+        if (!found.has(key) || found.get(key)!.r.fallthrough && !item.fallthrough) found.set(key, { r: { ...item, path, controller: ctx.module + item.controller, guard: item.guard ?? ctx.guard }, p: file })   // the first one wins (for guests, the first that's always there)
+      }
+    }
+    for (const [p] of rbFiles) if (/(^|\/)config\/routes\.rb$/.test(p)) visit(p, { path: '', module: '' }, new Set())
+    // the before_actions that run for an action: parents' first, each class's concerns, then its own lines; the same name declared
+    // again replaces it; skip_before_action removes it (only:/except: for some actions; with if:/unless: plain can't tell)
+    const applies = (c: { only?: string[]; except?: string[] }, fn: string) => (!c.only || c.only.includes(fn)) && !c.except?.includes(fn)
+    const callbacks = (chain: string[], fn: string) => {
+      const on = new Map<string, Cb | 'unknown'>()
+      const apply = (cb: Cb) => {
+        if (cb.kind === 'before') { if (cb.name === '?' || cb.name.startsWith('@')) on.set(`${cb.name}${on.size}`, cb); else on.set(cb.name, cb); return }
+        if (!on.has(cb.name)) return
+        if (cb.cond) { const was = on.get(cb.name)!; if (cb.only?.includes(fn)) on.delete(cb.name); else on.set(cb.name, was === 'unknown' ? was : { ...was, cond: true }); return }   // (skipped on only: always; elsewhere whenever the condition holds)
+        if (applies(cb, fn)) on.delete(cb.name)
+      }
+      const run = (c: string, seen: Set<string>) => { for (const cb of classes.get(c)!.cbs) if (cb.kind === 'include') { const m = incOf(c, cb.name); if (m && !seen.has(m)) run(m, new Set([...seen, m])) } else apply(cb) }
+      for (const c of [...chain].reverse()) run(c, new Set([c]))
+      return [...on.values()].filter(v => v === 'unknown' || applies(v, fn))
+    }
+    const methodOf = (chain: string[], name: string, seen = new Set<string>()): (FileFacts & { halts?: string; check?: string }) | undefined => { for (const c of chain) { const m = methods.get(`${c}.${name}`); if (m) return m
+      for (const inc of classes.get(c)!.includes) { const k = incOf(c, inc); if (k && !seen.has(k)) { const mm = methodOf([k], name, new Set([...seen, k])); if (mm) return mm } } } }
+    const byName = (name: string, chain: string[], depth = 0): 'login' | 'unknown' | 'none' => {
+      const m = methodOf(chain, name)
+      if (m) { if (m.halts === 'login') return 'login'
+        // def require_user; authenticate_user!; end: what it calls decides
+        const tops = ((m as { tops?: string[] }).tops ?? []).filter(n => n !== name)
+        const calls = [...m.used].filter(u => u.startsWith('rcall:')).map(u => u.slice(u.lastIndexOf('.') + 1)).filter(n => n !== name && (methodOf(chain, n) || /^authenticate_\w+!$/.test(n)))
+        const top = depth < 3 ? tops.filter(n => methodOf(chain, n) || /^authenticate_\w+!$/.test(n)).map(n => byName(n, chain, depth + 1)) : []
+        const nested = depth < 3 ? calls.filter(n => !tops.includes(n)).map(n => byName(n, chain, depth + 1)) : []
+        // (a login call that only sometimes runs, `authenticate_user! unless request.get?`, isn't one)
+        return top.includes('login') && m.halts === 'none' ? 'login' : m.halts === 'unknown' || [...top, ...nested].some(k => k !== 'none') ? 'unknown' : (m.halts as 'none') ?? 'none' }
+      const scope = name.match(/^authenticate_(\w+)!$/)?.[1]
+      if (scope) return devise && deviseScopes.has(scope) ? 'login' : 'unknown'   // Devise defines authenticate_<scope>! for each devise_for
+      return /auth|login|sign|session|token|require|ensure|verify|admin|guard|protect|restrict|permi|access/i.test(name) ? 'unknown' : 'none'   // a gem's callback plain can't see
+    }
+    const kind = (cb: Cb | 'unknown', chain: string[]): 'login' | 'unknown' | 'none' => {
+      if (cb === 'unknown' || cb.name === '@policy') return 'unknown'
+      const k = cb.name === '?' ? (LAMBDA_LOGIN(cb.body ?? '') ? 'login' : 'unknown') : cb.name === '@basic' ? 'login' : byName(cb.name, chain)
+      return cb.cond && k !== 'none' ? 'unknown' : k   // only when (if:/unless:) it runs: a login check it may skip; anything else stays nothing
+    }
+    // what an address does includes what it calls: OrderCanceller.new(order).call, PricingService.quote, its own methods
+    const follow = (g: FileFacts, into: FileFacts, self: string, seen: Set<string>, depth = 0) => {
+      for (const u of g.used) if (u.startsWith('rcall:') && !seen.has(u) && depth < 6) {
+        seen.add(u)
+        const t = u.slice(6, u.lastIndexOf('.')), m = u.slice(u.lastIndexOf('.') + 1), k = find(t, self.split('::').slice(0, -1).join('::')) ?? find(t)
+        const callee = k ? methodOf(chainOf(k), m) : undefined
+        if (!callee) continue
+        for (const key of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'refuses', 'used'] as const) for (const x of callee[key]) into[key].add(x)
+        into.money ||= callee.money; into.writes ||= callee.writes; into.printed += '\n' + callee.printed
+        follow(callee, into, k!, seen, depth + 1)
+      }
+    }
+    const finish = (g: FileFacts) => {
+      for (const k of ['tables', 'written'] as const) for (const t of [...g[k]]) if (t.startsWith('@')) { g[k].delete(t)
+        const m = t.startsWith('@m:') ? t.slice(3) : rbModelOf(t.slice(5)); if (models.has(m)) g[k].add(m) }
+      g.writes = g.written.size > 0; if (!g.writes) g.ops.clear()
+      return g
+    }
+    for (const [key, { r, p }] of found) {
+      const cls = find(controllerClass(r.controller)), chain = chainOf(cls), fn = r.action
+      // an action with no method and no view template doesn't exist (404): resources make addresses the controller may not have
+      // (only when every parent is known: a gem's controller, like Administrate's, has actions plain can't see)
+      const rootBase = cls ? classes.get(chain.at(-1)!)!.base : undefined
+      if (cls && /^(::)?ActionController::(Base|API)$/.test(rootBase ?? '') && !methodOf(chain, fn) && ![...snap.keys()].some(v => v.includes(`app/views/${r.controller}/${fn}.`))) continue
+      const h = cls ? methodOf(chain, fn) : undefined
+      const facts = Object.assign(empty(), h, { tables: new Set(h?.tables), written: new Set(h?.written), ops: new Set(h?.ops), env: new Set(h?.env), envReq: new Set(h?.envReq), services: new Set(h?.services), outside: new Set(h?.outside), used: new Set(h?.used), refuses: new Set(h?.refuses) })
+      const cbs = cls ? callbacks(chain, fn) : []
+      // the before_actions' own reads and writes (set_order loads the order) belong to the action too (not a login check's own lookups)
+      for (const cb of cbs) if (cb !== 'unknown' && !cb.name.startsWith('@') && cb.name !== '?' && kind(cb, chain) === 'none') { const m = methodOf(chain, cb.name); if (m) follow({ ...empty(), used: new Set([`rcall:${cls}.${cb.name}`]) }, facts, cls!, new Set()) }
+      if (h && cls) follow(h, facts, cls, new Set())
+      finish(facts)
+      const kinds = [...cbs.map(cb => kind(cb, chain)), h?.check ?? 'none', r.guard ?? 'none', cls ? 'none' : 'unknown']
+      const guard = kinds.includes('login')
+      const m = r.method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : r.method
+      files.get(cls ? classes.get(cls)!.p : p)!.handlers.push({ server: '', method: m, path: key.slice(key.indexOf(' ') + 1), guard, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
+    }
+    // the tables, as the migrations build them (in file-name order)
+    const tableClass = new Map([...classes].filter(([, c]) => c.model && c.table).map(([k, c]) => [c.table!, k.split('::').pop()!]))
+    const tables = new Map<string, string[]>()
+    for (const [, x] of [...rbFiles.filter(([p]) => /(^|\/)db\/schema\.rb$/.test(p)), ...rbFiles.filter(([p]) => /(^|\/)db\/migrate\//.test(p)).sort(([a], [b]) => a.split('/').pop()!.localeCompare(b.split('/').pop()!))])
+      for (const s of x.schema) {
+        if (s.op === 'drop') tables.delete(s.table)
+        else if (s.op === 'rename' && s.to) { const t = tables.get(s.table); tables.delete(s.table); if (t) tables.set(s.to, t) }
+        else if (s.table && (s.op === 'create' || tables.has(s.table))) { const t = s.op === 'create' ? [] : tables.get(s.table)!
+          tables.set(s.table, [...t.filter(c => !s.drop.includes(c)).map(c => s.renames.find(([a]) => a === c)?.[1] ?? c), ...s.add.filter(c => !t.includes(c))]) }
+      }
+    for (const [t, cols] of tables) rbModels.set(tableClass.get(t) ?? rbModelOf(t), cols)
+    for (const [p] of rbFiles) { const f = files.get(p)!; if (/(^|\/)(db\/|config\/(?!initializers\/|environments\/production\.rb))/.test(p)) { f.env.clear(); f.envReq.clear() } finish(f) }   // (initializers and production.rb run at boot: their settings count)
+  }
   // form actions outside SvelteKit aren't routes
   for (const f of files.values()) f.handlers = f.handlers.filter(h => h.server !== '@actions')
   // TanStack server actions: calling one (createBooking({ data }), useServerFn(createBooking)) talks to the server.
@@ -1376,10 +1494,12 @@ export function appFacts(snap: Snap) {
   for (const [m, fs] of csModels) all.set(m, fs)
   for (const [m, fs] of javaModels) all.set(m, fs)
   for (const [m, fs] of phpModels) all.set(m, fs)
+  for (const [m, fs] of rbModels) all.set(m, fs)
   const pyModels = new Set<string>()
   for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()),
+    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()), rbModels: new Set(rbModels.keys()),
+    rbMigrations: [...snap.keys()].filter(p => /(^|\/)db\/migrate\/[^/]+\.rb$/.test(p)),
     phpMigrations: [...snap.keys()].filter(p => /(^|\/)database\/migrations\/[^/]+\.php$/.test(p)),
     // Flyway: src/main/resources/db/migration/V2__add_coupons.sql
     flyway: [...snap.keys()].filter(p => /(^|\/)db\/migration\/V[\d_.]+__[\w-]+\.sql$/.test(p)),
@@ -1464,8 +1584,9 @@ export type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: s
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
 // Addresses that have to work before you're logged in (or are called by other services): never "missing a login check".
 // Webhooks and sign-in callbacks anywhere in the address; login pages only as the last part, and never under admin.
-const PUBLIC = /^(login|log in|register|signup|sign up|signin|sign in|logout|log out|signout|sign out|forgot password|reset password|verify|verify email|health|token|access token|refresh|refresh token)$/   // token: OAuth2 password login
-const isPublic = (url: string) => !/admin/i.test(url) && (named(url).some(s => /\b(webhooks?|callback|oauth)\b/.test(s)) || PUBLIC.test(named(url).at(-1) ?? ''))
+const PUBLIC = /^(login|log in|register|registration|signup|sign up|signin|sign in|logout|log out|signout|sign out|forgot password|reset password|verify|verify email|health|token|access token|refresh|refresh token)$/   // token: OAuth2 password login
+const isPublic = (url: string) => url === '/session' || /^\/passwords(\/|$)/.test(url) || !/admin/i.test(url) && (   // /session: Rails 8's login (resource :session)
+  named(url).some(s => /\b(webhooks?|callback|oauth)\b/.test(s)) || PUBLIC.test(named(url).at(-1) ?? ''))
 
 export type Analysis = ReturnType<typeof analyze>
 type Opts = { ref: string; asked?: string; color?: boolean; agentSaid?: string }   // agentSaid: the agent's last message, if known
@@ -1644,8 +1765,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   }
 
   // database
-  // Laravel renames (Schema::rename, renameColumn) keep the data: say renamed, not deleted
-  const renameOps = B.phpMigrations.filter(m => !A.phpMigrations.includes(m)).flatMap(m => (B.files.get(m) as PhpFacts | undefined)?.php.schema ?? [])
+  // Laravel and Rails renames (Schema::rename / renameColumn, rename_table / rename_column) keep the data: say renamed, not deleted
+  const renameOps = [...B.phpMigrations.filter(m => !A.phpMigrations.includes(m)).flatMap(m => (B.files.get(m) as PhpFacts | undefined)?.php.schema ?? []),
+    ...B.rbMigrations.filter(m => !A.rbMigrations.includes(m)).flatMap(m => (B.files.get(m) as RbFacts | undefined)?.rb.schema ?? [])]
   const renamedTo = new Map(renameOps.filter(x => x.op === 'rename' && x.to).map(x => [modelOf(x.table), modelOf(x.to!)]))
   const colRenamed = new Map(renameOps.flatMap(x => x.renames.map(([a, b]) => [`${modelOf(x.table)}.${a}`, b] as const)))
   for (const [from, to] of renamedTo) if (A.models.has(from) && B.models.has(to)) {
@@ -1658,7 +1780,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const l = links(fields)
       const one = l.filter(x => !x.endsWith('[]')).map(x => an(words(x))), many = l.filter(x => x.endsWith('[]')).map(x => things(x.slice(0, -2)))
       const rels = [one.length ? `belongs to ${list(one)}` : '', many.length ? `can have many ${list(many)}` : ''].filter(Boolean)
-      changes.push({ group: 'Database', isNew: true, name: things(m), text: `Your database now stores ${things(m)}: ${fieldList(fields)}.${rels.length ? ` Each one ${list(rels)}.` : ''}${ownOnly(B.db, m) && !findings(B.db, new Set(), things).some(x => new RegExp(`\\b${things(m)}\\b`).test(x.text)) ? ' Each person can only see their own ✓' : ''}` })
+      changes.push({ group: 'Database', isNew: true, name: things(m), text: `Your database now stores ${things(m)}${fieldList(fields) ? `: ${fieldList(fields)}` : ''}.${rels.length ? ` Each one ${list(rels)}.` : ''}${ownOnly(B.db, m) && !findings(B.db, new Set(), things).some(x => new RegExp(`\\b${things(m)}\\b`).test(x.text)) ? ' Each person can only see their own ✓' : ''}` })
       continue
     }
     const moved = old.filter(x => !fields.includes(x) && fields.includes(colRenamed.get(`${m}.${x}`) ?? ''))
@@ -1820,6 +1942,47 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const secret = (t = '') => t.match(/['"](sk_live_\w{8,}|sk_test_\w{8,}|rk_live_\w{8,}|whsec_\w{8,}|re_\w{16,}|SG\.[\w-]{16,}\.[\w-]{16,}|sk-proj-[\w-]{16,}|sk-ant-[\w-]{16,}|base64:[A-Za-z0-9+/]{40,}={0,2})['"]/)?.[1]
     if (secret(after.get(p)) && !secret(before.get(p))) problems.push({ kind: 'Unsafe', text: `A secret key is written in ${p}. Anyone who can see the code can use it. Put it in .env and read it with env() in a config file.` })
   }
+  // Rails: new migrations run with `bin/rails db:migrate`; apps made by `rails new` (7.1+) for Docker / Kamal run it by themselves when
+  // they start (bin/docker-entrypoint runs db:prepare, which applies pending migrations), like a Procfile `release:` line on Heroku
+  const newRb = B.rbMigrations.filter(m => !A.rbMigrations.includes(m)), rbOps = (m: string) => (B.files.get(m) as RbFacts | undefined)?.rb.schema ?? []
+  const rbName = (m: string) => m.split('/').pop()!.replace(/\.rb$/, '')
+  const entry = [...after].some(([p, t]) => /(^|\/)bin\/docker-entrypoint$/.test(p) && /db:(prepare|migrate)/.test(t))
+  const release = [...after].some(([p, t]) => /(^|\/)Procfile$/.test(p) && /^release:.*db:(migrate|prepare)/m.test(t))
+  const paas = [...after].some(([p, t]) => /(^|\/)Procfile$/.test(p) && !/^release:/m.test(t) || /(^|\/)(render\.yaml|app\.json)$/.test(p))
+  const kamal = [...after].some(([p, t]) => /(^|\/)config\/deploy\.yml$/.test(p) && !/192\.168\.0\.1/.test(t.replace(/^\s*#[^\n]*/gm, '')))   // (the template's placeholder, outside its comments)
+  const rbSelf = release || entry && kamal && !paas
+  for (const m of newRb) {
+    const emptied = rbOps(m).filter(x => x.op === 'drop' && rbOps(m).some(y => y.op === 'create' && y.table === x.table) && A.models.has(rbModelOf(x.table))).map(x => things(rbModelOf(x.table)))
+    if (emptied.length) ship.push(`Back up your data first: ${m} deletes all ${list(emptied)} (it drops the table and creates it again, empty).`)
+    else if (rbOps(m).some(x => x.loses && (!x.table || !x.drop.length && x.op === 'table'))) ship.push(`Back up your data first: ${m} deletes or rewrites data, and that can't be undone.`)
+  }
+  const rbSpeed = newRb.filter(m => rbOps(m).length > 0 && rbOps(m).every(x => x.indexOnly)), rbNeeded = newRb.filter(m => !rbSpeed.includes(m))
+  if (newRb.length && rbSelf) ship.push(release
+    ? `${list(newRb.map(rbName))} will change your live database by itself when you deploy (the Procfile's release step runs it). Back up first; if it fails, the deploy stops and the old version keeps running.`
+    : `${list(newRb.map(rbName))} will change your live database by itself the next time the app starts (bin/docker-entrypoint runs db:prepare). Back up first; if it fails, the app won't start.`)
+  else {
+    if (rbNeeded.length) ship.push(`Apply ${list(rbNeeded.map(rbName))} to your live database before the new code goes live (\`bin/rails db:migrate\`), or the parts that use it will fail.${entry && !paas ? " (If you deploy with Docker the way `rails new` sets it up, the app does this by itself when it starts: back up first.)" : ''}`)
+    if (rbSpeed.length) ship.push(`Apply ${list(rbSpeed.map(rbName))} to your live database too (\`bin/rails db:migrate\`). It only changes indexes (they make lookups faster), so nothing breaks if it runs later.`)
+  }
+  for (const p of real) {
+    const x = (B.files.get(p) as RbFacts | undefined)?.rb, was = (A.files.get(p) as RbFacts | undefined)?.rb
+    if (!x || /(^|\/)(test|spec)\//.test(p)) continue
+    for (const r of x.risks) if (!was?.risks.has(r)) {
+      if (r === 'mass') problems.push({ kind: 'Unsafe', text: `Saves whatever the visitor sends (params.permit!, or a field that accepts anything) into the database. A visitor could set fields like admin, price or user_id. List the allowed fields in permit / expect instead. (in ${p})` })
+      else if (r === 'csrfAll') problems.push({ kind: 'Unsafe', text: `Forgery protection is turned off for the whole site. Other sites could send your forms (change settings, place orders) for a logged-in visitor. (in ${p})` })
+      else if (r === 'corsCreds') problems.push({ kind: 'Unsafe', text: `Any website can make requests to your server as a logged-in visitor (CORS lets every site in, with cookies). List your own site's address in origins instead. (in ${p})` })
+      else if (r === 'massField') problems.push({ kind: 'Check', text: `A form here lets the visitor set the role or admin field (permit / expect). Unless only admins use it, anyone could make themselves an admin. (in ${p})` })
+      else if (r === 'basicPassword') problems.push({ kind: 'Unsafe', text: `A password is written in ${p} (http_basic_authenticate_with). Anyone who can see the code can log in. Read it from credentials or an environment variable.` })
+      else if (RISK[r]) problems.push({ ...RISK[r], text: `${RISK[r].text} (in ${p})` })
+    }
+    // forgery protection switched off for actions that aren't payment or webhook callbacks
+    for (const [c, k] of x.classes) { const before_ = was?.classes.get(c)?.csrfOff ?? []
+      const off = k.csrfOff.filter(a => !before_.includes(a)).filter(a => !/webhook|stripe|hook|callback|ipn|paddle|paypal/i.test(`${c} ${a}`))
+      if (off.length) problems.push({ kind: off.includes('*') ? 'Unsafe' : 'Check', text: `${off.includes('*') ? `Forgery protection is off for all of ${c}` : `${list(off.map(a => `${c}#${a}`))} ${off.length > 1 ? 'are' : 'is'} excluded from forgery protection`}. Other sites could send those forms for a logged-in visitor. (in ${p})` }) }
+  }
+  // the key that unlocks Rails credentials, committed
+  for (const p of real.filter(p => /(^|\/)config\/(master|credentials\/\w+)\.key$/.test(p) && after.has(p) && !before.has(p)))
+    problems.push({ kind: 'Unsafe', text: `${p} is in the code. It unlocks all your Rails credentials (Stripe keys and the rest): anyone who can see the code can read them. Remove it from the repository, add it to .gitignore, and set RAILS_MASTER_KEY on your host instead.` })
   // Drizzle: a changed schema needs a migration (or `drizzle-kit push` for apps that don't keep migration files)
   const newDz = B.dzMigrations.filter(m => !A.dzMigrations.includes(m))
   if ([...B.dzModels, ...A.dzModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newDz.length)
@@ -1937,7 +2100,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
     if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k) || csKeys.has(k)) continue
     ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
-      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java|php)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
+      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java|php|rb)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
   }
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)

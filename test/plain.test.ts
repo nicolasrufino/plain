@@ -1621,3 +1621,168 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   }
   console.log('ok (laravel)')
 }
+
+// Rails (2026-10-28): routes in order, before_actions (replace, skip, concerns), in-action checks, Active Record, migrations, Stripe, mail
+{
+  const R: Record<string, string> = {
+    'Gemfile': 'source "https://rubygems.org"\ngem "rails", "~> 8.1.0"\ngem "devise"\ngem "stripe"\n',
+    'config/application.rb': 'module Shop\n  class Application < Rails::Application\n    config.load_defaults 8.1\n  end\nend\n',
+    'config/routes.rb': 'Rails.application.routes.draw do\n  devise_for :users\n  root "orders#index"\nend\n',
+    'app/controllers/application_controller.rb': 'class ApplicationController < ActionController::Base\nend\n',
+    'app/models/order.rb': 'class Order < ApplicationRecord\n  belongs_to :user\nend\n',
+    'app/models/user.rb': 'class User < ApplicationRecord\n  has_many :orders\nend\n',
+    'db/migrate/20260101000000_create_orders.rb': 'class CreateOrders < ActiveRecord::Migration[8.1]\n  def change\n    create_table :orders do |t|\n      t.references :user, null: false, foreign_key: true\n      t.string :status\n      t.timestamps\n    end\n  end\nend\n',
+  }
+  const orders = (body: string, head = '') => `class OrdersController < ApplicationController\n${head}\n  def index\n    @orders = Order.all\n  end\n\n  def create\n    current_user.orders.create!(order_params)\n    redirect_to orders_path\n  end\n\n  def destroy\n    Order.find(params[:id]).destroy\n    head :no_content\n  end\n${body}\n  private\n\n  def order_params\n    params.expect(order: [:status])\n  end\nend\n`
+  const routes = (r: string) => ({ 'config/routes.rb': `Rails.application.routes.draw do\n  devise_for :users\n${r}\nend\n` })
+  const rs = (extra: Record<string, string>) => card(R, { ...R, 'app/controllers/orders_controller.rb': orders(''), ...extra })
+  const has = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(c.includes(x), `rails: missing "${x}"\n${c}`) }
+  const not = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(!c.includes(x), `rails: unexpected "${x}"\n${c}`) }
+  const appCtl = (body: string) => ({ 'app/controllers/application_controller.rb': `class ApplicationController < ActionController::Base\n${body}\nend\n` })
+  const res = routes('  resources :orders, only: [:index, :create]\n  delete "orders/:id", to: "orders#destroy"')
+
+  // Devise's authenticate_user! in ApplicationController covers every action; skip_before_action opens some
+  let c = rs({ ...res, ...appCtl('  before_action :authenticate_user!') })
+  has(c, 'requires login ✓'); not(c, 'without logging in')
+  c = rs({ ...res, ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('', '  skip_before_action :authenticate_user!, only: [:index]') })
+  has(c, 'lists orders, saves new ones and needs login to change anything ✓ (anyone can view it)')
+  // without the devise gem, authenticate_user! is nobody's: plain claims nothing
+  c = card({ ...R, Gemfile: 'gem "rails"\n' }, { ...R, Gemfile: 'gem "rails"\n', 'app/controllers/orders_controller.rb': orders(''), ...res, ...appCtl('  before_action :authenticate_user!') })
+  not(c, 'requires login ✓', 'without logging in')
+  // declaring it again with only: in a subclass replaces the parent's: the rest is open
+  c = rs({ ...res, ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('', '  before_action :authenticate_user!, only: [:destroy]') })
+  has(c, 'Anyone can')
+  // a skip with if: -> plain can't tell
+  c = rs({ ...res, ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('', '  skip_before_action :authenticate_user!, if: -> { request.format.json? }') })
+  not(c, 'requires login ✓', 'Anyone can')
+  // Rails 8: include Authentication (its require_authentication), allow_unauthenticated_access
+  const auth = { 'app/controllers/concerns/authentication.rb': 'module Authentication\n  extend ActiveSupport::Concern\n\n  included do\n    before_action :require_authentication\n    helper_method :authenticated?\n  end\n\n  private\n    def require_authentication\n      resume_session || request_authentication\n    end\nend\n' }
+  c = card(R, { ...R, ...auth, ...res, ...appCtl('  include Authentication'), 'app/controllers/orders_controller.rb': orders('', '  allow_unauthenticated_access only: %i[index]') })
+  has(c, 'needs login to change anything ✓ (anyone can view it)')
+  // an app before_action that turns guests away; an in-action check counts only when it returns
+  c = rs({ ...res, 'app/controllers/orders_controller.rb': orders('\n  def require_admin\n    redirect_to root_path, alert: "Admins only" unless current_user&.admin?\n  end\n', '  before_action :require_admin') })
+  has(c, 'requires login ✓')
+  const d = (body: string) => rs({ ...routes('  delete "orders/:id", to: "orders#destroy"'), 'app/controllers/orders_controller.rb': orders('').replace('    Order.find(params[:id]).destroy', `${body}\n    Order.find(params[:id]).destroy`) })
+  has(d('    return head :unauthorized unless current_user'), 'deletes orders and requires login ✓')
+  not(d('    head :unauthorized unless current_user'), 'requires login ✓')
+  // Devise's authenticate block around routes
+  has(rs(routes('  authenticate :user do\n    delete "orders/:id", to: "orders#destroy"\n  end')), 'deletes orders and requires login ✓')
+  // routes: the first definition wins; resources only:/member
+  c = rs({ ...routes('  delete "orders/:id", to: "orders#destroy"\n  authenticate :user do\n    delete "orders/:id", to: "orders#destroy"\n  end') })
+  has(c, 'Anyone can')
+  c = rs({ ...routes('  resources :orders, only: [:index] do\n    member { post :refund }\n  end'), 'app/controllers/orders_controller.rb': orders('\n  def refund\n    Stripe::Refund.create(payment_intent: "pi")\n  end\n') })
+  has(c, '/orders/[id]/refund', 'asks Stripe to create a refund'); not(c, '/orders/[id]\n')
+  // migrations: new table, data loss, the step (by itself when bin/docker-entrypoint runs db:prepare), index-only
+  const mig = (body: string, extra: Record<string, string> = {}) => card(R, { ...R, ...extra, 'db/migrate/20261028000000_x.rb': `class X < ActiveRecord::Migration[8.1]\n  def change\n${body}\n  end\nend\n` })
+  c = mig('    create_table :coupons do |t|\n      t.string :code\n      t.integer :percent_off\n    end\n    remove_column :orders, :status, :string')
+  has(c, 'Your database now stores coupons: code and percent off', 'the status on orders will be deleted for good', 'Apply 20261028000000_x to your live database before the new code goes live (`bin/rails db:migrate`)')
+  has(mig('    add_column :orders, :note, :text', { 'config/deploy.yml': 'service: shop\n', 'bin/docker-entrypoint': '#!/bin/bash -e\nif [ "${@: -2:1}" == "./bin/rails" ] && [ "${@: -1:1}" == "server" ]; then\n  ./bin/rails db:prepare\nfi\nexec "${@}"\n' }), 'will change your live database by itself the next time the app starts')
+  has(mig('    add_index :orders, :status'), 'nothing breaks if it runs later')
+  not(mig('    add_index :orders, :status, unique: true'), 'nothing breaks if it runs later')
+  has(mig('    rename_column :orders, :status, :state'), 'The status on orders is renamed to state')
+  // money, email, settings
+  c = rs({ ...res, ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('\n  def pay\n    Stripe.api_key = ENV.fetch("STRIPE_SECRET_KEY")\n    session = Stripe::Checkout::Session.create(mode: "payment", line_items: [])\n    OrderMailer.with(order: @order).paid.deliver_later\n    redirect_to session.url, allow_other_host: true\n  end\n'), ...routes('  post "orders/:id/pay", to: "orders#pay"') })
+  has(c, 'charges customers 💰', 'emails people', 'Add STRIPE_SECRET_KEY to your hosting settings.')
+  has(rs({ ...res, 'app/controllers/orders_controller.rb': orders('\n  def key\n    Rails.application.credentials.dig(:stripe, :secret_key)\n  end\n'), ...routes('  get "key", to: "orders#key"') }), 'Add RAILS_MASTER_KEY to your hosting settings.')
+  // following a service: OrderCanceller.new(order).call
+  c = rs({ ...routes('  post "orders/:id/cancel", to: "orders#cancel"'), ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('\n  def cancel\n    OrderCanceller.new(Order.find(params[:id])).call\n  end\n'),
+    'app/services/order_canceller.rb': 'class OrderCanceller\n  def initialize(order)\n    @order = order\n  end\n\n  def call\n    Order.where(id: @order.id).update_all(status: "cancelled")\n    Stripe::Refund.create(payment_intent: @order.payment_intent)\n  end\nend\n' })
+  has(c, 'updates orders', 'asks Stripe to create a refund', 'requires login ✓')
+  // risks: everything the visitor sends; forgery protection off (not for a webhook); the credentials key committed
+  has(rs({ ...res, 'app/controllers/orders_controller.rb': orders('').replace('params.expect(order: [:status])', 'params.require(:order).permit!') }), 'Saves whatever the visitor sends')
+  c = rs({ ...res, 'app/controllers/orders_controller.rb': orders('', '  skip_forgery_protection only: [:create]') })
+  has(c, 'OrdersController#create is excluded from forgery protection')
+  not(rs({ ...res, 'app/controllers/webhooks_controller.rb': 'class WebhooksController < ApplicationController\n  skip_forgery_protection\n  def stripe\n    Stripe::Webhook.construct_event(request.body.read, request.headers["Stripe-Signature"], ENV.fetch("STRIPE_WEBHOOK_SECRET"))\n  end\nend\n' }), 'forgery protection')
+  has(card(R, { ...R, 'config/master.key': '0123456789abcdef0123456789abcdef' }), 'config/master.key is in the code')
+
+// Review 23 (Rails), each a case that used to be wrong (a real Rails run settled most): routes, callbacks, checks, writes, deploy
+  {
+  const R2: Record<string, string> = { ...R, 'config/routes.rb': 'Rails.application.routes.draw do\n  devise_for :users\nend\n' }
+  const routes = (r: string) => ({ 'config/routes.rb': `Rails.application.routes.draw do\n  devise_for :users\n${r}\nend\n` })
+  const appCtl = (body: string) => ({ 'app/controllers/application_controller.rb': `class ApplicationController < ActionController::Base\n${body}\nend\n` })
+  const E: Record<string, string[]> = {'P1.1': ['Anyone can use the admin orders part'], 'P1.1!': [],'P1.2a': ['Anyone can use the order part'], 'P1.2a!': [],'P1.2b': ['/orders/[id]/refund'], 'P1.2b!': [],'P1.3': [], 'P1.3!': ['requires login ✓'],'P1.4': ['Anyone can use the order part'], 'P1.4!': ['requires login ✓'],'P1.5': [], 'P1.5!': ['requires login ✓'],'P1.6': ['Anyone can use the order cancel part'], 'P1.6!': ['works without logging in'],'P1.7': ['Anyone can use the order part'], 'P1.7!': ['requires login ✓'],'P1.8': [], 'P1.8!': ['requires login ✓'],'P1.9': [], 'P1.9!': ['requires login ✓'],'P1.10': ['Anyone can use the admin order part'], 'P1.10!': ['requires login ✓'],'P1.11': ['Anyone can'], 'P1.11!': [],'P2.1': [], 'P2.1!': ['silently ignored'],'P2.3a': ['requires login ✓'], 'P2.3a!': ['Anyone can'],'P2.3b': [], 'P2.3b!': ['Anyone can'],'P2.4': ['requires login ✓'], 'P2.4!': ['Anyone can'],'P3.1': ['bin/rails db:migrate'], 'P3.1!': ['will change your live database by itself'],'P3.2': ['Add STRIPE_SECRET_KEY to your hosting settings'], 'P3.2!': [],'P3.3': ['all orders will be deleted for good'], 'P3.3!': [],'P4.1': ['requires login ✓'], 'P4.1!': ['Anyone can']}
+  const chk2 = (id: string, before: Record<string, string>, after: Record<string, string>) => { const c = card(before, after)
+    for (const x of E[id] ?? []) assert.ok(c.includes(x), `review 23 ${id}: missing "${x}"\n${c}`)
+    for (const x of E[id + '!'] ?? []) assert.ok(!c.includes(x), `review 23 ${id}: unexpected "${x}"\n${c}`) }
+  const chk = (id: string, extra: Record<string, string>) => chk2(id, R2, { ...R2, ...extra })
+  const O = (head: string, tail = '') => `class OrdersController < ApplicationController\n${head}\n  def index\n    @orders = Order.all\n  end\n  def destroy\n    Order.find(params[:id]).destroy\n    head :no_content\n  end\n${tail}\nend\n`
+const res = routes('  resources :orders, only: [:index, :destroy]'), ctl = (h: string, t = '') => ({ 'app/controllers/orders_controller.rb': O(h, t) })
+const D = 'class OrdersController < ApplicationController\n  def destroy\n    Order.find(params[:id]).destroy\n    head :no_content\n  end\nend\n'
+// P1
+chk('P1.1', { Gemfile: R.Gemfile + 'gem "administrate"\n', ...routes('  namespace :admin do\n    resources :orders\n  end'),
+  'app/controllers/admin/application_controller.rb': 'module Admin\n  class ApplicationController < Administrate::ApplicationController\n    before_action :authenticate_admin\n\n    def authenticate_admin\n      # TODO Add authentication logic here.\n    end\n  end\nend\n',
+  'app/controllers/admin/orders_controller.rb': 'module Admin\n  class OrdersController < Admin::ApplicationController\n  end\nend\n' })
+chk('P1.2a', { ...routes('  defaults format: :json do\n    resources :orders, only: [:destroy]\n  end'), 'app/controllers/orders_controller.rb': D })
+chk('P1.2b', { ...routes('  resources :orders, only: [] do\n    member { post "refund" }\n  end'), 'app/controllers/orders_controller.rb': 'class OrdersController < ApplicationController\n  def refund\n    Order.find(params[:id]).update!(status: "refunded")\n  end\nend\n' })
+chk('P1.3', { ...res, ...ctl('  before_action :redirect_signed_in', '  private\n  def redirect_signed_in\n    redirect_to root_path unless current_user.nil?\n  end') })
+chk('P1.4', { ...res, ...ctl('  before_action :authenticate_api_key!', '  private def authenticate_api_key!\n    @api_key = ApiKey.find_by(token: params[:key])\n  end') })
+chk('P1.5', { ...res, ...ctl(''), ...appCtl('  before_action :staging_auth\n  private\n  def staging_auth\n    authenticate_or_request_with_http_basic { |u, p| p == ENV["STAGING_PASSWORD"] } if Rails.env.staging?\n  end') })
+chk('P1.6', { ...routes('  get "orders/:id/cancel", to: "orders#cancel"'), 'app/models/order.rb': 'class Order < ApplicationRecord\n  def cancel!\n    update!(status: "cancelled")\n  end\nend\n', 'app/controllers/orders_controller.rb': 'class OrdersController < ApplicationController\n  def cancel\n    Order.find(params[:id]).cancel!\n    redirect_to orders_path\n  end\nend\n' })
+chk('P1.7', { ...routes('  authenticated :user do\n    delete "orders/:id", to: "orders#destroy"\n  end\n  delete "orders/:id", to: "orders#destroy"'), 'app/controllers/orders_controller.rb': D })
+chk('P1.8', { ...routes('  delete "orders/:id", to: "orders#destroy"'), 'app/controllers/orders_controller.rb': 'class OrdersController < ApplicationController\n  def destroy\n    Order.find(params[:id]).destroy\n    return head :unauthorized unless current_user\n    head :no_content\n  end\nend\n' })
+chk('P1.9', { ...res, ...appCtl('  before_action :authenticate_user!'), ...ctl('  PUBLIC = %i[index destroy].freeze\n  skip_before_action :authenticate_user!, only: PUBLIC') })
+chk('P1.10', { ...routes('  namespace :admin do\n    resources :orders, only: [:destroy]\n  end'), ...appCtl('  before_action :authenticate_user!'), 'app/controllers/base_controller.rb': 'class BaseController < ActionController::Base\nend\n',
+  'app/controllers/admin/base_controller.rb': 'module Admin\n  class BaseController < ApplicationController\n  end\nend\n', 'app/controllers/admin/orders_controller.rb': 'class Admin::OrdersController < BaseController\n  def destroy\n    Order.find(params[:id]).destroy\n  end\nend\n' })
+chk('P1.11', { ...res, ...appCtl('  before_action :authenticate_user!'), 'app/controllers/concerns/storefront.rb': 'module Storefront\n  extend ActiveSupport::Concern\n  included do\n    skip_before_action :authenticate_user!\n  end\nend\n', ...ctl('  before_action :authenticate_user!, only: [:destroy]\n  include Storefront') })
+// P2
+chk('P2.1', { ...routes('  resources :orders, only: [:destroy]'), ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': 'class OrdersController < ApplicationController\n  def destroy\n    Order.find(params[:id]).destroy\n  rescue ActiveRecord::RecordNotFound\n    redirect_to orders_path, alert: "Not found"\n  end\nend\n' })
+chk('P2.3a', { ...res, ...ctl(''), ...appCtl('  before_action :require_login\n  private\n  def require_login\n    return if current_user\n    redirect_to login_path\n  end') })
+chk('P2.3b', { ...res, ...ctl(''), ...appCtl('  before_action :authorize_request\n  private\n  def authorize_request\n    decoded = JsonWebToken.decode(request.headers["Authorization"]&.split(" ")&.last)\n    @current_user = User.find(decoded[:user_id])\n  rescue ActiveRecord::RecordNotFound, JWT::DecodeError\n    render json: { errors: "Unauthorized" }, status: :unauthorized\n  end') })
+chk('P2.4', { ...res, ...ctl(''), 'app/controllers/concerns/secured.rb': 'module Secured\n  extend ActiveSupport::Concern\n  include Authentication\nend\n', 'app/controllers/concerns/authentication.rb': 'module Authentication\n  extend ActiveSupport::Concern\n  included do\n    before_action :require_authentication\n  end\n  private\n    def require_authentication\n      resume_session || request_authentication\n    end\nend\n', ...appCtl('  include Secured') })
+// P3
+const EP = '#!/bin/bash -e\nif [ "${@: -2:1}" == "./bin/rails" ] && [ "${@: -1:1}" == "server" ]; then\n  ./bin/rails db:prepare\nfi\nexec "${@}"\n'
+const H = { ...R, 'bin/docker-entrypoint': EP, Procfile: 'web: bundle exec puma -C config/puma.rb\n' }
+chk2('P3.1', H, { ...H, 'db/migrate/20261028000000_add_note.rb': 'class AddNote < ActiveRecord::Migration[8.1]\n  def change\n    add_column :orders, :note, :text\n  end\nend\n' })
+chk('P3.2', { 'config/initializers/stripe.rb': 'Stripe.api_key = ENV.fetch("STRIPE_SECRET_KEY")\n' })
+const S: Record<string, string> = { ...R, 'db/schema.rb': 'ActiveRecord::Schema[8.1].define(version: 2026_01_01_000000) do\n  create_table "orders", force: :cascade do |t|\n    t.string "status"\n  end\nend\n' }; delete S['db/migrate/20260101000000_create_orders.rb']
+chk2('P3.3', S, { ...S, 'db/migrate/20261028000000_x.rb': 'class X < ActiveRecord::Migration[8.1]\n  def change\n    drop_table :orders\n  end\nend\n' })
+// P4
+chk('P4.1', { ...routes('  resources :orders, only: [:destroy]'), 'app/controllers/orders_controller.rb': D, ...appCtl('  before_action :authenticate_user!\n  private\n  def audit\n    AuditLog.(request).save\n  end') })
+
+  console.log('ok (review 23)')
+}
+  // Review 23, round 2: login a callback only sometimes gives; checks behind conditions; ordinary callbacks don't hide open routes; deploy
+    {
+      const R0 = { ...R, 'config/routes.rb': 'Rails.application.routes.draw do\n  devise_for :users\nend\n' }
+      const routes = (r: string) => ({ 'config/routes.rb': `Rails.application.routes.draw do\n  devise_for :users\n${r}\nend\n` })
+      const appCtl = (body: string) => ({ 'app/controllers/application_controller.rb': `class ApplicationController < ActionController::Base\n${body}\nend\n` })
+      const E: Record<string, string[]> = {"R2.1a": [], "R2.1b": [], "R2.2": [], "R2.3": [], "R2.4": ["Anyone can use the order part"], "R2.4a": ["Anyone can use the order part"], "R2.4b": ["Anyone can use the order part"], "R2.4c": ["Anyone can use the order part"], "R2.5a": ["Anyone can use the order part"], "R2.5b": ["Anyone can use the order part"], "R2.6": ["bin/rails db:migrate"], "R2.7": ["release step runs it"], "R2.8": ["requires login ✓"], "R2.1a!": ["requires login ✓"], "R2.1b!": ["requires login ✓"], "R2.2!": ["requires login ✓"], "R2.3!": ["requires login ✓"], "R2.4!": [], "R2.4a!": [], "R2.4b!": [], "R2.4c!": [], "R2.5a!": [], "R2.5b!": [], "R2.6!": ["by itself", "Docker"], "R2.7!": ["docker-entrypoint"], "R2.8!": ["Anyone can"]}
+      const out = (id: string, b: Record<string, string>, a: Record<string, string>) => { const k = id.split(' ')[0], c = card(b, a)
+        for (const x of E[k] ?? []) assert.ok(c.includes(x), `review 23 ${k}: missing "${x}"\n${c}`)
+        for (const x of E[k + '!'] ?? []) assert.ok(!c.includes(x), `review 23 ${k}: unexpected "${x}"\n${c}`) }
+      const rr = (id: string, extra: Record<string, string>) => out(id, R0, { ...R0, ...extra })
+  const O = (head: string, tail = '') => `class OrdersController < ApplicationController\n${head}\n  def index\n    @orders = Order.all\n  end\n  def destroy\n    Order.find(params[:id]).destroy\n    head :no_content\n  end\n${tail}\nend\n`
+  const res = routes('  resources :orders, only: [:index, :destroy]')
+  const gate = (id: string, body: string) => rr(id, { ...res, 'app/controllers/orders_controller.rb': O('  before_action :gate', `  private\n  def gate\n${body}\n  end`) })
+  gate('R2.1a byName: authenticate_user! unless request.get?', '    authenticate_user! unless request.get?')
+  gate('R2.1b byName: if request.format.html? block', '    if request.format.html?\n      authenticate_user!\n    end')
+  gate('R2.2 guestsOut + conditional halt', '    return if current_user\n    redirect_to login_path unless request.format.json?')
+  gate('R2.3 staging && basic auth', '    Rails.env.staging? && authenticate_or_request_with_http_basic { |u, p| p == ENV["PW"] }')
+  const set = (id: string, cb: string) => rr(id, { ...routes('  resources :orders, only: [:destroy]'), 'app/controllers/orders_controller.rb': `class OrdersController < ApplicationController\n  before_action :set_order\n  def destroy\n    @order.destroy\n    head :no_content\n  end\n  private\n  def set_order\n${cb}\n  end\nend\n` })
+  set('R2.4 baseline (open, warned)', '    @order = Order.find(params[:id])')
+  set('R2.4a set_order with rescue', '    @order = Order.find(params[:id])\n  rescue ActiveRecord::RecordNotFound\n    redirect_to orders_path, alert: "Order not found"')
+  set('R2.4b set_order head :not_found unless @order', '    @order = Order.find_by(id: params[:id])\n    head :not_found unless @order')
+  const D = { ...res, 'app/controllers/orders_controller.rb': O('') }
+  rr('R2.4c ApplicationController helper call', { ...D, ...appCtl('  before_action :set_default_meta\n  private\n  def set_default_meta\n    set_meta_tags(site: "Shop")\n  end') })
+  rr('R2.5a Devise README configure_permitted_parameters', { ...D, ...appCtl('  before_action :configure_permitted_parameters, if: :devise_controller?\n\n  protected\n\n  def configure_permitted_parameters\n    devise_parameter_sanitizer.permit(:sign_up, keys: [:username])\n  end') })
+  rr('R2.5b PaperTrail README set_paper_trail_whodunnit', { ...D, ...appCtl('  before_action :set_paper_trail_whodunnit') })
+  const EP = '#!/bin/bash -e\nif [ "${@: -2:1}" == "./bin/rails" ] && [ "${@: -1:1}" == "server" ]; then\n  ./bin/rails db:prepare\nfi\nexec "${@}"\n'
+  const mig = { 'db/migrate/20261028000000_add_note.rb': 'class AddNote < ActiveRecord::Migration[8.1]\n  def change\n    add_column :orders, :note, :text\n  end\nend\n' }
+  const H = { ...R, 'bin/docker-entrypoint': EP, 'config/deploy.yml': 'service: shop\nimage: shop\nservers:\n  web:\n    - 192.168.0.1\n', Procfile: 'web: bundle exec puma -C config/puma.rb\n' }
+  out('R2.6 Heroku app made by rails new 8.x (deploy.yml placeholder)', H, { ...H, ...mig })
+  const P = { ...R, Procfile: 'release: bin/rails db:migrate\nweb: bundle exec puma\n' }
+  out('R2.7 Procfile release:, no entrypoint (wording)', P, { ...P, ...mig })
+  rr('R2.8 render_unauthorized helper', { ...D, ...appCtl('  before_action :require_user\n  private\n  def require_user\n    render_unauthorized unless current_user\n  end\n  def render_unauthorized\n    render json: { error: "unauthorized" }, status: :unauthorized\n  end') })
+  
+    }
+  
+  // review 23, round 3: a rescue that doesn't halt checks nobody; build + save is new; a real deploy.yml keeps the template's comments
+  c = rs({ ...routes('  resources :line_items, only: [:create]'), 'app/controllers/concerns/current_cart.rb': 'module CurrentCart\n  private\n    def set_cart\n      @cart = Cart.find(session[:cart_id])\n    rescue ActiveRecord::RecordNotFound\n      @cart = Cart.create\n      session[:cart_id] = @cart.id\n    end\nend\n',
+    'app/controllers/line_items_controller.rb': 'class LineItemsController < ApplicationController\n  include CurrentCart\n  before_action :set_cart, only: [:create]\n  def create\n    Order.create!(status: "x")\n    head :created\n  end\nend\n' })
+  has(c, 'without logging in')
+  has(rs({ ...res, ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('').replace('    current_user.orders.create!(order_params)', '    @order = current_user.orders.build(order_params)\n    @order.save') }), 'saves new ones')
+  has(mig('    add_column :orders, :note, :text', { 'config/deploy.yml': 'service: shop\nservers:\n  web:\n    - 203.0.113.10\n  # job:\n  #   hosts:\n  #     - 192.168.0.1\n', 'bin/docker-entrypoint': './bin/rails db:prepare\n' }), 'will change your live database by itself')
+  c = mig('    create_table :line_items do |t|\n      t.references :order\n    end')
+  has(c, 'Your database now stores line items. Each one belongs to an order.')
+  console.log('ok (rails)')
+}

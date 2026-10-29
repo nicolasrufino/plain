@@ -21,7 +21,8 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | **C#: ASP.NET Core** | ✅ Supported |
 | **Java: Spring Boot** | ✅ Supported |
 | **PHP: Laravel** | ✅ Supported |
-| 9. Ruby on Rails, Go | 🔜 Next |
+| **Ruby on Rails** | ✅ Supported |
+| 10. Go | 🔜 Next |
 
 ## Why this order
 
@@ -70,6 +71,7 @@ those people actually ship, not what's popular with developers.
 | Java | 7 (28%) | 8 | 4 | 4 | Planned (7) |
 | C# | 8 (27%) | 7 | 5 | 5 | Planned (6) |
 | PHP | – | – | 6 | 12 | ✅ Laravel |
+| Ruby | – | – | – | – | ✅ Rails |
 | Go | – | – | 10 | 11 | Later (8) |
 
 Sources: [SO 2026][so-tech], [GitHub Octoverse 2025][octo], [TIOBE][tiobe]. These cover
@@ -607,16 +609,49 @@ Laravel 11, 12 and 13 (the current one), and the shapes agents still write from 
 - **Not yet:** Blade views, Inertia pages, Livewire/Volt components, and routes from packages
   (Fortify's login pages, Cashier's `/stripe/*`).
 
-## Rails, Go (later)
+## Ruby on Rails ✅
+
+Rails 8.1 (the current one) and the 7.x shapes agents still write.
+
+- **Addresses** ([routing][rr-routing]): `config/routes.rb` in order, and the `config/routes/*.rb` files it
+  `draw`s, where the `draw` is. `get`/`post`/`patch`/`put`/`delete`/`match ... via:`, `root`, `resources`
+  (7 addresses; 5 with `config.api_only`) and `resource` (singular: no `:id`, plural controller), `only:` /
+  `except:`, nested resources, `member` / `collection`, `namespace` / `scope` / `scope module:`, `concern`s.
+  `:id` becomes `[id]`. **The first definition of a method and address wins** (the opposite of Laravel).
+- **Who an address lets in** ([controller callbacks][rr-callbacks]):
+  - The action's `before_action`s: its controller's and its parents' (`ApplicationController`), and the
+    concerns they `include`. Declaring the same one again replaces it: `before_action :authenticate_user!,
+    only: [:edit]` in a controller leaves its other actions open. `skip_before_action` removes it;
+    with `if:` / `unless:`, plain can't tell.
+  - Login: Devise's `authenticate_user!` (with `devise` in the Gemfile), Rails 8's `include Authentication`
+    (`allow_unauthenticated_access` opens actions), `http_basic_authenticate_with`, Devise's `authenticate
+    :user do` around routes, and an app `before_action` whose code turns visitors who aren't logged in away
+    (`redirect_to login_path unless current_user`).
+  - In an action, a check counts only when it returns (`return head :unauthorized unless current_user`):
+    without `return`, the rest of the action still runs.
+  - Pundit's `authorize` and CanCanCan don't mean login (a policy can let anyone in): plain says nothing.
+- **What an address does:** Active Record (`Order.create`, `@order.update`, `current_user.orders.create!`,
+  `update_all`, `destroy`), following the controller's callbacks (`set_order`) and the classes it calls
+  (`OrderCanceller.new(order).call`); Stripe (stripe-ruby, Pay), mailers (`deliver_later`).
+- **The tables** come from the migrations (`db/migrate`): `create_table`, `add_column`, `remove_column`,
+  `rename_column`, `drop_table`, `change_table` (only `change` / `up`; `down` is the way back).
+- **Before you ship:** "apply with `bin/rails db:migrate`"; "changes your live database by itself the
+  next time the app starts" only for a Kamal deploy (`bin/docker-entrypoint` runs `db:prepare`,
+  [source][rr-entrypoint], and `config/deploy.yml` isn't `rails new`'s placeholder), or "when you deploy"
+  with a Procfile `release:` line. Heroku / Render without one don't migrate by themselves. `ENV.fetch("X")` is a required
+  setting; reading `Rails.application.credentials` needs `RAILS_MASTER_KEY` on the host.
+- **To flag:** `params.permit!` (or a field that accepts anything), forgery protection turned off
+  (`skip_forgery_protection`, webhooks aside, or for the whole site), a committed `config/master.key`, CORS
+  that lets every site in with cookies (`origins /.*/` with `credentials: true`; `"*"` with credentials
+  doesn't even start), SQL built by pasting text into `where`, a password in `http_basic_authenticate_with`.
+- **Parser:** tree-sitter-ruby (MIT, 2 MB, in `vendor/`).
+- **Not yet:** ERB views, Devise's and Pay's own routes, mounted engines.
+
+## Go (later)
 
 They share the same shape: a routes file or registrations, middleware for login, an ORM, and
 migrations. The things to get right:
 
-- **Rails:**
-  - `resources` creates 7 addresses.
-  - `before_action :authenticate_user!` in `ApplicationController` covers everything, so report
-    the `skip_before_action` exceptions instead.
-  - `Model.find(params[:id])` lets anyone open anyone's record.
 - **Go:**
   - `mux.HandleFunc("POST /x/{id}", h)` (Go 1.22), plus chi and gin groups.
   - Wrapping the whole server in auth (`ListenAndServe(addr, withAuth(mux))`) covers every
@@ -698,3 +733,6 @@ Research done 2026-10. Vendor reports are marked.
 [lv-migrations]: https://laravel.com/docs/12.x/migrations#forcing-migrations-to-run-in-production
 [lv-config]: https://laravel.com/docs/12.x/configuration#configuration-caching
 [lv-skeleton]: https://github.com/laravel/laravel/tree/13.x
+[rr-routing]: https://guides.rubyonrails.org/routing.html
+[rr-callbacks]: https://guides.rubyonrails.org/action_controller_overview.html#controller-callbacks
+[rr-entrypoint]: https://github.com/rails/rails/blob/8-1-stable/railties/lib/rails/generators/rails/app/templates/docker-entrypoint.tt
