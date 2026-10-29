@@ -14,6 +14,7 @@ import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
 import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
 import { javaFacts, type JavaFacts, type Family } from './java.ts'
 import { STRIPE_EVENTS } from './stripe-events.ts'
+import { goFacts, goModelOf, goPath, type GoFacts, type GoOp, type GoRef, type GoFunc } from './go.ts'
 import { rbFacts, rbModelOf, controllerClass, LAMBDA_LOGIN, type RbFacts, type RbRoute, type Cb } from './rb.ts'
 import { phpFacts, modelOf, type PhpFacts, type SchemaOp, type Mw } from './php.ts'
 import { csFacts, mergeAuth, join as csJoin, under, csPath, type CsFacts, type CsClass, type CsRoute, type ExtCall, type Auth } from './csharp.ts'
@@ -54,7 +55,7 @@ const HOSTS: Record<string, string> = {
 const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
-const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java|rb)$|(?<!\.blade)\.php$/   // (Blade and ERB templates aren't read)
+const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java|rb|go)$|(?<!\.blade)\.php$/   // (Blade and ERB templates aren't read)
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
 
@@ -648,12 +649,14 @@ const pyDeps = (text: string, path: string): Record<string, string> => {
 }
 const deps = (text = '{}') => { try { const p = JSON.parse(text); return { ...p.dependencies, ...p.devDependencies } as Record<string, string> } catch { return {} } }
 
+// Go migrations: golang-migrate's *.up.sql, and goose's .sql files (their Up part)
+const goMigration = (p: string) => /\.up\.sql$/.test(p) && !/(^|\/)(supabase|prisma)\//.test(p) || /(^|\/)(migrations|db\/migrations|sql\/schema|schema)\/\d+[\w-]*\.sql$/.test(p) && !/\.down\.sql$/.test(p) && !/(^|\/)(supabase|prisma|drizzle)\//.test(p)
 export function appFacts(snap: Snap) {
   const files = new Map<string, FileFacts>()
   for (const [p, t] of snap) if (CODE.test(p) && !p.includes('node_modules/') && !/(^|\/)(vendor|storage|bootstrap\/cache|tmp|log)\//.test(p)) {
     // (EF migrations and their snapshots are read as migrations, not as code)
     if (/(^|\/)Migrations\/[^/]+\.cs$/.test(p)) continue
-    try { const f = p.endsWith('.rb') ? rbFacts(p, t, empty) : p.endsWith('.php') ? phpFacts(p, t, empty) : p.endsWith('.java') ? javaFacts(p, t, empty) : p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
+    try { const f = p.endsWith('.go') ? goFacts(p, t, empty) : p.endsWith('.rb') ? rbFacts(p, t, empty) : p.endsWith('.php') ? phpFacts(p, t, empty) : p.endsWith('.java') ? javaFacts(p, t, empty) : p.endsWith('.cs') ? csFacts(p, t, empty) : p.endsWith('.py') ? pyFacts(p, t, empty) : /\.(vue|svelte)$/.test(p) ? sfcFacts(p, t) : /@Component\s*\(/.test(t) && /@angular\/core/.test(t) ? ngFacts(p, t, snap) : fileFacts(p, t); if (f) files.set(p, f) } catch { /* unparsable file: report nothing about it */ }
   }
   // ponytail: '@/' (repo root or the nearest src/) and relative paths only; read tsconfig paths if a repo uses other aliases
   const resolve = (from: string, spec: string): string | undefined => {
@@ -727,6 +730,9 @@ export function appFacts(snap: Snap) {
   const javaModels = new Map<string, string[]>()   // JPA @Entity classes
   const phpModels = new Map<string, string[]>()    // Laravel: the tables its migrations build
   const rbModels = new Map<string, string[]>()     // Rails: the same
+  const goModels = new Map<string, string[]>()     // Go: GORM's AutoMigrate'd structs, and the tables SQL migrations build
+  let goDb: Db | undefined, goOld: string | undefined   // goOld: go.mod's go version, when it's older than the route patterns need
+  const goGorm = new Set<string>()                  // (models AutoMigrate keeps: it never drops a column)
   const svelteUrls = new Map<string, string>()   // SvelteKit pages: their <form method="POST"> sends to this address
   // Where a hook's or middleware's login check applies: each checking `if` covers what its path tests allow, and an earlier
   // `if (<path test>) return ...` lets those addresses through unchecked. Tests: startsWith, ===, !==, ['/a', '/b'].includes(path),
@@ -1265,6 +1271,146 @@ export function appFacts(snap: Snap) {
     for (const [t, cols] of tables) rbModels.set(tableClass.get(t) ?? rbModelOf(t), cols)
     for (const [p] of rbFiles) { const f = files.get(p)!; if (/(^|\/)(db\/|config\/(?!initializers\/|environments\/production\.rb))/.test(p)) { f.env.clear(); f.envReq.clear() } finish(f) }   // (initializers and production.rb run at boot: their settings count)
   }
+  // Go: run main() as far as routes go (routers made, groups, Use, routes, sub-routers and mounts, calls that pass a router on, across
+  // packages by import path), then each route's middleware and handler (see src/go.ts). Test files (_test.go) are left out.
+  const goFiles = [...files].filter(([p]) => p.endsWith('.go') && !p.endsWith('_test.go') && !/(^|\/)vendor\//.test(p)).map(([p, f]) => [p, (f as GoFacts).go] as const)
+  if (goFiles.length) {
+    const gomod = [...snap].find(([p]) => /(^|\/)go\.mod$/.test(p)), root = gomod?.[0].replace(/go\.mod$/, '') ?? '', module = gomod?.[1].match(/^module\s+(\S+)/m)?.[1] ?? ''
+    const dirOfImport = (imp: string) => imp === module ? root.replace(/\/$/, '') : imp.startsWith(module + '/') ? root + imp.slice(module.length + 1) : undefined
+    // functions by directory (a Go package) and name; func literals by file
+    const funcs = new Map<string, { p: string; f: GoFunc; dir: string; imports: Map<string, string> }>()
+    for (const [p, x] of goFiles) for (const [k, f] of x.funcs) funcs.set(k.startsWith('@lit') ? `${p}::${k}` : `${x.dir}::${k}`, { p, f, dir: x.dir, imports: x.imports })
+    const dirOf = new Map(goFiles.map(([p, x]) => [p, x.dir]))
+    const fileOfLit = (k: string) => k.split('::')[0]
+    // a function name as written in `dir` (with those imports): createOrder, api.List, h.CreateOrder (a method: by its name, if only one)
+    const resolve = (name: string, at: { dir: string; imports: Map<string, string>; p: string; vars?: Map<string, string> }): string | undefined => {
+      if (name.startsWith('@lit')) return `${at.p}::${name}`
+      const [a, b] = name.includes('.') ? [name.slice(0, name.lastIndexOf('.')), name.slice(name.lastIndexOf('.') + 1)] : ['', name]
+      if (!a) return funcs.has(`${at.dir}::${b}`) ? `${at.dir}::${b}` : undefined
+      const d = at.imports.has(a) ? dirOfImport(at.imports.get(a)!) : undefined
+      if (d !== undefined) return funcs.has(`${d}::${b}`) ? `${d}::${b}` : undefined
+      // h.ListBoxes where h := handlers.New(...): a method in that package
+      if (at.vars?.has(a)) { const vd = dirOfImport(at.vars.get(a)!); if (vd === undefined) return undefined   // (cors.New(...).Handler: a package's, not ours)
+        const k = [...funcs.keys()].find(k => k.startsWith(`${vd}::`) && k.endsWith(`.${b}`)); if (k) return k }
+      const ms = [...funcs.keys()].filter(k => k.endsWith(`.${b}`) && !k.includes('@lit'))
+      return ms.length === 1 ? ms[0] : ms.find(k => k.startsWith(`${at.dir}::`))
+    }
+    type Router = { kind: string; prefix: string; parent?: Router; mws: { ref: GoRef; at: number; ctx: Ctx }[]; snap: { ref: GoRef; ctx: Ctx }[] }   // snap: what a gin / echo group copied from its parent
+    type Ctx = { dir: string; imports: Map<string, string>; p: string; vars?: Map<string, string> }
+    const routes: { router: Router; method: string; path: string; handler: GoRef; mws: { ref: GoRef; ctx: Ctx }[]; seq: number; ctx: Ctx }[] = []
+    let seq = 0
+    const mux = (kind: string, parent?: Router, prefix = ''): Router => ({ kind, prefix, parent, mws: [], snap: parent && parent.kind !== 'chi' ? [...upTo(parent, Infinity)] : [] })
+    // a router's middleware that covers a route registered at `at`: chi and echo's root, all of them; gin and echo groups, those before it
+    const upTo = (r: Router, at: number): { ref: GoRef; ctx: Ctx }[] => [...r.snap, ...r.mws.filter(m => r.kind === 'chi' || r.kind === 'echo' && !r.parent || m.at < at)]
+    const chain = (r: Router, at: number): { ref: GoRef; ctx: Ctx }[] => r.parent && (r.kind === 'chi' || r.parent.kind === 'chi' || r.parent.kind === 'mux') ? [...chain(r.parent, Infinity), ...upTo(r, at)] : r.kind === 'echo' && r.parent ? [...chain(rootOf(r), Infinity), ...upTo(r, at)] : upTo(r, at)
+    const rootOf = (r: Router): Router => r.parent ? rootOf(r.parent) : r
+    const fullPrefix = (r: Router): string => (r.parent ? fullPrefix(r.parent) : '') + r.prefix
+    const run = (key: string, binds: Map<string, Router>, depth: number, into?: Router): Router | undefined => {
+      const fn = funcs.get(key); if (!fn || depth > 8) return undefined
+      const ctx: Ctx = { dir: fn.dir, imports: fn.imports, p: key.includes('::@lit') ? fileOfLit(key) : fn.p, vars: fn.f.pkgVars }
+      return exec(fn.f.routeOps, binds, depth, ctx, into)
+    }
+    const exec = (ops: GoOp[], binds: Map<string, Router>, depth: number, ctx: Ctx, into?: Router): Router | undefined => {
+      for (const op of ops) {
+        if (op.op === 'new') { binds.set(op.v, into ?? mux(op.kind)); into = undefined }
+        else if (op.op === 'group') { const from = binds.get(op.from); if (from) { const g = mux(from.kind, from, op.prefix); g.mws.push(...op.mws.map(ref => ({ ref, at: -1, ctx }))); binds.set(op.v, g) } }
+        else if (op.op === 'use') { const r = binds.get(op.on); if (r) r.mws.push(...op.mws.map(ref => ({ ref, at: seq++, ctx }))) }
+        else if (op.op === 'route' && op.handler.fn && binds.has(op.handler.fn) && binds.get(op.on)?.kind === 'mux') {   // mux.Handle("/admin/", requireAuth(adminMux))
+          const sub = binds.get(op.handler.fn)!, r = binds.get(op.on)!; if (sub !== r) { sub.parent = r; if (op.handler.wrap) sub.mws.unshift(...op.handler.wrap.map(w => ({ ref: { call: w }, at: -1, ctx }))) } }
+        else if (op.op === 'subfn') { const r = binds.get(op.on), k = resolve(op.fn, ctx); if (r && k) { const child = mux(r.kind, r, op.prefix), f = funcs.get(k)!; run(k, new Map(f.f.params[0] ? [[f.f.params[0], child]] : []), depth + 1) } }
+        else if (op.op === 'route') { const r = binds.get(op.on); if (r) for (const m of op.methods) routes.push({ router: r, method: m, path: op.path, handler: op.handler, mws: op.mws.map(ref => ({ ref, ctx })), seq: seq++, ctx }) }
+        else if (op.op === 'sub') { const r = binds.get(op.on); if (r) exec(op.ops, new Map([...binds, [op.v, mux(r.kind, r, op.prefix)]]), depth, ctx) }
+        else if (op.op === 'mount') { const r = binds.get(op.on); if (!r) continue
+          const t = op.target, sub = t.fn ? binds.get(t.fn) : undefined
+          if (sub) { sub.parent = r; sub.prefix = op.prefix + sub.prefix; if (t.wrap) sub.mws.unshift(...t.wrap.map(w => ({ ref: { call: w }, at: -1, ctx }))) }
+          else { const k = resolve(t.call ?? t.fn ?? '', ctx); if (k) { const child = mux(r.kind, r, op.prefix); if (t.wrap) child.mws.push(...t.wrap.map(w => ({ ref: { call: w }, at: -1, ctx }))); run(k, new Map(), depth + 1, child) } } }
+        else if (op.op === 'call' || op.op === 'assign') { const k = resolve(op.fn, ctx); if (!k) continue
+          const callee = funcs.get(k)!, b = new Map<string, Router>()
+          op.args.forEach((a, i) => { const r = binds.get(a); if (r && callee.f.params[i]) b.set(callee.f.params[i], r) })
+          const out = run(k, b, depth + 1)
+          if (op.op === 'assign' && out) binds.set(op.v, out) }
+        else if (op.op === 'serve') { const t = op.handler, r = t.fn ? binds.get(t.fn === 'nil' ? 'http' : t.fn) : undefined
+          if (r && t.wrap) r.mws.unshift(...t.wrap.map(w => ({ ref: { call: w }, at: -1, ctx })))
+          else if (!r && (t.call || t.fn)) { const k = resolve(t.call ?? t.fn!, ctx); if (k) { const out = run(k, new Map(), depth + 1); if (out && t.wrap) out.mws.unshift(...t.wrap.map(w => ({ ref: { call: w }, at: -1, ctx }))) } } }   // ListenAndServe(addr, newRouter())
+        else if (op.op === 'return') { const r = binds.get(op.v); if (r) { if (op.wrap) r.mws.unshift(...op.wrap.map(w => ({ ref: { call: w }, at: -1, ctx }))); return r } }
+      }
+      return undefined
+    }
+    for (const [p, x] of goFiles) if (x.pkg === 'main' && x.funcs.has('main')) run(`${x.dir}::main`, new Map([['http', mux('mux')]]), 0)
+    // what a middleware or handler is: by its code; a library's, by its import path
+    const kindOf = (ref: GoRef, ctx: Ctx): 'login' | 'unknown' | 'none' => {
+      const name = ref.wrap?.[0] ?? ref.call ?? ref.fn ?? ''   // AuthRequired(sm): the factory, not its argument
+      if (ref.lit) return funcs.get(`${ctx.p}::${ref.lit}`)?.f.mw ?? 'none'
+      const alias = name.split('.')[0], path = ctx.imports.get(alias) ?? ctx.vars?.get(alias) ?? ''
+      const ours = !name.includes('.') || dirOfImport(path) !== undefined || !path
+      if (!ours) {   // a library's: by what it is (its import path), not its name alone
+        if ((ref.args ?? []).some(a => /Skipper|ContinueOnIgnoredError|CredentialsOptional/.test(a))) return 'unknown'
+        if (/go-chi\/jwtauth/.test(path)) return /\.Authenticator\w*$/.test(name) ? 'login' : 'none'
+        if (/labstack\/echo-jwt|golang-jwt\/echo|clerk/.test(path) || /labstack\/echo\/v\d+\/middleware$/.test(path) && /\.(JWT\w*|BasicAuth\w*|KeyAuth\w*)$/.test(name) || /gin-gonic\/gin$/.test(path) && /\.BasicAuth\w*$/.test(name))
+          return /clerk/.test(path) && !/RequireHeaderAuthorization/.test(name) ? 'none' : 'login'
+        if (/go-chi\/chi\/v\d+\/middleware$|labstack\/echo\/v\d+\/middleware$|rs\/cors|go-chi\/cors|gin-contrib|gorilla\/handlers|otelhttp|go-chi\/httprate|alexedwards\/scs|gin-gonic\/gin$/.test(path)) return 'none'
+        return /auth|login|session|token|jwt|guard|protect|require|admin|user|clerk|supabase/i.test(name) ? 'unknown' : 'none'
+      }
+      const k = resolve(name, ctx)
+      if (k) return funcs.get(k)!.f.mw ?? 'none'
+      return /auth|login|session|token|jwt|guard|protect|require|admin|user|clerk|supabase/i.test(name) ? 'unknown' : 'none'
+    }
+    // facts of a handler and what it calls (a few levels down)
+    const follow = (g: FileFacts, into: FileFacts, seen: Set<string>, self: string, depth = 0) => {
+      for (const u of g.used) if (u.startsWith('gcall:') && !seen.has(u) && depth < 5) {
+        seen.add(u)
+        const imp = u.slice(6, u.lastIndexOf('.')), m = u.slice(u.lastIndexOf('.') + 1)
+        // (h.store.ListBoxes from Handler.ListBoxes: the store's, not the handler itself)
+        const ks = imp === '*' ? [...funcs.keys()].filter(k => k.endsWith(`.${m}`) && k !== self && !k.includes('@lit')) : (() => { const d = goFiles.find(([, x]) => x.pkg === imp)?.[1].dir ?? dirOfImport(imp); return d !== undefined && funcs.has(`${d}::${m}`) ? [`${d}::${m}`] : [] })()
+        if (ks.length !== 1) continue   // (a method name several types have: plain can't tell which)
+        const callee = funcs.get(ks[0])!.f
+        for (const key of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'refuses', 'used'] as const) for (const x of callee[key]) into[key].add(x)
+        into.money ||= callee.money; into.writes ||= callee.writes; into.printed += '\n' + callee.printed
+        follow(callee, into, seen, ks[0], depth + 1)
+      }
+    }
+    // tables: GORM's AutoMigrate'd structs (by struct name), and the tables SQL migrations build (by table name)
+    const structs = new Map(goFiles.flatMap(([, x]) => [...x.structs]))
+    goDb = readDb([...snap].filter(([p]) => goMigration(p) && !!gomod).sort(([a], [b]) => a.localeCompare(b)).map(([p, t]) => [p, t.split(/^--\s*\+goose\s+Down\b/im)[0]] as [string, string]))
+    for (const name of goFiles.flatMap(([, x]) => x.automigrate)) { const fs = structs.get(name); if (fs && !goDb.tables.has(pluralize(name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()))) { goModels.set(name, fs); goGorm.add(name) } }
+    for (const [t, tb] of goDb!.tables) goModels.set(t, [...tb.cols, ...[...tb.refs.values()].map(r => `→${singular(r)}`)])
+    const snake = (e: string) => e.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
+    const tableOf = (t: string) => { const e = t.replace(/^@e:/, '')
+      if (e.startsWith('@t:')) { const tb = e.slice(3); return goModels.has(tb) ? tb : goModels.has(goModelOf(tb)) ? goModelOf(tb) : undefined }
+      const words = e.match(/[A-Z][a-z0-9]*/g) ?? [e]
+      const tries = [words.join(''), ...words.slice(1).map((_, i) => words.slice(i + 1).join('')), ...words.slice(0, -1).map((_, i) => words.slice(0, words.length - 1 - i).join(''))]
+      for (const w of tries) for (const c of [w, pluralize(snake(w)), snake(w)]) if (goModels.has(c)) return c
+      return undefined }
+    const required = new Set(goFiles.flatMap(([, x]) => x.required))
+    const finish = (g: FileFacts) => {
+      for (const k of ['tables', 'written'] as const) for (const t of [...g[k]]) if (t.startsWith('@')) { g[k].delete(t); const m = tableOf(t); if (m) g[k].add(m) }
+      g.writes = g.written.size > 0; if (!g.writes) g.ops.clear()
+      for (const x of g.env) if (required.has(x)) g.envReq.add(x)
+      return g
+    }
+    const finishFile = (g: FileFacts, x: GoFacts['go']) => { finish(g); for (const k of x.required) { g.env.add(k); g.envReq.add(k) }
+      return g
+    }
+    for (const r of routes) {
+      const h0 = r.handler, direct = h0.lit ? `${r.ctx.p}::${h0.lit}` : resolve(h0.fn ?? h0.call ?? '', r.ctx)
+      const fk = !direct && h0.wrap?.length ? resolve(h0.wrap.at(-1)!, r.ctx) : undefined
+      const factory = fk && !funcs.get(fk)!.f.takesHandler ? fk : undefined   // createOrderHandler(pool), not requireAuth(ordersHandler)
+      const h = factory ? { ...h0, wrap: h0.wrap!.slice(0, -1) } : h0, hk = direct ?? factory, hf = hk ? funcs.get(hk) : undefined
+      const facts = Object.assign(empty(), hf?.f, { tables: new Set(hf?.f.tables), written: new Set(hf?.f.written), ops: new Set(hf?.f.ops), env: new Set(hf?.f.env), envReq: new Set(hf?.f.envReq), services: new Set(hf?.f.services), outside: new Set(hf?.f.outside), used: new Set(hf?.f.used), refuses: new Set(hf?.f.refuses) })
+      if (hf) follow(hf.f, facts, new Set(), hk!)
+      finish(facts)
+      const mws = [...chain(r.router, r.seq), ...r.mws, ...(h.wrap ?? []).map(w => ({ ref: { call: w } as GoRef, ctx: r.ctx }))]
+      const kinds = [...mws.map(m => kindOf(m.ref, m.ctx)), hf?.f.check ?? 'none', hf ? 'none' : 'unknown']
+      const guard = kinds.includes('login')
+      const path = (fullPrefix(r.router) + r.path).replace(/\/+/g, '/').replace(/(.)\/$/, '$1') || '/'
+      const at = hf ? (hk!.includes('::@lit') ? fileOfLit(hk!) : hf.p) : r.ctx.p
+      files.get(at)?.handlers.push({ server: '', method: r.method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : r.method, path: goPath(path), guard, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
+    }
+    for (const [p, x] of goFiles) finishFile(files.get(p)!, x)
+    // Go before 1.22 reads "POST /orders/{id}" as a literal path: those routes never match
+    const v = gomod?.[1].match(/^go\s+1\.(\d+)/m)?.[1]
+    if (v && +v < 22 && routes.some(r => r.router.kind === 'mux' && (r.method !== 'ANY' || /\{/.test(r.path)))) goOld = `1.${v}`
+  }
   // form actions outside SvelteKit aren't routes
   for (const f of files.values()) f.handlers = f.handlers.filter(h => h.server !== '@actions')
   // TanStack server actions: calling one (createBooking({ data }), useServerFn(createBooking)) talks to the server.
@@ -1495,10 +1641,12 @@ export function appFacts(snap: Snap) {
   for (const [m, fs] of javaModels) all.set(m, fs)
   for (const [m, fs] of phpModels) all.set(m, fs)
   for (const [m, fs] of rbModels) all.set(m, fs)
+  for (const [m, fs] of goModels) all.set(m, fs)
   const pyModels = new Set<string>()
   for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()), rbModels: new Set(rbModels.keys()),
+    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()), rbModels: new Set(rbModels.keys()), goModels: new Set(goModels.keys()), goGorm, goDb, goOld,
+    goMigrations: [...snap.keys()].some(p => /(^|\/)go\.mod$/.test(p)) ? [...snap.keys()].filter(goMigration) : [],
     rbMigrations: [...snap.keys()].filter(p => /(^|\/)db\/migrate\/[^/]+\.rb$/.test(p)),
     phpMigrations: [...snap.keys()].filter(p => /(^|\/)database\/migrations\/[^/]+\.php$/.test(p)),
     // Flyway: src/main/resources/db/migration/V2__add_coupons.sql
@@ -1516,7 +1664,7 @@ export function appFacts(snap: Snap) {
 // Every sentence below is a fixed template filled with facts. No model writes any of it.
 
 const words = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[-_]/g, ' ').toLowerCase()
-const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : s.endsWith('sses') ? s.slice(0, -2) : s.endsWith('s') ? s.slice(0, -1) : s
+const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : /(sses|xes|ches|shes)$/.test(s) ? s.slice(0, -2) : s.endsWith('s') ? s.slice(0, -1) : s   // boxes -> box
 const pluralize = (s: string) => s.endsWith('s') ? s : s.endsWith('y') ? s.slice(0, -1) + 'ies' : s + 's'
 export const things = (model: string) => pluralize(words(model))
 const an = (w: string) => (/^([aeio]|u(?!s|ni))/.test(w) ? 'an ' : 'a ') + w   // a user, an umbrella
@@ -1756,7 +1904,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // files that aren't code
   // (an Angular component's template is part of that component's page)
   const templates = new Set([...after, ...before].flatMap(([q, t]) => [...t.matchAll(/templateUrl\s*:\s*['"`]([^'"`]+)['"`]/g)].map(m => join(q, '..', m[1]))))
-  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !templates.has(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p))
+  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !templates.has(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p) && !B.goMigrations.includes(p) && !A.goMigrations.includes(p) && !/(^|\/)go\.sum$|\.down\.sql$/.test(p))
   {
     const media = (t = '') => new Set(t.match(/@media[^{]*max-width[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g) ?? [])
     const phones = /\.(css|scss)$/.test(p) && [...media(after.get(p))].some(m => !media(before.get(p)).has(m))
@@ -1788,12 +1936,13 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const add = fields.filter(x => !old.includes(x) && !moved.some(y => colRenamed.get(`${m}.${y}`) === x)), del = old.filter(x => !fields.includes(x) && !moved.includes(x))
     if (fieldList(add)) changes.push({ group: 'Database', name: things(m), text: `${cap(things(m))} now also store the ${fieldList(add)}.` })
     if (links(add).length) changes.push({ group: 'Database', text: `${cap(things(m))} are now linked to ${list(links(add).map(x => things(x.replace('[]', ''))))}.` })
-    if (del.length) {
+    if (del.length && B.goGorm?.has(m)) changes.push({ group: 'Database', text: `${cap(things(m))} no longer use the ${fieldList(del) || list(del)}. (AutoMigrate leaves that column and its data in the database.)` })
+    else if (del.length) {
       changes.push({ group: 'Database', text: `${cap(things(m))} will no longer store the ${fieldList(del) || list(del)}.` })
       ship.push(`Back up your data first: the ${fieldList(del) || list(del)} on ${things(m)} will be deleted for good.`)
     }
   }
-  for (const m of A.models.keys()) if (!B.models.has(m) && !(renamedTo.has(m) && B.models.has(renamedTo.get(m)!))) {
+  for (const m of A.models.keys()) if (!B.models.has(m) && !(renamedTo.has(m) && B.models.has(renamedTo.get(m)!)) && !A.goGorm?.has(m)) {
     changes.push({ group: 'Database', text: `Your database will no longer store ${things(m)}.` })
     ship.push(`Back up your data first: all ${things(m)} will be deleted for good.`)
   }
@@ -1983,6 +2132,27 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // the key that unlocks Rails credentials, committed
   for (const p of real.filter(p => /(^|\/)config\/(master|credentials\/\w+)\.key$/.test(p) && after.has(p) && !before.has(p)))
     problems.push({ kind: 'Unsafe', text: `${p} is in the code. It unlocks all your Rails credentials (Stripe keys and the rest): anyone who can see the code can read them. Remove it from the repository, add it to .gitignore, and set RAILS_MASTER_KEY on your host instead.` })
+  // Go: new migrations (golang-migrate / goose); main() may run them by itself (m.Up(), goose.Up, AutoMigrate)
+  const newGo = B.goMigrations.filter(m => !A.goMigrations.includes(m))
+  const goSelf = [...B.files].some(([p, f]) => !p.endsWith('_test.go') && (f as GoFacts).go?.selfMigrates)
+  for (const m of newGo) { const bad = (B.goDb?.destructive.get(m) ?? []).filter(x => !/^deletes the \S+ (column|table)/.test(x)); if (bad.length) ship.push(`Back up your data first: ${m} ${list(bad)}, and that can't be undone.`) }
+  if (newGo.length) ship.push(goSelf
+    ? `${list(newGo.map(m => m.split('/').pop()!))} will change your live database by itself the next time the app starts (main runs the migrations). Back up first; if it fails, the app won't start.`
+    : `Apply ${list(newGo.map(m => m.split('/').pop()!))} to your live database before the new code goes live (${newGo.some(m => /\+goose/.test(after.get(m) ?? '')) ? '`goose up`' : '`migrate -path <folder> -database $DATABASE_URL up`'}), or the parts that use it will fail.`)
+  if (B.goOld && !A.goOld) problems.push({ kind: 'Broken', text: `Your go.mod says go ${B.goOld}, but the routes are written the Go 1.22 way ("POST /orders/{id}"). Before 1.22 those are read as plain paths, so they never match. Change the go line in go.mod to 1.22 or later.` })
+  for (const p of real) {
+    const x = (B.files.get(p) as GoFacts | undefined)?.go, was = (A.files.get(p) as GoFacts | undefined)?.go
+    if (!x || p.endsWith('_test.go')) continue
+    for (const r of x.risks) if (!was?.risks.has(r)) {
+      if (r === 'corsCreds') problems.push({ kind: 'Unsafe', text: `Any website can make requests to your server as a logged-in visitor (CORS lets every site in, with cookies). List your own site's address instead. (in ${p})` })
+      else if (RISK[r]) problems.push({ ...RISK[r], text: `${RISK[r].text} (in ${p})` })
+    }
+    const goSecret = (t = '') => t.match(/"(sk_live_\w{8,}|sk_test_\w{8,}|rk_live_\w{8,}|whsec_\w{8,}|re_\w{16,}|SG\.[\w-]{16,}\.[\w-]{16,})"/)?.[1]
+    if (goSecret(after.get(p)) && !goSecret(before.get(p))) problems.push({ kind: 'Unsafe', text: `A secret key is written in ${p}. Anyone who can see the code can use it. Read it from an environment variable (os.Getenv) instead.` })
+    // a login check that answers 401 but doesn't stop: the request goes on to the handler
+    for (const [k, f] of x.funcs) for (const t of new Set(f.traps)) if (!was?.funcs.get(k)?.traps.includes(t) && (!k.startsWith('@lit') || f.inUse) && !(k.startsWith('@lit') && [...was?.funcs.values() ?? []].some(o => o.inUse && o.traps.includes(t))))
+      problems.push({ kind: 'Broken', text: `${k.startsWith('@lit') ? 'A middleware' : k} answers "not allowed" but doesn't stop the request, so the protected code runs anyway. ${t === 'ginNoAbort' ? 'Use c.AbortWithStatusJSON(...) (or call c.Abort())' : 'Add `return` right after it'}. (in ${p})` })
+  }
   // Drizzle: a changed schema needs a migration (or `drizzle-kit push` for apps that don't keep migration files)
   const newDz = B.dzMigrations.filter(m => !A.dzMigrations.includes(m))
   if ([...B.dzModels, ...A.dzModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newDz.length)
@@ -2100,7 +2270,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
     if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k) || csKeys.has(k)) continue
     ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
-      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java|php|rb)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
+      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java|php|rb|go)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
   }
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)
@@ -2160,7 +2330,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Check', text: "Cancelling doesn't give money back: nothing in your app refunds a Stripe payment. If someone cancels after paying, they stay charged. (This is a guess.)" })
   // "I couldn't run the tests", "didn't get a chance to test", "tests not run", "untested", "the suite still needs to be run";
   // not "I didn't change the tests", "no (new) tests need to be run"
-  const NOT_RUN = /\b(did ?n[o'’]?t|could ?n[o'’]?t|was ?n[o'’]?t able to|were ?n[o'’]?t able to|unable to|not able to|have ?n[o'’]?t|has ?n[o'’]?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\buntested\b|\b(?<!\b(no|nothing)\s+(?:\w+\s+)?)(tests?|test suite|suite|it|this|everything)\s+(still\s+)?needs?\s+to\s+(be\s+)?(run|tested)\b/i
+  const NOT_RUN = /\b(did ?n[o'’]?t|could ?n[o'’]?t|was ?n[o'’]?t able to|were ?n[o'’]?t able to|unable to|not able to|have ?n[o'’]?t|has ?n[o'’]?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\b(tests?|test suite|suite|build|it|this|app|code)\s+(could|can|did|were|was) ?n[o'’]?t\s+be\s+(run|executed|tested|verified|built)\b|\buntested\b|\b(?<!\b(no|nothing)\s+(?:\w+\s+)?)(tests?|test suite|suite|it|this|everything)\s+(still\s+)?needs?\s+to\s+(be\s+)?(run|tested)\b/i
   // "fix it", "it's weird", "make it faster" without saying what's wrong: the agent had to guess what to fix
   const ask = said(opts.asked)
   if (/\b(fix (it|this|that|things)|broken|weird|buggy|not working|doesn'?t work|isn'?t working|glitchy|janky|(is|so|too|kinda|really) slow|make it faster|speed it up)\b/i.test(ask)

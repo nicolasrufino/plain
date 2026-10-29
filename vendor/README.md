@@ -11,3 +11,5 @@ Vendored files
   pure-PHP grammar (php_only), for routes, controllers, models, migrations and config; Blade templates aren't read. Same setup.
 - tree-sitter-ruby.wasm: from the npm package tree-sitter-ruby@0.23.1 (MIT, see tree-sitter-ruby.LICENSE), for Rails routes,
   controllers, models and migrations; ERB views aren't read. Same setup.
+- tree-sitter-go.wasm: from the npm package tree-sitter-go@0.25.0 (MIT, see tree-sitter-go.LICENSE), for Go servers (net/http, chi,
+  gin, echo). Same setup.

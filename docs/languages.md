@@ -22,7 +22,7 @@ plain needs to know, for each stack, three things: **where the pages and server 
 | **Java: Spring Boot** | ✅ Supported |
 | **PHP: Laravel** | ✅ Supported |
 | **Ruby on Rails** | ✅ Supported |
-| 10. Go | 🔜 Next |
+| **Go** (net/http, chi, gin, echo) | ✅ Supported |
 
 ## Why this order
 
@@ -72,7 +72,7 @@ those people actually ship, not what's popular with developers.
 | C# | 8 (27%) | 7 | 5 | 5 | Planned (6) |
 | PHP | – | – | 6 | 12 | ✅ Laravel |
 | Ruby | – | – | – | – | ✅ Rails |
-| Go | – | – | 10 | 11 | Later (8) |
+| Go | – | – | 10 | 11 | ✅ net/http, chi, gin, echo |
 
 Sources: [SO 2026][so-tech], [GitHub Octoverse 2025][octo], [TIOBE][tiobe]. These cover
 professional developers, not vibe coders, so we weigh what the AI app builders generate more
@@ -647,16 +647,43 @@ Rails 8.1 (the current one) and the 7.x shapes agents still write.
 - **Parser:** tree-sitter-ruby (MIT, 2 MB, in `vendor/`).
 - **Not yet:** ERB views, Devise's and Pay's own routes, mounted engines.
 
-## Go (later)
+## Go ✅
 
-They share the same shape: a routes file or registrations, middleware for login, an ORM, and
-migrations. The things to get right:
+Go's own router (net/http, Go 1.22+) and chi, gin and echo, the ones agents write. Not read yet: fiber,
+gorilla/mux, routers kept in a struct field (`s.router`), and a group handed straight to a function
+(`register(r.Group("/api"))`): their routes are missing from the card, never shown as protected.
 
-- **Go:**
-  - `mux.HandleFunc("POST /x/{id}", h)` (Go 1.22), plus chi and gin groups.
-  - Wrapping the whole server in auth (`ListenAndServe(addr, withAuth(mux))`) covers every
-    address.
-  - golang-migrate and goose migrations are plain SQL.
+- **Addresses:** Go has no route file: routes are registered by code that runs. plain runs `main()` as
+  far as routes go: routers made (`chi.NewRouter()`, `gin.Default()`, `echo.New()`, `http.NewServeMux()`),
+  groups, sub-routers (`r.Route`, `r.Mount`, `http.StripPrefix`), and functions the router is passed to,
+  across packages by import path (`api.RegisterRoutes(r)`). `{id}` and `:id` become `[id]`.
+- **Who an address lets in.** Which middleware covers a route depends on the router
+  ([chi][go-chi], [gin][go-gin], [echo][go-echo]):
+  - chi: `r.Use` covers that router's routes (a `Use` after a route panics), `r.Group` / `r.Route` add
+    their own, `r.With(mw)` one route.
+  - gin: `r.Use` covers only the routes registered **after** it, and a group keeps what its parent had
+    when it was made.
+  - echo: `e.Use` covers every route; a group's `Use`, only the routes after it.
+  - net/http: wrapping, `mux.Handle("/x", requireAuth(h))` or `http.ListenAndServe(addr, withAuth(mux))`.
+  - Login is a middleware or handler whose code turns away a request with no user, read structurally: a
+    top-level `if` about the session, cookie, token or user that answers 401 / 403 / a login redirect
+    **and stops** (`return`, gin's `Abort`, echo's returned error), with nothing before it letting
+    requests through. A 401 that doesn't stop (no `return`; gin's `c.JSON(401, ...)` without `Abort`)
+    is flagged: the protected code runs anyway. Library middleware by name: `jwtauth.Authenticator`,
+    `echojwt`, Clerk's `RequireHeaderAuthorization`; `jwtauth.Verifier` alone rejects nobody.
+- **What an address does:** GORM (`db.Create(&order)`, `db.Model(&o).Update`, `db.Delete`), sqlc-style
+  query methods (`q.CreateOrder`), raw SQL (`db.ExecContext(ctx, "UPDATE orders ...")`), following the
+  handler into the functions it calls; stripe-go (Checkout, PaymentIntents, refunds, webhooks); email
+  (net/smtp, go-mail, Resend, SendGrid).
+- **The tables:** GORM's `AutoMigrate`'d structs, or the tables golang-migrate (`*.up.sql`) and goose
+  (`-- +goose Up`) migrations build, read with the same Postgres parser as Supabase.
+- **Before you ship:** "apply with `migrate ... up` / `goose up`", or "changes your live database by
+  itself the next time the app starts" when `main()` runs them (`m.Up()`, `goose.Up`). `AutoMigrate`
+  never drops a column, so a removed field isn't data loss. A setting the code refuses to start without
+  (`mustEnv("X")`, `env:"X,required"`) is a required one; `os.Getenv` alone is optional.
+- **To flag:** a go.mod older than 1.22 with 1.22-style routes (`"POST /orders/{id}"` never matches),
+  SQL built with `fmt.Sprintf`, CORS that reflects any site with cookies.
+- **Parser:** tree-sitter-go (MIT, 0.2 MB, in `vendor/`).
 
 ---
 
@@ -736,3 +763,6 @@ Research done 2026-10. Vendor reports are marked.
 [rr-routing]: https://guides.rubyonrails.org/routing.html
 [rr-callbacks]: https://guides.rubyonrails.org/action_controller_overview.html#controller-callbacks
 [rr-entrypoint]: https://github.com/rails/rails/blob/8-1-stable/railties/lib/rails/generators/rails/app/templates/docker-entrypoint.tt
+[go-chi]: https://go-chi.io/#/pages/middleware
+[go-gin]: https://gin-gonic.com/en/docs/examples/using-middleware/
+[go-echo]: https://echo.labstack.com/docs/middleware

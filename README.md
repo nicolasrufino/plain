@@ -75,10 +75,11 @@ staged files. The session log lives in `.git/plain-session.jsonl`.
 | **Java**: Spring Boot (Spring Security, JPA, Flyway) | controllers, Spring Security's rules in order, services and repositories, Flyway migrations, `ddl-auto=create`, keys left in application.properties |
 | **PHP**: Laravel (Eloquent, Cashier) | route files and who they let in (route, group, controller and app middleware, form requests), Eloquent writes, migrations, `env()` outside config, `$request->all()` into an open model |
 | **Ruby**: Rails (Devise, Active Record) | routes in order and who they let in (before_actions with their skips and concerns, Devise, Rails 8 authentication), Active Record writes, migrations (and apps that run them on start), `params.permit!`, a committed master.key |
+| **Go**: net/http, chi, gin, echo (GORM, sqlc, migrate, goose) | routes as `main()` registers them and who they let in (each router's middleware rules, checks that really stop), database writes, migrations (and apps that run them on start), a 401 that doesn't stop, an old go.mod |
 | **Supabase** (Lovable, Bolt) | your tables, and **who your access rules (Row Level Security) let in**: tables anyone can read or change, rules that only check "is logged in", users who can mark their own order paid |
 | **Stripe**, OpenAI, Resend and other services | when your app starts using them, and the code that charges money |
 
-**Coming next:** Go.
+**Coming next:** the checks the trials still miss (old data under new rules, money paths).
 [Why this order, and what each one needs](docs/languages.md).
 
 On other projects plain won't break, but it won't have much to say yet.
@@ -114,6 +115,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 - [Trials, round 6](docs/trials-angular-aspnet.md): the same on Angular + ASP.NET Core
 - [Trials, round 7](docs/trials-laravel.md): the same on Laravel
 - [Trials, round 8](docs/trials-rails.md): the same on Ruby on Rails
+- [Trials, round 9](docs/trials-go.md): the same on Go
 - [Scenario](docs/scenario.md): one feature, from building to reviewing
 - [Review research](docs/review-research.md): the review bottleneck, what exists, the gap
 - [Code-to-English research](docs/research.md): line-level English and prior work
@@ -124,7 +126,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 
 - Fewer false alarms, more money/login/data risks caught ([backlog](docs/trials.md))
 - A GitHub Action that posts the summary on every PR
-- More stacks: Go ([order and why](docs/languages.md))
+- Checks the trials still miss: old data under new rules, money paths ([trials](docs/trials-rails.md))
 - Zoom into a function and read it line by line in English ([prototype](prototype/))
 
 ## Development

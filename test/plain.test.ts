@@ -1786,3 +1786,240 @@ chk('P4.1', { ...routes('  resources :orders, only: [:destroy]'), 'app/controlle
   has(c, 'Your database now stores line items. Each one belongs to an order.')
   console.log('ok (rails)')
 }
+
+// Go (2026-10-28): main() run as far as routes go; chi / gin / echo / net/http middleware rules; checks read structurally; writes, Stripe, migrations
+{
+  const G: Record<string, string> = {
+    'go.mod': 'module example.com/shop\n\ngo 1.23\n\nrequire github.com/go-chi/chi/v5 v5.2.0\n',
+    'migrations/000001_orders.up.sql': 'create table orders (id serial primary key, total int not null, status text);\n',
+  }
+  const auth = '\nfunc requireAuth(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tc, err := r.Cookie("session")\n\t\tif err != nil {\n\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\t_ = c\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n'
+  const handlers = '\nfunc createOrder(w http.ResponseWriter, r *http.Request) {\n\tdb.ExecContext(r.Context(), "INSERT INTO orders (total) VALUES ($1)", 10)\n}\n\nfunc listOrders(w http.ResponseWriter, r *http.Request) {\n\tdb.QueryContext(r.Context(), "SELECT id FROM orders")\n}\n'
+  const app = (imports: string, body: string, extra = '') => ({ 'main.go': `package main\n\nimport (\n\t"net/http"\n${imports}\n)\n\nfunc main() {\n${body}\n}\n${auth}${handlers}${extra}` })
+  const gc = (files: Record<string, string>, base = G) => card(base, { ...base, ...files })
+  const has = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(c.includes(x), `go: missing "${x}"\n${c}`) }
+  const not = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(!c.includes(x), `go: unexpected "${x}"\n${c}`) }
+  const chi = '\t"github.com/go-chi/chi/v5"'
+  // chi: a group's Use covers its routes; a route outside it is open
+  let c = gc(app(chi, '\tr := chi.NewRouter()\n\tr.Get("/orders", listOrders)\n\tr.Group(func(r chi.Router) {\n\t\tr.Use(requireAuth)\n\t\tr.Post("/orders/new", createOrder)\n\t})\n\thttp.ListenAndServe(":8080", r)'))
+  has(c, 'saves new orders and requires login ✓', 'lists orders and works without logging in')
+  // a check that answers 401 but doesn't return: not a check, and a problem
+  c = gc({ 'main.go': app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)')['main.go'].replace('\t\t\treturn\n', '') })
+  has(c, "doesn't stop the request"); not(c, 'requires login ✓')
+  // jwtauth: Verifier alone turns nobody away; Authenticator does
+  const jwt = '\t"github.com/go-chi/jwtauth/v5"\n' + chi
+  has(gc(app(jwt, '\tr := chi.NewRouter()\n\tr.Use(jwtauth.Verifier(tokenAuth))\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)')), 'Anyone can use the orders part')
+  has(gc(app(jwt, '\tr := chi.NewRouter()\n\tr.Use(jwtauth.Verifier(tokenAuth))\n\tr.Use(jwtauth.Authenticator(tokenAuth))\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)')), 'saves new orders and requires login ✓')
+  // gin: Use covers only the routes registered after it; a group made before it keeps what it had
+  const gin = '\t"github.com/gin-gonic/gin"'
+  const ginAuth = '\nfunc AuthRequired() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tif c.GetHeader("Authorization") == "" {\n\t\t\tc.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "login"})\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t}\n}\n'
+  const ginH = '\nfunc createOrderGin(c *gin.Context) {\n\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n}\n'
+  c = gc(app(gin, '\tr := gin.Default()\n\tr.POST("/early", createOrderGin)\n\tr.Use(AuthRequired())\n\tr.POST("/orders", createOrderGin)\n\tr.Run()', ginAuth + ginH))
+  has(c, '/early', 'Anyone can use the early part'); has(c, 'saves new orders and requires login ✓')
+  // gin: c.JSON(401) without Abort lets the handler run
+  c = gc(app(gin, '\tr := gin.Default()\n\tr.Use(AuthRequired())\n\tr.POST("/orders", createOrderGin)\n\tr.Run()', ginAuth.replace('c.AbortWithStatusJSON(http.StatusUnauthorized', 'c.JSON(http.StatusUnauthorized') + ginH))
+  has(c, "doesn't stop the request", 'c.AbortWithStatusJSON'); not(c, 'requires login ✓')
+  // echo: e.Use covers every route, whatever the order
+  has(gc(app('\t"github.com/labstack/echo/v4"\n\techojwt "github.com/labstack/echo-jwt/v4"', '\te := echo.New()\n\te.POST("/orders", createOrderEcho)\n\te.Use(echojwt.WithConfig(cfg))\n\te.Start(":8080")', '\nfunc createOrderEcho(c echo.Context) error {\n\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n\treturn nil\n}\n')), 'saves new orders and requires login ✓')
+  // net/http: a wrapped handler, and a wrapped mux
+  has(gc(app('', '\tmux := http.NewServeMux()\n\tmux.HandleFunc("POST /orders", requireAuth(http.HandlerFunc(createOrder)).ServeHTTP)\n\tmux.Handle("POST /orders/new", requireAuth(http.HandlerFunc(createOrder)))\n\thttp.ListenAndServe(":8080", mux)')), '/orders/new', 'requires login ✓')
+  has(gc(app('', '\tmux := http.NewServeMux()\n\tmux.HandleFunc("POST /orders", createOrder)\n\thttp.ListenAndServe(":8080", requireAuth(mux))')), 'saves new orders and requires login ✓')
+  // go.mod older than 1.22 with method patterns: the routes never match
+  has(gc(app('', '\tmux := http.NewServeMux()\n\tmux.HandleFunc("POST /orders", createOrder)\n\thttp.ListenAndServe(":8080", mux)'), { ...G, 'go.mod': G['go.mod'].replace('go 1.23', 'go 1.21') }), 'Your go.mod says go 1.21')
+  // routes registered in another package, through a router passed on
+  c = gc({ ...app(chi + '\n\t"example.com/shop/internal/api"', '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tapi.Register(r)\n\thttp.ListenAndServe(":8080", r)'),
+    'internal/api/api.go': 'package api\n\nimport "github.com/go-chi/chi/v5"\n\nfunc Register(r chi.Router) {\n\tr.Delete("/orders/{id}", deleteOrder)\n}\n\nfunc deleteOrder(w http.ResponseWriter, r *http.Request) {\n\tdb.ExecContext(r.Context(), "DELETE FROM orders WHERE id = $1", 1)\n}\n' })
+  has(c, 'deletes orders and requires login ✓', '/orders/[id]')
+  // migrations: the step; by itself when main runs them; GORM's AutoMigrate never drops a column
+  c = gc({ ...app(chi, '\tr := chi.NewRouter()\n\thttp.ListenAndServe(":8080", r)'), 'migrations/000002_x.up.sql': 'alter table orders add column note text;\n' })
+  has(c, 'Apply 000002_x.up.sql to your live database before the new code goes live (`migrate')
+  has(gc({ ...app(chi, '\tm, _ := migrate.New("file://migrations", os.Getenv("DATABASE_URL"))\n\tm.Up()\n\tr := chi.NewRouter()\n\thttp.ListenAndServe(":8080", r)'), 'migrations/000002_x.up.sql': 'alter table orders add column note text;\n' }), 'will change your live database by itself the next time the app starts')
+  const gorm = (fields: string) => ({ 'models.go': `package main\n\ntype Order struct {\n\tgorm.Model\n${fields}\n}\n\nfunc setup() {\n\tdb.AutoMigrate(&Order{})\n}\n` })
+  const G0 = { 'go.mod': G['go.mod'] }
+  c = card({ ...G0, ...gorm('\tTotal int\n\tNote string') }, { ...G0, ...gorm('\tTotal int') })
+  has(c, 'AutoMigrate leaves that column and its data in the database'); not(c, 'deleted for good')
+  // Stripe, required settings
+  c = gc(app(chi + '\n\t"github.com/stripe/stripe-go/v82/checkout/session"', '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/pay", pay)\n\thttp.ListenAndServe(":8080", r)',
+    '\nfunc pay(w http.ResponseWriter, r *http.Request) {\n\tkey := mustEnv("STRIPE_SECRET_KEY")\n\t_ = key\n\ts, _ := session.New(&stripe.CheckoutSessionParams{})\n\t_ = s\n}\n'))
+  has(c, 'charges customers 💰', 'Add STRIPE_SECRET_KEY to your hosting settings')
+  // a hand-written call to Stripe's refunds API
+  has(gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/orders/{id}/refund", refund)\n\thttp.ListenAndServe(":8080", r)', '\nfunc refund(w http.ResponseWriter, r *http.Request) {\n\treq, _ := http.NewRequest("POST", "https://api.stripe.com/v1/refunds", nil)\n\thttp.DefaultClient.Do(req)\n}\n')), 'asks Stripe to create a refund')
+  console.log('ok (go)')
+}
+
+// Review 24 (Go): each a case that used to be wrong (library sources settled them); two known gaps aside
+{
+const G: Record<string, string> = {
+  'go.mod': 'module example.com/shop\n\ngo 1.23\n\nrequire github.com/go-chi/chi/v5 v5.2.0\n',
+  'migrations/000001_orders.up.sql': 'create table orders (id serial primary key, total int not null, status text);\n',
+}
+const auth = '\nfunc requireAuth(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tc, err := r.Cookie("session")\n\t\tif err != nil {\n\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\t_ = c\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n'
+const handlers = '\nfunc createOrder(w http.ResponseWriter, r *http.Request) {\n\tdb.ExecContext(r.Context(), "INSERT INTO orders (total) VALUES ($1)", 10)\n}\n\nfunc listOrders(w http.ResponseWriter, r *http.Request) {\n\tdb.QueryContext(r.Context(), "SELECT id FROM orders")\n}\n'
+const app = (imports: string, body: string, extra = '', withAuth = true) => ({ 'main.go': `package main\n\nimport (\n\t"net/http"\n${imports}\n)\n\nfunc main() {\n${body}\n}\n${withAuth ? auth : ''}${handlers}${extra}` })
+const gc = (files: Record<string, string>, base = G) => card(base, { ...base, ...files })
+const chi = '\t"github.com/go-chi/chi/v5"'
+const gin = '\t"github.com/gin-gonic/gin"'
+const echo = '\t"github.com/labstack/echo/v4"'
+
+const F: [string, string, () => string, (c: string) => boolean][] = []   // [id, expected, card, isBug]
+const mw = (name: string, param: string, inner: string) => `\nfunc ${name}(${param} http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n${inner}\n\t})\n}\n`
+const chiApp = (use: string, route: string, extra: string, imports = chi) => app(imports, `\tr := chi.NewRouter()\n\tr.Use(${use})\n${route}\n\thttp.ListenAndServe(":8080", r)`, extra)
+const POST = '\tr.Post("/orders", createOrder)', GET = '\tr.Get("/orders", listOrders)'
+const ginH = '\nfunc createOrderGin(c *gin.Context) {\n\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n}\n'
+const ginApp = (mwSrc: string, use = 'AuthRequired()') => app(gin, `\tr := gin.Default()\n\tr.Use(${use})\n\tr.POST("/orders", createOrderGin)\n\tr.Run()`, mwSrc + ginH)
+const LOGIN = (c: string) => c.includes('requires login ✓'), OPEN = (c: string) => /works without logging in|Anyone can use/.test(c)
+
+// 1a optional auth: deny nested under "if a token/cookie is present"
+F.push(['1a optional auth', 'no login claim', () => gc(chiApp('loadUser', POST, mw('loadUser', 'next', '\t\tc, err := r.Cookie("session")\n\t\tif err == nil {\n\t\t\tu, err := lookupSession(c.Value)\n\t\t\tif err != nil {\n\t\t\t\thttp.Error(w, "session expired", http.StatusUnauthorized)\n\t\t\t\treturn\n\t\t\t}\n\t\t\tr = r.WithContext(context.WithValue(r.Context(), userKey, u))\n\t\t}\n\t\tnext.ServeHTTP(w, r)'))), LOGIN])
+// 1b deny condition with an exemption (&&)
+F.push(['1b exemption in condition', 'no login claim for /public/orders', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireLogin)\n\tr.Post("/public/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)', mw('requireLogin', 'next', '\t\t_, err := r.Cookie("session")\n\t\tif !strings.HasPrefix(r.URL.Path, "/public/") && err != nil {\n\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)'))), LOGIN])
+// 1c AUTHY too broad: business-rule 403, CSRF check
+F.push(['1c business 403 on "account"', 'public deposit route flagged', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Post("/accounts/{id}/deposit", deposit)\n\thttp.ListenAndServe(":8080", r)', '\nfunc deposit(w http.ResponseWriter, r *http.Request) {\n\taccount := loadAccount(chi.URLParam(r, "id"))\n\tif account.Locked {\n\t\thttp.Error(w, "this account is locked", http.StatusForbidden)\n\t\treturn\n\t}\n\tdb.ExecContext(r.Context(), "UPDATE accounts SET balance = balance + $1 WHERE id = $2", 10, 1)\n}\n'), { ...G, 'migrations/000002_accounts.up.sql': 'create table accounts (id serial primary key, balance int not null, locked boolean);\n' }), LOGIN])
+F.push(['1c CSRF double-submit', 'no login claim', () => gc(chiApp('csrfCheck', POST, mw('csrfCheck', 'next', '\t\tc, err := r.Cookie("csrf_token")\n\t\tif err != nil || r.Header.Get("X-CSRF-Token") != c.Value {\n\t\t\thttp.Error(w, "forbidden", http.StatusForbidden)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)'))), LOGIN])
+F.push(['1c gorilla store.Get err', 'no login claim (Get returns err==nil with no cookie)', () => gc(chiApp('requireLogin', POST, mw('requireLogin', 'next', '\t\tsession, err := store.Get(r, "session")\n\t\tif err != nil {\n\t\t\thttp.Error(w, "forbidden", http.StatusForbidden)\n\t\t\treturn\n\t\t}\n\t\t_ = session\n\t\tnext.ServeHTTP(w, r)'))), LOGIN])
+// 2 gin: deny without Abort (Redirect / Status) still runs the handler
+const ginRedir = '\nfunc AuthRequired() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tif sessions.Default(c).Get("user") == nil {\n\t\t\tc.Redirect(http.StatusFound, "/login")\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t}\n}\n'
+F.push(['2 gin Redirect no Abort', '"doesn\'t stop the request" problem, no login claim', () => gc(ginApp(ginRedir)), LOGIN])
+F.push(['2 gin Status no Abort', 'same', () => gc(ginApp(ginRedir.replace('c.Redirect(http.StatusFound, "/login")', 'c.Status(http.StatusUnauthorized)'))), LOGIN])
+// 3 exemption loop/switch not seen as an escape when the next var isn't named next / c
+F.push(['3 for-exemption, param h', 'no login claim for exempted /orders', () => gc(chiApp('authMiddleware', POST, '\nvar public = []string{"/orders"}\n' + mw('authMiddleware', 'h', '\t\tfor _, p := range public {\n\t\t\tif strings.HasPrefix(r.URL.Path, p) {\n\t\t\t\th.ServeHTTP(w, r)\n\t\t\t\treturn\n\t\t\t}\n\t\t}\n\t\tif _, err := r.Cookie("session"); err != nil {\n\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\th.ServeHTTP(w, r)'))), LOGIN])
+F.push(['3 gin switch-exemption, ctx', 'no login claim', () => gc(ginApp('\nfunc AuthRequired() gin.HandlerFunc {\n\treturn func(ctx *gin.Context) {\n\t\tswitch ctx.FullPath() {\n\t\tcase "/orders":\n\t\t\tctx.Next()\n\t\t\treturn\n\t\t}\n\t\tif ctx.GetHeader("Authorization") == "" {\n\t\t\tctx.AbortWithStatus(http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tctx.Next()\n\t}\n}\n')), LOGIN])
+// 4 library names beat code / unique-method fallback
+const mwPkg = 'package middleware\n\nimport "net/http"\n\nfunc RequireAuth(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tif _, err := r.Cookie("session"); err != nil {\n\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n\nfunc JWTParser(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n'
+const own = (use: string, route: string, pkg = 'middleware') => ({ ...chiApp(use, route, '', chi + `\n\t"example.com/shop/internal/${pkg}"`), [`internal/${pkg}/auth.go`]: mwPkg.replace('package middleware', `package ${pkg}`) })
+F.push(['4 own middleware.JWTParser (never rejects)', 'no login claim', () => gc(own('middleware.JWTParser', POST)), LOGIN])
+F.push(['4 echojwt Skipper', 'no login claim (Skipper lets all through)', () => gc(app(echo + '\n\techojwt "github.com/labstack/echo-jwt/v4"', '\te := echo.New()\n\te.Use(echojwt.WithConfig(echojwt.Config{SigningKey: []byte(os.Getenv("JWT_SECRET")), Skipper: func(c echo.Context) bool { return true }}))\n\te.POST("/orders", createOrderEcho)\n\te.Start(":8080")', '\nfunc createOrderEcho(c echo.Context) error {\n\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n\treturn nil\n}\n')), LOGIN])
+F.push(['4 rs/cors c.Handler -> own Guard.Handler', 'public route, no login claim', () => gc({ ...app(chi + '\n\t"github.com/rs/cors"', '\tc := cors.New(cors.Options{AllowedOrigins: []string{"https://myshop.com"}})\n\tr := chi.NewRouter()\n\tr.Use(c.Handler)\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)'), 'internal/auth/guard.go': 'package auth\n\nimport "net/http"\n\ntype Guard struct{}\n\nfunc (g *Guard) Handler(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tif _, err := r.Cookie("session"); err != nil {\n\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n' }), LOGIN])
+// 5 real login called open
+F.push(['5 own middleware.RequireAuth', 'requires login ✓', () => gc(own('middleware.RequireAuth', GET)), OPEN])
+F.push(['5 own handlers.RequireAuth', 'requires login ✓', () => gc(own('handlers.RequireAuth', GET, 'handlers')), OPEN])
+F.push(['5 positive form (if ok { next; return }; deny)', 'requires login ✓', () => gc(chiApp('requireLogin', GET, mw('requireLogin', 'next', '\t\tif isAuthenticated(r) {\n\t\t\tnext.ServeHTTP(w, r)\n\t\t\treturn\n\t\t}\n\t\thttp.Redirect(w, r, "/login", http.StatusSeeOther)'))), OPEN])
+F.push(['5 deny via helper writeError(w, 401, ...)', 'requires login ✓ (or unknown)', () => gc(chiApp('requireUser', GET, mw('requireUser', 'next', '\t\tif _, err := r.Cookie("session"); err != nil {\n\t\t\twriteError(w, http.StatusUnauthorized, "login required")\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)'))), OPEN])
+F.push(['5 switch-based check', 'requires login ✓', () => gc(chiApp('requireLogin', GET, mw('requireLogin', 'next', '\t\tswitch {\n\t\tcase r.Header.Get("Authorization") == "":\n\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)'))), OPEN])
+F.push(['5 if/else (correct code)', 'requires login ✓, no problem', () => gc(chiApp('requireLogin', GET, mw('requireLogin', 'next', '\t\tif _, err := r.Cookie("session"); err != nil {\n\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t} else {\n\t\t\tnext.ServeHTTP(w, r)\n\t\t}'))), c => OPEN(c) && c.includes("doesn't stop the request")])
+const gf = '\nfunc AuthRequired(sm *Sessions) gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tif sm.GetString(c.Request.Context(), "user") == "" {\n\t\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t}\n}\n'
+F.push(['5 middleware factory with a dep: AuthRequired(sm)', 'requires login ✓', () => gc(ginApp(gf, 'AuthRequired(sm)')), OPEN])
+F.push(['5 3-level factory RequireUser(store) with cookie err check', 'requires login ✓', () => gc(chiApp('RequireUser(store)', GET, '\nfunc RequireUser(st *Store) func(http.Handler) http.Handler {\n\treturn func(next http.Handler) http.Handler {\n\t\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\t\tc, err := r.Cookie("session")\n\t\t\tif err != nil {\n\t\t\t\thttp.Error(w, "please log in", http.StatusUnauthorized)\n\t\t\t\treturn\n\t\t\t}\n\t\t\t_ = c\n\t\t\tnext.ServeHTTP(w, r)\n\t\t})\n\t}\n}\n')), OPEN])
+F.push(['5 log.Fatal(http.ListenAndServe(addr, requireAuth(mux)))', 'requires login ✓', () => gc(app('', '\tmux := http.NewServeMux()\n\tmux.HandleFunc("GET /orders", listOrders)\n\tlog.Fatal(http.ListenAndServe(":8080", requireAuth(mux)))')), OPEN])
+F.push(['5 &http.Server{Handler: requireAuth(mux)}', 'requires login ✓', () => gc(app('', '\tmux := http.NewServeMux()\n\tmux.HandleFunc("GET /orders", listOrders)\n\tsrv := &http.Server{Addr: ":8080", Handler: requireAuth(mux)}\n\tsrv.ListenAndServe()')), OPEN])
+F.push(['5 router func returns requireAuth(mux)', 'requires login ✓', () => gc(app(chi, '\th := newRouter()\n\thttp.ListenAndServe(":8080", h)', '\nfunc newRouter() http.Handler {\n\tmux := http.NewServeMux()\n\tmux.HandleFunc("GET /orders", listOrders)\n\treturn requireAuth(mux)\n}\n')), OPEN])
+F.push(['5 sub-mux wrapped: mux.Handle("/admin/", requireAuth(admin))', 'admin route requires login ✓, no phantom /admin', () => gc(app('', '\tadmin := http.NewServeMux()\n\tadmin.HandleFunc("POST /admin/orders", createOrder)\n\tmux := http.NewServeMux()\n\tmux.Handle("/admin/", requireAuth(admin))\n\thttp.ListenAndServe(":8080", mux)')), c => c.includes('Anyone can use the admin orders')])
+F.push(['5 StripPrefix mount (dead branch)', '/api/orders requires login ✓', () => gc(app('', '\tapi := http.NewServeMux()\n\tapi.HandleFunc("GET /orders", listOrders)\n\tmux := http.NewServeMux()\n\tmux.Handle("/api/", http.StripPrefix("/api", requireAuth(api)))\n\thttp.ListenAndServe(":8080", mux)')), c => !c.includes('/api/orders')])
+F.push(['5 chi Mount("/admin", requireAuth(adminRoutes()))', 'requires login ✓', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Mount("/admin", requireAuth(adminRoutes()))\n\thttp.ListenAndServe(":8080", r)', '\nfunc adminRoutes() http.Handler {\n\tr := chi.NewRouter()\n\tr.Get("/orders", listOrders)\n\treturn r\n}\n')), OPEN])
+// 6 public write routes vanish (card: "No problems spotted")
+const gone = (c: string) => !c.includes('/orders') && c.includes('No problems spotted')
+F.push(['6 http.HandleFunc (DefaultServeMux)', '⚠ Anyone can use orders', () => gc(app('', '\thttp.HandleFunc("POST /orders", createOrder)\n\tlog.Fatal(http.ListenAndServe(":8080", nil))', '', false)), gone])
+F.push(['6 r.With(mw).Post(...) inline', '⚠ Anyone can use orders', () => gc(app(chi + '\n\t"github.com/go-chi/chi/v5/middleware"', '\tr := chi.NewRouter()\n\tr.With(middleware.Logger).Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)')), gone])
+F.push(['6 http.ListenAndServe(addr, newRouter())', '⚠', () => gc(app(chi, '\tlog.Fatal(http.ListenAndServe(":8080", newRouter()))', '\nfunc newRouter() http.Handler {\n\tr := chi.NewRouter()\n\tr.Post("/orders", createOrder)\n\treturn r\n}\n')), gone])
+F.push(['6 &http.Server{Handler: app.routes()} (Let\'s Go)', '⚠', () => gc({ 'main.go': 'package main\n\nimport "net/http"\n\ntype application struct{}\n\nfunc main() {\n\tapp := &application{}\n\tsrv := &http.Server{Addr: ":4000", Handler: app.routes()}\n\tsrv.ListenAndServe()\n}\n', 'routes.go': 'package main\n\nimport "net/http"\n\nfunc (app *application) routes() http.Handler {\n\tmux := http.NewServeMux()\n\tmux.HandleFunc("POST /orders", app.createOrder)\n\treturn mux\n}\n\nfunc (app *application) createOrder(w http.ResponseWriter, r *http.Request) {\n\tdb.ExecContext(r.Context(), "INSERT INTO orders (total) VALUES ($1)", 10)\n}\n' }), gone])
+F.push(['6 r.Route("/admin", adminRoutes) named fn', '⚠', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Route("/admin", adminRoutes)\n\thttp.ListenAndServe(":8080", r)', '\nfunc adminRoutes(r chi.Router) {\n\tr.Post("/orders", createOrder)\n}\n')), gone])
+F.push(['6 register(r.Group("/api")) gin', '⚠', () => gc(app(gin, '\tr := gin.Default()\n\tregister(r.Group("/api"))\n\tr.Run()', ginH + '\nfunc register(g *gin.RouterGroup) {\n\tg.POST("/orders", createOrderGin)\n}\n')), gone])
+F.push(['6 struct-field router s.routes()', '⚠', () => gc(app(chi, '\ts := &server{router: chi.NewRouter()}\n\ts.routes()\n\thttp.ListenAndServe(":8080", s.router)', '\ntype server struct{ router *chi.Mux }\n\nfunc (s *server) routes() {\n\ts.router.Post("/orders", createOrder)\n}\n')), gone])
+F.push(['6 handler factory createOrderHandler(pool)', 'saves new orders + ⚠', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Post("/orders", createOrderHandler(pool))\n\thttp.ListenAndServe(":8080", r)', '\nfunc createOrderHandler(pool *pgxpool.Pool) http.HandlerFunc {\n\treturn func(w http.ResponseWriter, r *http.Request) {\n\t\tpool.Exec(r.Context(), "INSERT INTO orders (total) VALUES ($1)", 10)\n\t}\n}\n')), c => c.includes('accepts requests') && !c.includes('Anyone can use')])
+// 7 migrations
+const d1 = { 'package.json': '{"dependencies":{"hono":"4"}}', 'migrations/0001_init.sql': 'CREATE TABLE orders (id INTEGER PRIMARY KEY, total INTEGER);\n', 'src/index.ts': "export default {}\n" }
+F.push(['7 D1/JS repo migrations/0002.sql', 'no golang-migrate step (HEAD: "The agent added migrations/0002_note.sql")', () => card(d1, { ...d1, 'migrations/0002_note.sql': 'ALTER TABLE orders ADD COLUMN note TEXT;\n' }), c => c.includes('migrate -path')])
+const rust = { 'Cargo.toml': '[package]\nname="x"\n', 'migrations/20240101000000_init.up.sql': 'CREATE TABLE orders (id BIGSERIAL PRIMARY KEY);\n', 'src/main.rs': 'fn main() {}\n' }
+F.push(['7 Rust sqlx .up.sql', 'no golang-migrate step', () => card(rust, { ...rust, 'migrations/20240201000000_note.up.sql': 'ALTER TABLE orders ADD COLUMN note TEXT;\n' }), c => c.includes('migrate -path')])
+const base = { ...G, ...app(chi, '\tr := chi.NewRouter()\n\thttp.ListenAndServe(":8080", r)') }
+const selfM = (extra: Record<string,string>) => card({ ...base, ...extra }, { ...base, ...extra, 'migrations/000002_x.up.sql': 'alter table orders add column note text;\n' })
+F.push(['7 AutoMigrate only in a _test.go', '"Apply ... migrate up" step', () => selfM({ 'store_test.go': 'package main\n\nfunc TestStore(t *testing.T) {\n\tdb.AutoMigrate(&Order{})\n}\n' }), c => c.includes('by itself')])
+F.push(['7 m.Up() only in cmd/migrate/main.go', '"Apply ..." / run cmd/migrate', () => selfM({ 'cmd/migrate/main.go': 'package main\n\nimport "github.com/golang-migrate/migrate/v4"\n\nfunc main() {\n\tm, _ := migrate.New("file://migrations", os.Getenv("DATABASE_URL"))\n\tm.Up()\n}\n' }), c => c.includes('by itself')])
+F.push(['7 goose lowercase "-- +goose down"', 'coupons added, nothing deleted', () => card(base, { ...base, 'migrations/00002_coupons.sql': '-- +goose Up\nCREATE TABLE coupons (id serial primary key, code text not null);\n\n-- +goose down\nDROP TABLE orders;\n' }), c => c.includes('deleted for good')])
+const gm = (f: string) => ({ 'models.go': `package main\n\ntype Order struct {\n\tgorm.Model\n${f}\n}\n\nfunc setup() {\n\tdb.AutoMigrate(&Order{})\n}\n` })
+F.push(['7 GORM model + SQL table: duplicate line', 'one "Orders now also store the note."', () => card({ ...G, ...gm('\tTotal int') }, { ...G, ...gm('\tTotal int\n\tNote string'), 'migrations/000002_note.up.sql': 'alter table orders add column note text;\n' }), c => c.split('Orders now also store the note').length > 2])
+// 8 false alarms / missed: CORS, SQL, env, Stripe
+const corsApp = (opts: string) => gc(app(chi + '\n\t"github.com/go-chi/cors"', `\tr := chi.NewRouter()\n\tr.Use(cors.Handler(cors.Options{\n${opts}\n\t}))\n\tr.Use(requireAuth)\n\tr.Get("/orders", listOrders)\n\thttp.ListenAndServe(":8080", r)`))
+F.push(['8 CORS: commented README line', 'no CORS problem', () => corsApp('\t\tAllowedOrigins:   []string{"https://myshop.com"},\n\t\t// AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },\n\t\tAllowCredentials: true,'), c => c.includes('Any website can make requests')])
+F.push(['8 CORS: "https://*" + credentials (README value)', 'CORS problem', () => corsApp('\t\tAllowedOrigins:   []string{"https://*", "http://*"},\n\t\tAllowCredentials: true,'), c => !c.includes('Any website')])
+F.push(['8 SQL /i on a log message', 'no SQL injection problem', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Get("/orders", listOrders)\n\tlog.Println(fmt.Sprintf("Delete %s requested", "x"))\n\thttp.ListenAndServe(":8080", r)')), c => c.includes('SQL injection')])
+F.push(['8 SQL backtick Sprintf missed', 'SQL injection problem', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Get("/orders", search)\n\thttp.ListenAndServe(":8080", r)', '\nfunc search(w http.ResponseWriter, r *http.Request) {\n\tq := fmt.Sprintf(`SELECT id FROM orders WHERE status = \'%s\'`, r.URL.Query().Get("status"))\n\tdb.QueryContext(r.Context(), q)\n}\n')), c => !c.includes('SQL injection')])
+F.push(['8 env: LookupEnv with default marked required', 'no "Add PORT"', () => gc(app(chi, '\tport, ok := os.LookupEnv("PORT")\n\tif !ok {\n\t\tport = "8080"\n\t}\n\tdb, err := sql.Open("pgx", dsn)\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}\n\t_ = db\n\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Get("/orders", func(w http.ResponseWriter, r *http.Request) { _ = os.Getenv("PORT") })\n\thttp.ListenAndServe(":"+port, r)')), c => c.includes('Add PORT')])
+F.push(['8 env tag required never surfaces', '"Add STRIPE_SECRET_KEY"', () => gc({ ...app(chi, '\tcfg := load()\n\t_ = cfg\n\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)'), 'config.go': 'package main\n\ntype Config struct {\n\tStripeKey string `env:"STRIPE_SECRET_KEY,required"`\n}\n\nfunc load() Config {\n\tvar c Config\n\tif err := env.Parse(&c); err != nil {\n\t\tpanic(err)\n\t}\n\treturn c\n}\n' }), c => !c.includes('STRIPE_SECRET_KEY')])
+F.push(['8 Stripe client.API not money', 'charges customers 💰', () => gc(app(chi + '\n\t"github.com/stripe/stripe-go/v76"\n\t"github.com/stripe/stripe-go/v76/client"', '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/pay", pay)\n\thttp.ListenAndServe(":8080", r)', '\nfunc pay(w http.ResponseWriter, r *http.Request) {\n\tsc := &client.API{}\n\tsc.Init(os.Getenv("STRIPE_SECRET_KEY"), nil)\n\tsc.CheckoutSessions.New(&stripe.CheckoutSessionParams{})\n}\n')), c => !c.includes('💰')])
+F.push(['8 sk_live_ literal in .go', 'Unsafe: secret in code', () => gc(app(chi + '\n\t"github.com/stripe/stripe-go/v82"', '\tstripe.Key = "' + ['sk', 'live', '51HxQ2bLkdfj3l4kj5lk6j7lk8j9lk0jlkj'].join('_') + '"\n\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Get("/orders", listOrders)\n\thttp.ListenAndServe(":8080", r)')), c => !/secret|key is written/i.test(c)])
+F.push(['8 sqlc UpdateOrderStatus write missed', 'changes orders', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Post("/orders/{id}/status", h.updateStatus)\n\thttp.ListenAndServe(":8080", r)', '\ntype Handler struct{ queries *db.Queries }\n\nfunc (h *Handler) updateStatus(w http.ResponseWriter, r *http.Request) {\n\th.queries.UpdateOrderStatus(r.Context(), db.UpdateOrderStatusParams{})\n}\n')), c => c.includes('accepts requests')])
+// 9 duplicate trap report
+F.push(['9 401 without return reported twice', 'one ✖', () => { const f = chiApp('requireAuth', POST, ''); f['main.go'] = f['main.go'].replace('\t\t\treturn\n', ''); return gc(f) }, c => c.split("doesn't stop the request").length > 2])
+
+  const GAPS = /^6 (register\(r\.Group|struct-field router)/   // routers handed over as a call's argument or kept in a struct field: not read yet (a miss, never a false ✓)
+  for (const [id, exp, run, isBug] of F) { if (GAPS.test(id)) continue; const c = run(); assert.ok(!isBug(c), `review 24 ${id}: expected ${exp}\n${c}`) }
+  console.log('ok (review 24)')
+  // Review 24, round 3 (Go): gin middleware without Abort, wherever it stands; reset links; a struct named Handler; reading a Stripe session
+  {
+const F: [string, string, () => string, (c: string) => boolean][] = []
+const LOGIN = (c: string) => c.includes('requires login ✓')
+const ginH = '\nfunc createOrderGin(c *gin.Context) {\n\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n}\n'
+const named = '\nfunc AuthMiddleware(c *gin.Context) {\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.JSON(http.StatusUnauthorized, gin.H{"error": "login"})\n\t\treturn\n\t}\n\tc.Next()\n}\n'
+const lit = 'func(c *gin.Context) {\n\t\tif c.GetHeader("Authorization") == "" {\n\t\t\tc.JSON(http.StatusUnauthorized, gin.H{"error": "login"})\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t}'
+// A. gin middleware without Abort read as a handler -> "requires login ✓" (round 2: unknown + trap)
+F.push(['A1 named gin mw, r.Use(AuthMiddleware)', 'trap, no login claim', () => gc(app(gin, '\tr := gin.Default()\n\tr.Use(AuthMiddleware)\n\tr.POST("/orders", createOrderGin)\n\tr.Run()', named + ginH)), LOGIN])
+F.push(['A2 named gin mw, route-level r.POST(p, AuthMiddleware, h)', 'same', () => gc(app(gin, '\tr := gin.Default()\n\tr.POST("/orders", AuthMiddleware, createOrderGin)\n\tr.Run()', named + ginH)), LOGIN])
+F.push(['A3 named gin mw redirect, r.Use(RequireLogin)', 'same', () => gc(app(gin, '\tr := gin.Default()\n\tr.Use(RequireLogin)\n\tr.POST("/orders", createOrderGin)\n\tr.Run()', '\nfunc RequireLogin(c *gin.Context) {\n\tif sessions.Default(c).Get("user") == nil {\n\t\tc.Redirect(http.StatusFound, "/login")\n\t\treturn\n\t}\n\tc.Next()\n}\n' + ginH)), LOGIN])
+F.push(['A4 gin literal as group middleware r.Group(p, func...)', 'same', () => gc(app(gin, `\tr := gin.Default()\n\tapi := r.Group("/api", ${lit})\n\tapi.POST("/orders", createOrderGin)\n\tr.Run()`, ginH)), LOGIN])
+F.push(['A5 gin literal as route middleware', 'same', () => gc(app(gin, `\tr := gin.Default()\n\tr.POST("/orders", ${lit}, createOrderGin)\n\tr.Run()`, ginH)), LOGIN])
+// B. secret-link handlers called "requires login ✓"
+const users = { ...G, 'migrations/000002_users.up.sql': 'create table users (id serial primary key, email text, password_hash text);\n' }
+F.push(['B password reset via emailed token', 'no login claim (anyone with the link)', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Post("/password/reset", resetPassword)\n\thttp.ListenAndServe(":8080", r)', '\nfunc resetPassword(w http.ResponseWriter, r *http.Request) {\n\tif err := validateResetToken(r.URL.Query().Get("token")); err != nil {\n\t\thttp.Error(w, "invalid or expired link", http.StatusUnauthorized)\n\t\treturn\n\t}\n\tdb.ExecContext(r.Context(), "UPDATE users SET password_hash = $1 WHERE id = $2", "x", 1)\n}\n'), users), LOGIN])
+// C. factory taking a *Handler struct is mistaken for middleware (takesHandler regex) -> public write unflagged
+F.push(['C createOrderHandler(h *Handler) factory', 'saves new orders + ⚠ Anyone can use', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Post("/orders", createOrderHandler(app))\n\thttp.ListenAndServe(":8080", r)', '\ntype Handler struct{ pool *pgxpool.Pool }\n\nfunc createOrderHandler(h *Handler) http.HandlerFunc {\n\treturn func(w http.ResponseWriter, r *http.Request) {\n\t\th.pool.Exec(r.Context(), "INSERT INTO orders (total) VALUES ($1)", 10)\n\t}\n}\n')), c => !c.includes('Anyone can use')])
+// D. Stripe URL rule: retrieving a session = charging
+F.push(['D GET api.stripe.com/v1/checkout/sessions/{id}', 'no 💰 (a read)', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Get("/checkout/success", success)\n\thttp.ListenAndServe(":8080", r)', '\nfunc success(w http.ResponseWriter, r *http.Request) {\n\treq, _ := http.NewRequest("GET", "https://api.stripe.com/v1/checkout/sessions/"+r.URL.Query().Get("session_id"), nil)\n\thttp.DefaultClient.Do(req)\n}\n')), c => c.includes('💰')])
+    for (const [id, exp, run, isBug] of F) { const c = run(); assert.ok(!isBug(c), `review 24 r3 ${id}: expected ${exp}\n${c}`) }
+    console.log('ok (review 24, round 3)')
+  }
+  // Review 24, round 4 (Go): echo's handler literal comes first; reading a Stripe refund; if/else in a final handler; user.EmailConfirmed
+  {
+const LOGIN = (c: string) => c.includes('requires login ✓'), TRAP = (c: string) => c.includes("doesn't stop the request")
+const em = echo + '\n\t"github.com/labstack/echo/v4/middleware"'
+const gin2 = (body: string) => gc(app(gin, '\tr := gin.Default()\n\tr.POST("/orders", createOrderGin)\n\tr.Run()', `\nfunc createOrderGin(c *gin.Context) {\n\tif c.GetString("userID") == "" {\n\t\tc.JSON(http.StatusUnauthorized, gin.H{"error": "please log in"})\n\t} else {\n${body}\n}\n`))
+const C: [string, string, (c: string) => boolean][] = [
+  ['echo handler literal + route middleware, if/else', gc(app(em, '\te := echo.New()\n\te.POST("/orders", func(c echo.Context) error {\n\t\tif c.Get("user") == nil {\n\t\t\tc.JSON(http.StatusUnauthorized, map[string]string{"error": "login"})\n\t\t} else {\n\t\t\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n\t\t}\n\t\treturn nil\n\t}, middleware.Logger())\n\te.Start(":8080")')), c => !TRAP(c) && LOGIN(c)],
+  ['GET api.stripe.com/v1/refunds/{id}', gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Get("/refunds/{id}", showRefund)\n\thttp.ListenAndServe(":8080", r)', '\nfunc showRefund(w http.ResponseWriter, r *http.Request) {\n\treq, _ := http.NewRequest("GET", "https://api.stripe.com/v1/refunds/"+chi.URLParam(r, "id"), nil)\n\thttp.DefaultClient.Do(req)\n}\n')), c => !/create a refund|refunds money/i.test(c)],
+  ['gin final handler if {401} else {work}', gin2('\t\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n\t}'), LOGIN],
+  ['gin if/else, then the work after it', gin2('\t\tlog.Println("ok")\n\t}\n\tdb.Exec("INSERT INTO orders (total) VALUES (1)")'), c => !LOGIN(c)],
+  ['net/http if/else, then the work after it', gc(app(chi, '\tr := chi.NewRouter()\n\tr.Post("/orders", mk)\n\thttp.ListenAndServe(":8080", r)', '\nfunc mk(w http.ResponseWriter, r *http.Request) {\n\tif currentUser(r) == nil {\n\t\thttp.Error(w, "please log in", http.StatusUnauthorized)\n\t} else {\n\t\tlog.Println("ok")\n\t}\n\tdb.ExecContext(r.Context(), "INSERT INTO orders (total) VALUES ($1)", 10)\n}\n')), c => !LOGIN(c) && TRAP(c)],
+  ['user == nil || !user.EmailConfirmed', gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireUser)\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)', '\nfunc requireUser(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tuser := currentUser(r)\n\t\tif user == nil || !user.EmailConfirmed {\n\t\t\thttp.Error(w, "please log in", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n')), LOGIN],
+]
+    for (const [id, c, ok] of C) assert.ok(ok(c), `review 24 r4 ${id}\n${c}`)
+    console.log('ok (review 24, round 4)')
+  }
+
+// Review 24, round 2 (Go): login sources that aren't about who's asking; package middleware in a variable; handlers vs middleware
+  {
+const F: [string, string, () => string, (c: string) => boolean][] = []
+const LOGIN = (c: string) => c.includes('requires login ✓'), TRAP = (c: string) => c.includes("doesn't stop the request")
+const ginH = '\nfunc createOrderGin(c *gin.Context) {\n\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n}\n'
+const mw = (inner: string) => `\nfunc protect(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n${inner}\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n`
+const protectApp = (inner: string) => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(protect)\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)', mw(inner)))
+// A. new false ✓: FROM_LOGIN verify/validate too broad; CSRF exclusion only looks at the if itself
+F.push(['A1 captcha check = login', 'public POST, no login claim', () => protectApp('\t\tif err := verifyTurnstile(r.FormValue("cf-turnstile-response")); err != nil {\n\t\t\thttp.Error(w, "captcha failed", http.StatusForbidden)\n\t\t\treturn\n\t\t}'), LOGIN])
+F.push(['A2 origin check = login', 'no login claim', () => protectApp('\t\tif err := validateOrigin(r); err != nil {\n\t\t\thttp.Error(w, "forbidden", http.StatusForbidden)\n\t\t\treturn\n\t\t}'), LOGIN])
+F.push(['A3 CSRF err from previous statement = login', 'no login claim', () => protectApp('\t\terr := verifyCSRFToken(r)\n\t\tif err != nil {\n\t\t\thttp.Error(w, "forbidden", http.StatusForbidden)\n\t\t\treturn\n\t\t}'), LOGIN])
+// B. regression: scs LoadAndSave on a variable is "unknown" -> public write loses its warning (round 1: LIB_NONE -> ⚠)
+F.push(['B1 r.Use(sessionManager.LoadAndSave)', '⚠ Anyone can use the orders part', () => gc(app(chi + '\n\t"github.com/alexedwards/scs/v2"', '\tsessionManager := scs.New()\n\tr := chi.NewRouter()\n\tr.Use(sessionManager.LoadAndSave)\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)')), c => !c.includes('Anyone can use')])
+F.push(['B2 ListenAndServe(addr, sessionManager.LoadAndSave(mux))', '⚠', () => gc(app('\t"github.com/alexedwards/scs/v2"', '\tsessionManager := scs.New()\n\tmux := http.NewServeMux()\n\tmux.HandleFunc("POST /orders", createOrder)\n\thttp.ListenAndServe(":8080", sessionManager.LoadAndSave(mux))')), c => !c.includes('Anyone can use')])
+// C. regression: requireAuth(handlerVar) now read as a factory -> login lost, facts lost (round 1: requires login ✓)
+F.push(['C requireAuth(ordersHandler) with a handler variable', 'saves new orders and requires login ✓', () => gc(app('', '\tmux := http.NewServeMux()\n\tordersHandler := http.HandlerFunc(createOrder)\n\tmux.Handle("POST /orders", requireAuth(ordersHandler))\n\thttp.ListenAndServe(":8080", mux)')), c => !LOGIN(c)])
+// D. false alarms: traps on correct code
+F.push(['D1 gin final handler: c.JSON(401) + return', 'no problem (nothing runs after the last handler)', () => gc(app(gin, '\tr := gin.Default()\n\tr.POST("/profile", getProfile)\n\tr.Run()', '\nfunc getProfile(c *gin.Context) {\n\tif c.GetString("userID") == "" {\n\t\tc.JSON(http.StatusUnauthorized, gin.H{"error": "please log in"})\n\t\treturn\n\t}\n}\n')), TRAP])
+F.push(['D2 gin AbortWithStatusJSON without return, then c.Next()', 'no problem (Abort sets index=abortIndex)', () => gc(app(gin, '\tr := gin.Default()\n\tr.Use(AuthRequired())\n\tr.POST("/orders", createOrderGin)\n\tr.Run()', '\nfunc AuthRequired() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tif c.GetHeader("Authorization") == "" {\n\t\t\tc.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "login"})\n\t\t}\n\t\tc.Next()\n\t}\n}\n' + ginH)), TRAP])
+F.push(['D3 net/http handler if {401} else {work}', 'no problem', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Get("/orders", myOrders)\n\thttp.ListenAndServe(":8080", r)', '\nfunc myOrders(w http.ResponseWriter, r *http.Request) {\n\tuser := currentUser(r)\n\tif user == nil {\n\t\thttp.Error(w, "please log in", http.StatusUnauthorized)\n\t} else {\n\t\tdb.QueryContext(r.Context(), "SELECT id FROM orders WHERE user_id = $1", user.ID)\n\t}\n}\n')), TRAP])
+// E. regression: inline middleware literals' traps are no longer reported (round 1 reported them)
+F.push(['E1 inline chi middleware, 401 without return', '✖ doesn\'t stop the request', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(func(next http.Handler) http.Handler {\n\t\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\t\tif _, err := r.Cookie("session"); err != nil {\n\t\t\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)\n\t\t\t}\n\t\t\tnext.ServeHTTP(w, r)\n\t\t})\n\t})\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)')), c => !TRAP(c)])
+F.push(['E2 inline gin middleware, JSON(401) without Abort', '✖', () => gc(app(gin, '\tr := gin.Default()\n\tr.Use(func(c *gin.Context) {\n\t\tif c.GetHeader("Authorization") == "" {\n\t\t\tc.JSON(http.StatusUnauthorized, gin.H{"error": "login"})\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t})\n\tr.POST("/orders", createOrderGin)\n\tr.Run()', ginH)), c => !TRAP(c)])
+// F. mux children don't inherit the parent's middleware / server wrap
+F.push(['F1 sub-mux under ListenAndServe(requireAuth(mux))', 'requires login ✓', () => gc(app('', '\tapi := http.NewServeMux()\n\tapi.HandleFunc("POST /api/orders", createOrder)\n\tmux := http.NewServeMux()\n\tmux.Handle("/api/", api)\n\thttp.ListenAndServe(":8080", requireAuth(mux))')), c => c.includes('Anyone can use')])
+F.push(['F2 StripPrefix sub-mux under wrapped root', 'requires login ✓', () => gc(app('', '\tapi := http.NewServeMux()\n\tapi.HandleFunc("POST /orders", createOrder)\n\tmux := http.NewServeMux()\n\tmux.Handle("/api/", http.StripPrefix("/api", api))\n\thttp.ListenAndServe(":8080", requireAuth(mux))')), c => c.includes('Anyone can use')])
+F.push(['F3 std mux mounted in chi after r.Use(requireAuth)', 'requires login ✓', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tlegacy := http.NewServeMux()\n\tlegacy.HandleFunc("POST /orders", createOrder)\n\tr.Mount("/legacy", legacy)\n\thttp.ListenAndServe(":8080", r)')), c => c.includes('Anyone can use')])
+// G. wrong facts / false alarms from new rules
+const users = { ...G, 'migrations/000002_users.up.sql': 'create table users (id serial primary key, email text);\ncreate table sessions (token text primary key, user_id int references users(id));\n' }
+F.push(['G1 q.DeleteUserSessions -> "deletes users"', 'deletes sessions (or nothing)', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/logout-everywhere", h.logoutAll)\n\thttp.ListenAndServe(":8080", r)', '\ntype Handler struct{ queries *db.Queries }\n\nfunc (h *Handler) logoutAll(w http.ResponseWriter, r *http.Request) {\n\th.queries.DeleteUserSessions(r.Context(), 1)\n}\n'), users), c => c.includes('deletes users')])
+F.push(['G2 env:"PORT,required" envDefault:"8080"', 'no "Add PORT" (envDefault satisfies required)', () => gc({ ...app(chi, '\tcfg := load()\n\t_ = cfg\n\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)'), 'config.go': 'package main\n\ntype Config struct {\n\tPort string `env:"PORT,required" envDefault:"8080"`\n}\n\nfunc load() Config {\n\tvar c Config\n\tif err := env.Parse(&c); err != nil {\n\t\tpanic(err)\n\t}\n\treturn c\n}\n' }), c => c.includes('Add PORT')])
+F.push(['G3 go-chi/cors "*" + AllowCredentials', 'no CORS problem (sends literal *, browser blocks credentials)', () => gc(app(chi + '\n\t"github.com/go-chi/cors"', '\tr := chi.NewRouter()\n\tr.Use(cors.Handler(cors.Options{AllowedOrigins: []string{"*"}, AllowCredentials: true}))\n\tr.Use(requireAuth)\n\tr.Get("/orders", listOrders)\n\thttp.ListenAndServe(":8080", r)')), c => c.includes('Any website can make requests')])
+  for (const [id, exp, run, isBug] of F) { const c = run(); assert.ok(!isBug(c), `review 24 r2 ${id}: expected ${exp}\n${c}`) }
+  console.log('ok (review 24, round 2)')
+}
+}
+// "Tests couldn't be executed": the agent didn't run them
+assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. Tests couldn’t be executed because the environment has no Go toolchain installed.' }).includes("didn't run or test"), 'untested: passive')
