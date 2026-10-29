@@ -259,9 +259,11 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     for (const st of sf.statements) if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations)
       if (ts.isIdentifier(d.name) && d.initializer && CLIENT_MAKER.test(d.initializer.getText(sf))) sbClients.add(d.name.text)
   }
+  const inlineMw = new Map<string, string[]>()
+  const scopeAt = (n: ts.Node) => { let x: ts.Node | undefined = n.parent; while (x && !ts.isFunctionLike(x)) x = x.parent; return x ? x.pos : -1 }
   const isGuard = (a: ts.Node) => !fnLike(a) && GUARD.test(a.getText(sf)) && !NOT_GUARD.test(a.getText(sf))
   const addHandler = (server: string, method: string, path: string, mw: readonly ts.Expression[], h: ts.Expression) =>
-    f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard), mw: [...guardMw.get(server) ?? [], ...mw.map(m => m.getText(sf))],
+    f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard), mw: [...guardMw.get(server) ?? [], ...mw.map(m => m.getText(sf))], adminInline: inlineMw.get(`${server}@${scopeAt(h)}`) ?? [],
       handler: ts.isIdentifier(h) ? h.text : undefined, facts: fnLike(h) ? collect(sf, h, empty(printer.printNode(ts.EmitHint.Unspecified, h, sf))) : empty(h.getText(sf)) })
   const labelFor = new Map<string, string>(), boxes: { id?: string; type: string; v?: string; aria: boolean }[] = []
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
@@ -473,6 +475,11 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
           if (arg?.startsWith('/') && (ts.isIdentifier(t) || spec || made)) f.mounts.push({ server: obj, path: arg, target: spec ?? made ?? t.getText(sf),
             guard: guarded.has(obj) || args.slice(1, -1).some(isGuard), guardLike: args.length === 2 && !spec && !made && isGuard(t), mw: [...guardMw.get(obj) ?? [], ...args.slice(1, -1).filter(isGuard).map(a => a.getText(sf))] })
           else if (!arg && args.some(isGuard)) { guarded.add(obj); guardMw.set(obj, [...guardMw.get(obj) ?? [], ...args.filter(isGuard).map(a => a.getText(sf))]) }
+          // (an inline one, `router.use((req, res, next) => ...)`: not a login check by itself, but read for "only admins" on the routes
+          // after it. Only with no path, written straight in a function body or the file (not under an if), not an error handler (four
+          // parameters), and kept by router and enclosing function: two functions' `router`s are different routers)
+          if (args[0] && fnLike(args[0]) && ts.isExpressionStatement(n.parent) && (ts.isSourceFile(n.parent.parent) || ts.isBlock(n.parent.parent) && ts.isFunctionLike(n.parent.parent.parent)))
+            for (const a of args) if (fnLike(a) && (a as ts.ArrowFunction).parameters.length < 4) { const k = `${obj}@${scopeAt(n)}`; inlineMw.set(k, [...inlineMw.get(k) ?? [], a.getText(sf)]) }
         } else if (servers.has(obj) && HTTP.test(last) && arg?.startsWith('/') && args.length > 1) {
           addHandler(obj, last, arg, args.slice(1, -1), args.at(-1)!)
           return   // the handler's facts belong to the route, not to the whole file
@@ -1708,26 +1715,32 @@ export function appFacts(snap: Snap) {
   // whose whole condition does (adminCond), and whose own branch rejects (403, forbidden, a redirect) and stops (return, throw)
   const DENY_NEAR = /\b40[13]\b|[Ff]orbidden|[Uu]nauthori[sz]ed|redirect|\bthrow\b|\babort\b|[Aa]ccess[Dd]enied|PermissionDenied/
   const CONTROL = /\b(?:if|else|for|while|switch|catch|try|do|finally)\b[^{};]*$/
-  const adminText = (t: string) => [...t.matchAll(/\bif\s*\(/g)].some(m => {
+  // (not an error handler, `(err, req, res, next)`: Express skips it on ordinary requests; nor one that sets the user or the role from
+  // what the visitor sends: `req.user.role = req.body.role`)
+  const setsFromRequest = (t: string) => [...t.matchAll(/\b(?:req|request)\.user\b[\w.?!]*\s*=(?!=)\s*([^;\n]+)/g)].some(m => FROM_REQUEST.test(m[1]))
+  const adminText = (t: string) => !setsFromRequest(t) && !/^\s*(?:export\s+)?(?:const\s+\w+\s*=\s*)?(?:async\s*)?(?:function\s*\w*\s*)?\(\s*[\w$]+(?:\s*:[^,)]*)?\s*,\s*[\w$]+(?:\s*:[^,)]*)?\s*,\s*[\w$]+(?:\s*:[^,)]*)?\s*,\s*[\w$]+(?:\s*:[^,)]*)?\s*\)/.test(t) && [...t.matchAll(/\bif\s*\(/g)].some(m => {
     const k = m.index!, open = k + m[0].length - 1
     let d = 0, j = open; for (; j < t.length; j++) { if (t[j] === '(') d++; else if (t[j] === ')' && --d === 0) break }
     const cond = t.slice(open + 1, j), pos = adminPos(cond)
     if (!pos && !adminCond(cond)) return false
     // (the flag's variable set from the request earlier: `const u = req.body`, `const h = req.headers`)
-    const v = cond.match(/^[\s!(]*([\w$]+)/)?.[1], src = v ? t.slice(0, k).match(new RegExp(String.raw`\b(?:const|let|var)\s+${v.replace('$', '\\$')}\s*=\s*([^;\n]+)`))?.[1] : undefined
+    const v = cond.match(/^[\s!(]*([\w$]+)/)?.[1], src = v ? t.slice(0, k).match(new RegExp(String.raw`\b(?:const|let|var)\s+(?:${v.replace('$', '\\$')}|\{[^}]*\b${v.replace('$', '\\$')}\b[^}]*\})\s*=\s*([^;\n]+)`))?.[1] : undefined   // (or destructured: `const { role } = req.query`)
     if (src && (FROM_REQUEST.test(src) || /^\s*(?:req|request)\.(?:query|headers|body|params|cookies)\b/.test(src))) return false
-    const stack: { ctrl: boolean; at: number }[] = []
-    for (let x = 0; x < k; x++) { if (t[x] === '{') stack.push({ ctrl: CONTROL.test(t.slice(Math.max(0, x - 200), x).split(/[;}]/).pop()!), at: x }); else if (t[x] === '}') stack.pop() }
-    if (stack.some(s => s.ctrl)) return false
-    // (nothing before it in the same function lets requests through: `if (req.method === 'GET') return next()`, a bare next())
-    if (/\breturn\b|\bnext\s*\(\s*\)/.test(t.slice((stack.at(-1)?.at ?? -1) + 1, k))) return false
+    const stack: { ctrl: boolean; fn: boolean; at: number }[] = []
+    for (let x = 0; x < k; x++) { if (t[x] === '{') { const before = t.slice(Math.max(0, x - 200), x)
+        stack.push({ ctrl: CONTROL.test(before.split(/[;}]/).pop()!), fn: /=>\s*$|\bfunction\b[^{;]*\)\s*(?::[^{;]*)?$|\)\s*(?::[^{;=]*)?$/.test(before) && !CONTROL.test(before.split(/[;}]/).pop()!), at: x }) } else if (t[x] === '}') stack.pop() }
+    // (not inside another if, loop or try, nor inside a callback: `.then(u => { if (...) ... })` runs later, if at all)
+    if (stack.some(s => s.ctrl) || stack.filter(s => s.fn).length > 1) return false
+    // (nothing before it in the same function lets requests through: `if (req.method === 'GET') return next()`, a bare next(), next
+    // handed on: `.then(next)`)
+    if (/\breturn\b|\bnext\b/.test(t.slice((stack.at(-1)?.at ?? -1) + 1, k))) return false
     const rest = t.slice(j + 1).replace(/^\s*/, '')
     let branch = rest.split(/;|\n/)[0]
     if (rest[0] === '{') { let e = 0, q = 0; for (; q < rest.length; q++) { if (rest[q] === '{') e++; else if (rest[q] === '}' && --e === 0) break } branch = rest.slice(0, q + 1) }
     // (the other way round: admins go on, and the next statement turns everyone else away)
     if (pos) { const after = rest.slice(branch.length).replace(/^[\s;]*/, '').split(/;|\n/)[0]
       return /^return\s+next\s*\(\s*\)|^\{?\s*return\s+next\s*\(\s*\)/.test(branch.replace(/^\{\s*/, '')) && DENY_NEAR.test(after) && /^(return|throw)\b/.test(after) && !/\bnext\s*\(|\?/.test(after) }   // (not `return req.method === 'GET' ? next() : res.status(403)`)
-    return DENY_NEAR.test(branch) && /\breturn\b|\bthrow\b|\bnext\(\s*(?:new\b|create\w*\(|err)/.test(branch) })
+    return DENY_NEAR.test(branch) && /\breturn\b|\bthrow\b|\bnext\(\s*(?:new\b|create\w*\(|err)/.test(branch) && !/\bnext\s*\(\s*\)/.test(branch) })   // (not a 403 that goes on anyway: `return next()`)
   for (const [p, f] of [...files]) {
     const pre = f.handlers.length ? prefix(p) : null
     for (const h of f.handlers) {
@@ -1819,7 +1832,7 @@ export function appFacts(snap: Snap) {
         if (q !== at && new RegExp(String.raw`\b\w+\s+as\s+${n}\b|[{,]\s*\w+\s*:\s*${n}\s*[,}]`).test(files.get(at)?.printed ?? '')) return undefined
         return q ? files.get(q)?.locals.get(n)?.printed : undefined }
       const adminMw = (at: string, m: string) => adminText(readable(at, m) ?? '')
-      if (!h.admin && (mwGuard && h.mw.some(m => adminMw(p, m)) || pre!.guard && pre!.mws.some(x => adminMw(x.p, x.n)))) h.admin = true
+      if (!h.admin && (mwGuard && (h.mw.some(m => adminMw(p, m)) || ((h as { adminInline?: string[] }).adminInline ?? []).some(m => adminText(m))) || pre!.guard && pre!.mws.some(x => adminMw(x.p, x.n)))) h.admin = true
       // (a guard still named for it that plain can't read, requireRole('admin') from a package: it may still be there; one plain
       // reads and finds empty, a gutted requireAdmin, isn't)
       // (or a factory given the role, requireRole('admin'): its test is on a parameter plain doesn't follow)

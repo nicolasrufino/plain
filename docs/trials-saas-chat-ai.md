@@ -774,4 +774,7 @@ cards were made with plain as pushed at that time (commit 6b3f57c).
    to well under the time its largest `max_tokens` takes to write (at 60 tokens a second, with a 1.5× margin) and
    nothing streams. A per-call timeout, a stream flag in a variable, or no cap at all means no guess. Quill p6 gets it.
 5. Changed Socket.IO events (not only new ones) get a line.
-6. "requires login ✓" upgrades to "admins only ✓" when the route's own check is an admin role.
+6. ✅ Done later (review 43, two rounds): an inline `router.use((req, res, next) => …)` admin check now counts for the
+   routes after it (Porch p4's admin routes read "is for admins only ✓"). Only a pathless one written straight in the
+   function, per router. The admin check itself got stricter for every stack that uses it: not inside a callback, no
+   `next()` in the "forbidden" branch or before the check, not an error handler, and not a role the visitor sends.

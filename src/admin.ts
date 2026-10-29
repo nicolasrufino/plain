@@ -14,7 +14,7 @@ export const NOT_ADMIN = new RegExp([
   String.raw`!\s*[\w$.>?()\-]*?(?:hasRole|has_role|hasAnyRole|is_role|isRole)\(\s*['"](?:admin|staff|superuser)['"]`,
 ].join('|'))
 // a flag the visitor sends (?isAdmin=1, a header, the request body) proves nothing
-export const FROM_REQUEST = /\b(?:req|request)\.(?:query|headers|body|params|cookies|GET|POST|data|query_params)\b|\br\.(?:URL|Header|Form|PostForm|Body|FormValue|PathValue)\b|\bc\.(?:Query|Param|GetHeader|PostForm|DefaultQuery)\b|\$request->(?:input|query|header|get|post|boolean)\(|\bparams\[|\bbody\./
+export const FROM_REQUEST = /\b(?:req|request)\.(?:query|headers|body|params|cookies|GET|POST|data|query_params)\b|\b(?:req|request)\.(?:get|header)\s*\(|\br\.(?:URL|Header|Form|PostForm|Body|FormValue|PathValue)\b|\bc\.(?:Query|Param|GetHeader|PostForm|DefaultQuery)\b|\$request->(?:input|query|header|get|post|boolean)\(|\bparams\[|\bbody\./
 // The whole condition turns away non-admins, and nobody else gets past it. `if (!admin ...)` (true for non-admins): no `&&` (an owner,
 // an editor or a GET slips by) and no `!(admin || owner)`. `unless admin ...` / `abort_unless(admin ...)` (true for admins): no `||`.
 export function adminCond(cond: string): boolean {

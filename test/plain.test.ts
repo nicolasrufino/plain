@@ -3830,3 +3830,27 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
     c = card(base, ai(cl, call)); assert.ok(!c.includes('Long AI answers'), `${cl} ${call}: ${c}`) }
   console.log('ok (AI timeouts)')
 }
+// An inline router.use admin check: the routes after it are for admins only
+{
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","@prisma/client":"6.0.0"}}' }
+  const app = (inline: string) => ({ ...ex, 'server.js': `const express = require("express")\nconst { requireAuth } = require("./auth")\nconst app = express()\nconst router = express.Router()\nrouter.use(requireAuth)\nrouter.use(${inline})\nrouter.get("/users", async (req, res) => res.json(await prisma.user.findMany()))\napp.use("/api/admin", router)\napp.listen(3000)\n`, 'auth.js': 'exports.requireAuth = (req, res, next) => { if (!req.user) return res.status(401).end(); next() }\n' })
+  const card = (files: Record<string, string>) => report(new Map(Object.entries(ex)), new Map(Object.entries(files)), { ref: 'main' }).replace(/\s+/g, ' ')
+  let c = card(app('(req, res, next) => {\n  if (req.user.role !== "admin") {\n    res.status(403).json({ error: "no" })\n    return\n  }\n  next()\n}'))
+  assert.ok(c.includes('lists users and is for admins only ✓'), c)
+  // doesn't stop, lets GET through, or lets moderators in too: login only
+  for (const inline of ['(req, res, next) => {\n  if (req.user.role !== "admin") console.log("x")\n  next()\n}', '(req, res, next) => {\n  if (req.method === "GET") return next()\n  if (req.user.role !== "admin") return res.status(403).end()\n  next()\n}',
+    '(req, res, next) => {\n  if (req.user.role !== "admin" && req.user.role !== "moderator") return res.status(403).end()\n  next()\n}']) {
+    c = card(app(inline)); assert.ok(!c.includes('admins only') && c.includes('requires login ✓'), `${inline}: ${c}`) }
+  // (review 43) a path-limited inline, two routers named alike in two functions, an error handler, a check in a callback, next() in the
+  // 403 branch, a role from the query string or a header: no admin ✓
+  for (const inline of ['(err, req, res, next) => {\n  if (req.user.role !== "admin") return res.status(403).end()\n  next(err)\n}', '(req, res, next) => {\n  load(req).then(u => { if (u.role !== "admin") return res.status(403).end() })\n  next()\n}',
+    '(req, res, next) => {\n  if (req.user.role !== "admin") {\n    res.status(403)\n    return next()\n  }\n  next()\n}', '(req, res, next) => {\n  const { role } = req.query\n  if (role !== "admin") return res.status(403).end()\n  next()\n}',
+    '(req, res, next) => {\n  const user = { isAdmin: req.get("x-admin") === "1" }\n  if (!user.isAdmin) return res.status(403).end()\n  next()\n}']) {
+    c = card(app(inline)); assert.ok(!c.includes('admins only'), `${inline}: ${c}`) }
+  c = card(app('(req, res, next) => {\n  req.user.role = req.body.role\n  if (req.user.role !== "admin") return res.status(403).end()\n  next()\n}')); assert.ok(!c.includes('admins only'), `role from body: ${c}`)
+  const pathed = app('(req, res, next) => {\n  if (req.user.role !== "admin") return res.status(403).end()\n  next()\n}'); pathed['server.js'] = pathed['server.js'].replace('router.use((req', 'router.use(["/x"], (req')
+  c = card(pathed); assert.ok(!c.includes('admins only'), `path: ${c}`)
+  const two = { ...ex, 'auth.js': app('')['auth.js'], 'server.js': 'const express = require("express")\nconst { requireAuth } = require("./auth")\nconst app = express()\nfunction adminRouter() {\n  const router = express.Router()\n  router.use(requireAuth)\n  router.use((req, res, next) => {\n    if (req.user.role !== "admin") return res.status(403).end()\n    next()\n  })\n  router.get("/orders", async (req, res) => res.json(await prisma.order.findMany()))\n  return router\n}\nfunction userRouter() {\n  const router = express.Router()\n  router.use(requireAuth)\n  router.get("/users", async (req, res) => res.json(await prisma.user.findMany()))\n  return router\n}\napp.use("/api/admin", adminRouter())\napp.use("/api/me", userRouter())\napp.listen(3000)\n' }
+  c = card(two); assert.ok(c.includes('lists users and requires login ✓') && !c.includes('lists users and is for admins'), `two routers: ${c}`)
+  console.log('ok (inline admin middleware)')
+}
