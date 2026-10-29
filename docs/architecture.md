@@ -85,6 +85,8 @@ and an unprotected admin `DELETE` in the same file are judged separately.
   - A sign-up discount that people can claim again with another email.
   - Unpaid checkouts that now take up a spot (a seat, a time slot, a day's orders) with nothing that
     frees them, or old unpaid ones already in the database that a new limit starts counting.
+- **Limits and AI answers.** Limits written as constants (new, changed, replaced, gone, "no limit now"). A guess when a
+  per-day limit is replaced by one that never resets, and when AI answers get a length cap nothing checks.
 - **Live connection (Socket.IO).** The events the server now takes and what each one does, with "Connecting needs a
   login ✓" from its own `io.use` guard. A guard that's gone is a thing to decide.
 - **Uploads.** A new way for people to send files is described: what's accepted, how big, and where files go. It's a

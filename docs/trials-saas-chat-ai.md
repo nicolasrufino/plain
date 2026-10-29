@@ -641,11 +641,23 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
    Known miss: a new upload with no size limit, added beside a size-checked one in the same file, gets no size warning.
    When files live in the database, add that a full disk stops the whole app.
 2. ✅ **Socket.IO events and their access** (all Porch cards). Fixed later. The server's live events and what each one does are now listed, and "Connecting needs a login ✓" is shown when the server's own `io.use` turns away connections without a token. Porch now reads: "Your server now takes "join room", "leave room", "send message" (saves new messages) and "typing" over its live connection. Connecting needs a login ✓". A login check that's really gone is raised. Review 29 took five rounds (9, 3, 1, 2, then clean). It took out browser listeners, bots and other clients, other servers' guards, loggers and rate limiters. Still open: "only people in that room ✓", which needs reading each event's own membership check.
-3. **AI cost and limit changes** (Quill p1 🔴, p5 🔴):
-   - a date window removed from a usage count: "The limit no longer resets. Existing users who already
-     used 20 lose the AI as soon as this ships";
-   - `max_tokens` with no `finish_reason` check: "Long answers are cut off with no warning";
-   - budget settings: per person or total, and the default.
+3. ✅ **AI cost and limit changes** (Quill p1 🔴, p5 🔴). Fixed later.
+   - **Limits written in the code** are now described: new, changed, replaced, gone, and "no limit now". The wording keeps units, e.g. "a maximum upload size of 10 MB", "$5".
+   - **A per-day limit replaced by one that never resets** gets a guess: "…it counts everything ever, so anyone who has already used 20 loses it as soon as this ships". This needs fewer date checks in the function that compares against the limit and the helpers it calls.
+   - **An AI call that gets a new `max_tokens`** with nothing checking the finish reason gets a guess that a cut-off answer looks complete.
+   - Quill p1 and p5 now get these.
+   - **Review 30** took six rounds (11, 10, 8, 4, 2, then clean). It made the rule:
+     - count date checks only where the limit is used;
+     - say "replaced" only when the new limit takes the old one's exact place in a comparison;
+     - treat a constant as a rename only when it takes the old one's place in the lines that used it;
+     - skip constants that aren't limits on people (time, size, retries);
+     - look for AI calls only in apps with an AI library.
+   - **Known limits:**
+     - a limit defined once per plan in one file is skipped;
+     - a renamed limit with a reworded comparison reads as new and gone, without the guess;
+     - Go's MixedCaps constants aren't read;
+     - a date-check helper whose variable has a function type (`const h: (id: string) => … = async …`) isn't followed.
+   - **Still open:** budget settings read from the environment (per person or total, and the default).
 4. **Login claims through helpers** like `requireWorkspaceMember`: "only members of this workspace ✓",
    and "only owners and admins ✓" for `requireWorkspaceAdmin`. Server actions now get a description, but
    still no access line.

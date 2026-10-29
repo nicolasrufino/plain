@@ -2663,6 +2663,120 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // (old rows are already freed if main freed them, if only recent pending rows count, or if the change expires them)
   else if (holds && grew && byStripe(CA) && !byTime(CA) && !byStripe(CB) && !byTime(CB) && [...CB.values()].some(makesPending) && !cleansUp(CA))
     problems.push({ kind: 'Check', text: "Old unpaid checkouts already in your database now take up spots, and nothing will free them: their payment pages expired long ago, so Stripe won't say so again. Before this goes live, mark the old unpaid (\"pending\") orders as expired. (This is a guess.)" })
+  const appAfter = [...after].filter(([q]) => srcFile(q) && !isTest(q)).map(([, t]) => t).join('\n')
+  const appBefore = [...before].filter(([q]) => srcFile(q) && !isTest(q)).map(([, t]) => t).join('\n')
+  // Limits written as constants (DAILY_REQUEST_LIMIT = 50, MAX_PROJECTS = 3, FREE_EDIT_LIMIT = 20): new, changed, replaced, gone,
+  // judged across the app (a limit moved to another file isn't new or gone). Replaced: the new one takes the old one's exact place
+  // in a comparison (`used >= FREE_EDIT_LIMIT` where `used >= DAILY_REQUEST_LIMIT` was). A limit that reset every day (hour,
+  // minute, week, month, window) replaced by one that doesn't, with fewer date checks in the code around them (the files that use
+  // either, and what those import), counts everything ever: people who already used it up lose access (Quill p1).
+  // ponytail: constants only (not settings or the database); whole name parts; a name defined twice in a file (per plan) is
+  // skipped; Go MixedCaps aren't read
+  const LIMIT_RE = /^[ \t]*(?:export\s+)?(?:(?:const|let|var|final|static|readonly|public|private|protected|val|int|long|Integer|Long|number)\s+)*([A-Z][A-Z0-9_]*)\s*(?::\s*[\w[\]]+\s*)?[:=]\s*([\d_]+(?:\.\d+)?)\s*(?:as\s+const\s*)?(?:[;,]|$|#|\/\/)/gm
+  const isLimit = (n: string) => /(^|_)(LIMIT|MAX|QUOTA|CAP|ALLOWANCE|BUDGET)(_|$)/.test(n) && !/(^|_)(MS|SECONDS?|SECS?|MINUTES?|AGE|TTL|TIMEOUT|WINDOW|RETRIES|RETRY|POOL|WIDTH|HEIGHT|PX|DELAY|INTERVAL|BACKOFF|CONNECTIONS?|WORKERS?|THREADS?)(_|$)/.test(n) && !/UNLIMITED/.test(n)
+  const limitsOf = (t = '') => { const all_ = [...t.matchAll(LIMIT_RE)].filter(m => isLimit(m[1])), n = new Map<string, number>()
+    for (const m of all_) n.set(m[1], (n.get(m[1]) ?? 0) + 1)
+    return new Map(all_.filter(m => n.get(m[1]) === 1).map(m => [m[1], m[2].replace(/_/g, '')])) }   // (repeated per plan: skipped)
+  const definedIn = (m: Snap) => { const out = new Map<string, Set<string>>()
+    for (const [q, t] of m) if (srcFile(q) && !isTest(q)) for (const k of limitsOf(t).keys()) out.set(k, (out.get(k) ?? new Set()).add(q))
+    return out }
+  const defA = definedIn(before), defB = definedIn(after)
+  const PERIOD = /DAILY|HOURLY|WEEKLY|MONTHLY|YEARLY|ANNUAL|ROLLING|WINDOW|(^|_)(PER_)?(MINUTE|MIN|HOUR|HR|DAY|WEEK|MONTH|YEAR|\d+[HDM])(_|$)/
+  const DATE_CHECK = /\b(?:created_?at|createdAt|inserted_?at)\b[^\n]{0,60}(?:>=?|\bgte?\b|__gte?\b|__date\b|==)|today|startOf(?:Day|Week|Month|Today)|start_of_(?:day|today)|\bday_?[Ss]tart|\bdate\.today\(\)|timedelta\(|subDays\(|time\.min\b|DATE\(\s*'now'|CURRENT_DATE|beginning_of_day|all_day|Date\.current|func\.date\(|gte\([^)]*createdAt/gi
+  // (the files that use a name, and the app files they import: relative, @/ and ~/ paths, Python's from .x / from app.x)
+  const importsOf_ = (m: Snap, p: string) => { const t = m.get(p) ?? '', noExt = (x: string) => x.replace(/\.(?:[jt]sx?|mjs|py)$/, '')
+    const specs = [...t.matchAll(/from\s+['"]((?:\.{1,2}|@|~)\/[^'"]+)['"]/g)].map(x => x[1])
+    const py = [...t.matchAll(/^\s*from\s+(\.+|[\w.]+)\s*(\w*)\s+import/gm)].map(x => x[1].startsWith('.') ? p.split('/').slice(0, -1).join('/') + '/' + (x[2] || '') : x[1].replace(/\./g, '/'))
+    return [...m.keys()].filter(k => !k.includes('#') && (py.some(x => noExt(k) === x || noExt(k) === x + '/__init__') || specs.some(spec => {
+      if (/^[@~]\//.test(spec)) { const rest = noExt(spec.slice(2)); return noExt(k) === rest || noExt(k).endsWith('/' + rest) }
+      const parts = p.split('/').slice(0, -1); for (const seg of spec.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg) }
+      return noExt(k) === noExt(parts.join('/')) || noExt(k) === noExt(parts.join('/')) + '/index' }))) }
+  const around = (m: Snap, names: string[]) => { const users = [...m.keys()].filter(q => srcFile(q) && !isTest(q) && names.some(n => new RegExp(String.raw`\b${n}\b`).test(m.get(q) ?? '')))
+    return [...new Set([...users, ...users.flatMap(q => importsOf_(m, q))])].reduce((n, q) => n + [...(m.get(q) ?? '').matchAll(DATE_CHECK)].length, 0) }
+  const nice_ = (v: string) => Number(v).toLocaleString('en-US', { maximumFractionDigits: 6 })
+  // (MAX_PROJECTS: "a maximum of 3 projects"; NAME_MAX_LENGTH: "a maximum name length of 80"; MAX_UPLOAD_MB: "a maximum upload size
+  // of 10 MB"; COST_LIMIT_USD: "a cost limit of $0.0005")
+  const UNIT: Record<string, string> = { MB: 'MB', KB: 'KB', GB: 'GB', BYTES: 'bytes', CHARS: 'characters', CHARACTERS: 'characters' }
+  const phrase = (n: string, v: string) => { const parts = n.split('_').filter(Boolean), last = parts.at(-1)!, usd = last === 'USD', unit = UNIT[last]
+    if (usd || unit) parts.pop()
+    const num = usd ? `$${nice_(v)}` : unit ? `${nice_(v)} ${unit}` : nice_(v)
+    if (parts[0] === 'MAX' && !unit && !usd) return `a maximum of ${num} ${words(parts.slice(1).join('_').toLowerCase().replace(/_/g, ' '))}`
+    const mi = parts.indexOf('MAX'); if (mi > 0) { parts.splice(mi, 1); parts.unshift('MAX') }
+    let w = words(parts.join('_').toLowerCase().replace(/_/g, ' ').replace(/^max\b/, 'maximum')); if (unit && !/size|length/.test(w)) w += unit === 'characters' ? ' length' : ' size'
+    return `a ${w} of ${num}` }
+  // (the limit's name alone, and a value with its unit: "maximum upload size", "10 MB", "$5")
+  const nameOf = (n: string) => { const parts = n.split('_').filter(Boolean), unit = UNIT[parts.at(-1)!]; if (parts.at(-1) === 'USD' || unit) parts.pop()
+    const mi = parts.indexOf('MAX'); if (mi > 0) { parts.splice(mi, 1); parts.unshift('MAX') }
+    let w = words(parts.join('_').toLowerCase().replace(/_/g, ' ').replace(/^max\b/, 'maximum')); if (unit && !/size|length/.test(w)) w += unit === 'characters' ? ' length' : ' size'
+    return w }
+  const valueOf = (n: string, v: string) => { const last = n.split('_').at(-1)!; return last === 'USD' ? `$${nice_(v)}` : UNIT[last] ? `${nice_(v)} ${UNIT[last]}` : nice_(v) }
+  for (const p of real.filter(q => !q.includes('#') && srcFile(q) && !isTest(q))) {
+    const a = limitsOf(before.get(p)), b = limitsOf(after.get(p))
+    const movedHere = (n: string) => [...defA.get(n) ?? []].some(q => q !== p && !defB.get(n)?.has(q))   // (from another file)
+    // (assigned at all, any value: `= int(os.getenv("X", "50"))` still sets it; a name the file had, even per plan, isn't new)
+    const assigned = (n: string, t: string) => new RegExp(String.raw`^[ \t]*(?:export\s+)?(?:(?:const|let|var|final|static|readonly|public|private|protected|val|int|long)\s+)*${n}\s*(?::\s*[\w[\]]+\s*)?=(?!=)|(?:^|[{,]\s*)${n}\s*:\s*(?!string\b|number\b|boolean\b|any\b)[^\s,}]`, 'm').test(t)
+    const movedAway = (n: string) => [...defB.get(n) ?? []].some(q => q !== p && !defA.get(n)?.has(q))
+    const cmpLines = (t: string, n: string) => (t.match(new RegExp(String.raw`^[^\n]*(?:[<>]=?\s*${n}\b|\b${n}\s*[<>-])[^\n]*$`, 'gm')) ?? []).map(l => l.trim())
+    const useLines = (t: string, n: string) => (t.match(new RegExp(String.raw`^[^\n]*\b${n}\b[^\n]*$`, 'gm')) ?? []).map(l => l.trim())
+    // (set to "no limit": None, null, Infinity, inf, -1, sys.maxsize, Number.MAX_SAFE_INTEGER)
+    const unlimited = (n: string) => new RegExp(String.raw`\b${n}\s*(?::\s*[\w[\]]+\s*)?[:=]\s*(?:None|null|undefined|Infinity|Number\.POSITIVE_INFINITY|Number\.MAX_SAFE_INTEGER|float\(\s*['"]inf['"]\s*\)|math\.inf|sys\.maxsize|-1)(?=\s*(?:[;,]|#|\/\/|$))`, 'm').test(after.get(p) ?? '')
+    const goneRaw = [...a].filter(([n]) => !b.has(n) && !movedAway(n) && (!assigned(n, appAfter) || unlimited(n)))
+    const addedRaw = [...b].filter(([n]) => !a.has(n) && !movedHere(n) && !assigned(n, before.get(p) ?? ''))
+    // a replacement first: the new one in the old one's exact place in a comparison
+    const swap = goneRaw.length === 1 && addedRaw.length === 1 && !unlimited(goneRaw[0][0]) && cmpLines(before.get(p) ?? '', goneRaw[0][0]).some(l => cmpLines(after.get(p) ?? '', addedRaw[0][0]).includes(l.replace(new RegExp(String.raw`\b${goneRaw[0][0]}\b`, 'g'), addedRaw[0][0]))) ? [goneRaw[0], addedRaw[0]] as const : undefined
+    // a rename (no line): another name in the old one's place in the lines that used it (or its definition, when nothing used it)
+    // (its uses in every file, not just this one; the definition line only when nothing anywhere used it; and the new name new to
+    // the app: `pro ? PRO_LIMIT : PRO_LIMIT` in place of FREE_LIMIT isn't a rename)
+    const renamedTo = (n: string) => { const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), isDef = (l: string) => new RegExp(String.raw`^(?:export\s+)?(?:\w+\s+)*${n}\s*(?::\s*[\w[\]]+\s*)?[:=]`).test(l)
+      const where = [...before].filter(([q]) => srcFile(q) && !isTest(q)).map(([q, t]) => [q, useLines(t, n).filter(l => !isDef(l))] as const).filter(([, ls]) => ls.length)
+      const pairs = where.length ? where : [[p, useLines(before.get(p) ?? '', n)] as const]
+      const knownBefore = (x: string) => new RegExp(String.raw`(^|[^\w])${x}\s*(?::\s*[\w[\]]+\s*)?[:=]`, 'm').test(appBefore)
+      return pairs.every(([q, ls]) => ls.length > 0 && ls.every(l => { const re = new RegExp('^' + esc(l).replace(new RegExp(String.raw`\b${n}\b`, 'g'), '([A-Z][A-Z0-9_]*)') + '$')
+        return (after.get(q) ?? '').split('\n').map(x => x.trim()).some(x => { const mm = re.exec(x); return !!mm && !x.includes(n) && mm.slice(1).every(r => !knownBefore(r)) }) })) }
+    const gone = swap ? [] : goneRaw.filter(([n]) => unlimited(n) || !renamedTo(n)), added = swap ? [] : addedRaw.filter(([n]) => !goneRaw.some(([g]) => !unlimited(g) && renamedTo(g) && (after.get(p) ?? '').split('\n').some(x => x.includes(n) && useLines(before.get(p) ?? '', g).some(l => x.trim() === l.replace(new RegExp(String.raw`\b${g}\b`, 'g'), n)))))
+    const changed_ = [...b].filter(([n, v]) => a.has(n) && a.get(n) !== v)
+    const line: string[] = []
+    if (swap) line.push(`The ${nameOf(swap[0][0])} (${valueOf(swap[0][0], swap[0][1])}) is replaced by ${phrase(swap[1][0], swap[1][1])}`)
+    else { if (added.length) line.push(`There's now ${list(added.map(([n, v]) => phrase(n, v)))}`); for (const [n, v] of gone) line.push(`The ${nameOf(n)} (${valueOf(n, v)}) is gone${unlimited(n) ? ' (no limit now)' : ''}`) }
+    for (const [n, v] of changed_) line.push(`The ${nameOf(n)} changed from ${valueOf(n, a.get(n)!)} to ${valueOf(n, v)}`)
+    if (line.length) changes.push({ group: 'Server', text: `${line.join('. ')}.`, detail: p })
+    // (date checks in the function with the comparison and the helpers it calls, in this file or by name in the app)
+    const fnAround = (t: string, n: string) => { const i = t.search(new RegExp(String.raw`(?:[<>]=?\s*${n}\b|\b${n}\s*[<>-])`)); if (i < 0) return ''
+      const heads = [...t.matchAll(/^[ 	]*(?:async\s+)?(?:def|function|func|export\s+(?:async\s+)?function)\s+\w+|^[ 	]*(?:export\s+)?const\s+\w+\s*=\s*(?:async\s*)?\(/gm)]
+      const from = heads.filter(h => h.index! <= i).at(-1)?.index ?? 0, to = heads.find(h => h.index! > i)?.index ?? t.length; return t.slice(from, to) }
+    // (a helper's body: `def used(...)` / `function used(...)` up to the next top-level definition, in any app file)
+    // (def h / function h / const h = (...) => / h(...) { as a method; up to the next line as far left, or further)
+    const helperBody = (t: string, h: string) => { const m = new RegExp(String.raw`^([ \t]*)(?:(?:export\s+)?(?:async\s+)?(?:def|function)\s+${h}\s*\(|(?:export\s+)?(?:const|let|var)\s+${h}\s*(?::\s*[^=]+?)?=\s*(?:async\s*)?(?:(?:\([^)]*\)|\w+)\s*(?::\s*[^=]+?)?=>|function\b)|(?:async\s+)?${h}\s*\([^)]*\)\s*(?::\s*[\w<>[\]|, ]+\s*)?\{)`, 'm').exec(t)
+      if (!m) return ''
+      const ind = m[1].length, lines = t.slice(m.index).split('\n'); let k = 1
+      for (; k < lines.length; k++) { const l = lines[k]; if (!l.trim()) continue; const li = l.length - l.trimStart().length; if (li <= ind && !/^[ \t]*[)}\]]/.test(l)) break }
+      return lines.slice(0, k).join('\n') }
+    const withHelpers = (m: Snap, n: string) => { const body = fnAround(m.get(p) ?? '', n), app_ = [...m].filter(([q]) => srcFile(q) && !isTest(q)).map(([, t]) => t)
+      const helpers = [...new Set([...body.matchAll(/\b([a-z_]\w*)\s*\(/g)].map(x => x[1]))].flatMap(h => app_.map(t => helperBody(t, h)))
+      return [body, ...helpers].reduce((k, x) => k + [...x.matchAll(DATE_CHECK)].length, 0) }
+    if (swap && PERIOD.test(swap[0][0]) && !PERIOD.test(swap[1][0]) && withHelpers(after, swap[1][0]) < withHelpers(before, swap[0][0])) {
+      const n0 = swap[0][0], [n1, v1] = swap[1]
+      problems.push({ kind: 'Check', text: `The ${nameOf(n0)} reset every ${/MINUTE|MIN(_|$)/.test(n0) ? 'minute' : /HOUR|HR/.test(n0) ? 'hour' : /WEEK/.test(n0) ? 'week' : /MONTH/.test(n0) ? 'month' : /YEAR|ANNUAL/.test(n0) ? 'year' : /ROLLING|WINDOW/.test(n0) ? 'little while' : 'day'}. The new ${nameOf(n1)} doesn't: it counts everything ever, so anyone who has already used ${nice_(v1)} loses it as soon as this ships, and nobody gets more later. (This is a guess.)` })
+    }
+  }
+  // AI answers capped (max_tokens) with nothing checking whether one was cut short: a cut-off answer looks complete (Quill p5).
+  // In an app with an AI library (a dependency, or an import anywhere: the client is often made in lib/openai.ts), a file that calls
+  // a model; new across the app (a moved cap isn't new); not a tiny classifier cap (max_tokens=1).
+  const AI_SDK = /from\s+['"](?:openai|@anthropic-ai\/sdk|@ai-sdk\/[\w-]+|ai|@google\/genai|@google\/generative-ai|groq-sdk|@mistralai\/mistralai)['"]|^\s*(?:from|import)\s+(?:openai|anthropic|google\.genai|google\.generativeai|langchain_openai|langchain_anthropic)\b|require\(?\s*['"](?:openai|@anthropic-ai\/sdk|anthropic|ruby\/openai)['"]/m
+  const hasAI = AI_SDK.test(appAfter) || [...after].some(([q, t]) => /(^|\/)(package\.json|requirements\.txt|pyproject\.toml|Gemfile)$/.test(q) && /["']?(?:openai|@anthropic-ai\/sdk|anthropic|ruby-openai|@ai-sdk\/[\w-]+|google-genai|google-generativeai)["']?/.test(t))
+  const MODEL_CALL = /chat\.completions\.(?:create|parse|stream)|responses\.(?:create|stream)|\b(?:client|anthropic|openai|ai|llm|claude)\.messages\.(?:create|stream)|generateText|streamText|generateObject|generate_content|generateContent|ChatCompletion/
+  const CAP = /['"]?\b(?:max_tokens|max_completion_tokens|max_output_tokens|maxTokens|maxOutputTokens)\b['"]?\s*[:=]>?\s*([\w.]+)/g
+  // (LangChain's .invoke( only in a file that imports langchain: not supabase.functions.invoke or ipcRenderer.invoke)
+  const calls = (t: string) => MODEL_CALL.test(t) || /\.invoke\(/.test(t) && /langchain/.test(t)
+  const capsIn = (m: Snap) => [...m].filter(([q, t]) => srcFile(q) && !isTest(q) && calls(t)).flatMap(([, t]) => [...t.matchAll(CAP)].map(x => x[1]))
+  const capsA = capsIn(before), capsB = capsIn(after)
+  // (per value: a second max_tokens=500 is new even though another call already had 500)
+  const tally = (xs: string[]) => xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) + 1), new Map<string, number>())
+  const ta = tally(capsA), newCaps = hasAI ? [...tally(capsB)].flatMap(([v, k]) => Array(Math.max(0, k - (ta.get(v) ?? 0))).fill(v)) : []
+  // (the Responses API's status compared to "incomplete": not `record.status = "incomplete"`, the app's own)
+  const checksEnd = /finish_reason|finishReason|stop_reason|stopReason|incomplete_details|(?:===?|!==?)\s*['"]incomplete['"]|['"]incomplete['"]\s*(?:===?|!==?)/.test(appAfter)
+  if (newCaps.length && !newCaps.every(v => /^\d+$/.test(v) && +v <= 50) && !checksEnd)
+    problems.push({ kind: 'Check', text: `AI answers now have a length cap (max_tokens), and nothing checks whether an answer was cut short. A cut-off answer looks complete to people, and gets used as if it were. Check the finish reason and tell them. (This is a guess.)` })
   // Socket.IO: events the live connection now takes, what each one does, and whether connecting needs a login (that file's own
   // io.use guard). A guard that's gone is a problem.
   // ponytail: per event name; who may send each one (room members, moderators) isn't read; plain WebSockets (ws) aren't read

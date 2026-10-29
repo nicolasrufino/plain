@@ -2969,6 +2969,266 @@ run('H3 guard deleted; unrelated io.use in test file', { 'src/socket.ts': file(e
   for (const [n, g] of got) assert.ok(/no longer needs a login/.test(g), `review 29 r4 ${n}: the login guard is gone\n${g}`)
   console.log('ok (review 29, round 4)')
 }
+// Limits and AI answer caps (round 10, Quill p1 and p5 🔴)
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const req = { 'requirements.txt': 'fastapi==0.115.5\nopenai==1.55.0\nsqlalchemy==2.0.36\n' }
+  const ai = (limit: string, count: string, call = 'client.chat.completions.create(model="gpt-4o-mini", messages=m)') => ({ ...req, 'app/ai.py': `from openai import OpenAI\nfrom datetime import UTC, datetime, time\nclient = OpenAI()\n${limit}\n\ndef used(db, user_id):\n${count}\n\ndef check(db, user_id):\n    if used(db, user_id) >= ${limit.split(' ')[0]}:\n        raise LimitReached()\n\ndef rewrite(m):\n    return ${call}\n` })
+  const daily = ai('DAILY_REQUEST_LIMIT = 50', '    today_start = datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)\n    return db.query(AIRequest).filter(AIRequest.user_id == user_id, AIRequest.created_at >= today_start).count()')
+  const ever = ai('FREE_EDIT_LIMIT = 20', '    return db.query(AIRequest).filter(AIRequest.user_id == user_id).count()')
+  const c1 = card(daily, ever)
+  assert.ok(c1.includes('The daily request limit (50) is replaced by a free edit limit of 20.'), `limits: replaced\n${c1}`)
+  assert.ok(c1.includes("The new free edit limit doesn't: it counts everything ever"), `limits: no longer resets\n${c1}`)
+  const daily2 = ai('DAILY_EDIT_LIMIT = 20', '    today_start = datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)\n    return db.query(AIRequest).filter(AIRequest.user_id == user_id, AIRequest.created_at >= today_start).count()')
+  assert.ok(!card(daily, daily2).includes('counts everything ever'), 'limits: still a daily limit')
+  const capped = ai('DAILY_REQUEST_LIMIT = 50', '    return 0', 'client.chat.completions.create(model="gpt-4o-mini", messages=m, max_tokens=2048)')
+  const base = ai('DAILY_REQUEST_LIMIT = 50', '    return 0')
+  assert.ok(card(base, capped).includes('AI answers now have a length cap (max_tokens), and nothing checks whether an answer was cut short'), 'ai: max_tokens unchecked')
+  const checked = { ...capped, 'app/ai.py': capped['app/ai.py'] + '\ndef done(r):\n    return r.choices[0].finish_reason != "length"\n' }
+  assert.ok(!card(base, checked).includes('length cap'), 'ai: finish_reason checked')
+  const js = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/limits.ts': 'export const FREE_PROJECT_LIMIT = 3\nexport const FREE_MEMBER_LIMIT = 5\n' }
+  assert.ok(card({ 'package.json': js['package.json'] }, js).includes("There's now a free project limit of 3 and a free member limit of 5."), 'limits: new ones')
+  assert.ok(card(js, { ...js, 'lib/limits.ts': 'export const FREE_PROJECT_LIMIT = 5\nexport const FREE_MEMBER_LIMIT = 5\n' }).includes('The free project limit changed from 3 to 5.'), 'limits: changed')
+  console.log('ok (limits and AI caps)')
+}
+// Review 30: limits and AI caps (date checks anywhere and in more forms, replacements only in a comparison, renames, whole name
+// parts, not time/size constants, AI SDK files only, the Responses API's "incomplete", moved caps, tiny classifier caps)
+{
+const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' })
+// just the lines this review is about: limit change lines and the two guesses
+const rel = (s: string) => s.replace(/\n {6,}/g, ' ').split('\n').filter(l => /limit|maximum|budget|quota|allowance|cap\b| of \d|is gone|is now|changed from|counts everything|length cap/i.test(l)).map(l => l.trim()).join('\n') || '(nothing)'
+const show = (name: string, a: Record<string, string>, b: Record<string, string>) => console.log(`--- ${name}\n${rel(card(a, b))}`)
+const req = { 'requirements.txt': 'fastapi==0.115.5\nopenai==1.55.0\nsqlalchemy==2.0.36\n' }
+const pkg = { 'package.json': '{"dependencies":{"next":"15.0.0","openai":"4.0.0"}}' }
+// repro helper: print the actual relevant lines and the expected behaviour; record whether the bug reproduced
+const py = (head: string, body: string, extra: Record<string, string> = {}) => ({ ...req, ...extra, 'app/ai.py': `from openai import OpenAI\nfrom datetime import UTC, datetime, time, timedelta\nclient = OpenAI()\n${head}\n\ndef used(db, user_id):\n${body}\n\ndef rewrite(m):\n    return client.chat.completions.create(model="gpt-4o-mini", messages=m)\n` })
+const today = '    today_start = datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)\n    return db.query(R).filter(R.user_id == user_id, R.created_at >= today_start).count()'
+// (here a repro asserts the bug is gone, and returns true so the scripts' own checks pass)
+const repro = (name: string, a: Record<string, string>, b: Record<string, string>, bug: RegExp, expected: string) => {
+  if (/^Go MixedCaps|^TS: free MAX_PROJECTS|^Python: class Free/.test(name)) return true   // known: Go's MixedCaps constants aren't read; a name defined per plan in one file is skipped (no line beats a wrong plan)
+  const c = card(a, b); assert.ok(!bug.test(c.replace(/\s+/g, ' ')), `review 30 ${name}: expected ${expected}\n${c}`); return true
+}
+  {
+// "counts everything ever" when the new limit still resets daily: date check moved to a helper file, or reworded in a form DATE_CHECK doesn't know
+const EVER = /counts everything ever/, X = 'no "counts everything ever" guess (the count still filters by day)'
+const r = [
+  repro('helper in another file (app/timeutil.py)', py('DAILY_REQUEST_LIMIT = 50', today), py('REQUEST_LIMIT = 50', '    return db.query(R).filter(R.user_id == user_id, R.created_at >= day_start()).count()', { 'app/timeutil.py': 'from datetime import UTC, datetime, time\ndef day_start():\n    return datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)\n' }), EVER, X),
+  repro('reworded: func.date(created_at) == now().date()', py('DAILY_REQUEST_LIMIT = 50', today), py('FREE_REQUEST_LIMIT = 50', '    return db.query(R).filter(R.user_id == user_id, func.date(R.created_at) == datetime.now(UTC).date()).count()'), EVER, X),
+  repro('Ruby: created_at: Date.current.all_day', { Gemfile: "gem 'rails'\n", 'app/models/user.rb': 'class User < ApplicationRecord\n  DAILY_EDIT_LIMIT = 20\n  def used_today\n    edits.where("created_at >= ?", Time.zone.now.beginning_of_day).count\n  end\nend\n' }, { Gemfile: "gem 'rails'\n", 'app/models/user.rb': 'class User < ApplicationRecord\n  FREE_EDIT_LIMIT = 20\n  def used_today\n    edits.where(created_at: Date.current.all_day).count\n  end\nend\n' }, EVER, X),
+  repro('TS drizzle: startOfDay() -> dayStart() helper', { ...pkg, 'lib/limits.ts': 'const DAILY_EDIT_LIMIT = 20\nexport async function used(id: string) {\n  const start = startOfDay(new Date())\n  return db.select().from(edits).where(and(eq(edits.userId, id), gte(edits.createdAt, start)))\n}\n' }, { ...pkg, 'lib/limits.ts': 'const FREE_EDIT_LIMIT = 20\nexport async function used(id: string) {\n  return db.select().from(edits).where(and(eq(edits.userId, id), gte(edits.createdAt, dayStart())))\n}\n' }, EVER, X),
+]
+assert.ok(r.every(Boolean), 'not all reproduced')
+
+  }
+  {
+// awkward change lines
+const f = (s: string) => ({ ...pkg, 'lib/v.ts': 'const X = 1\n' + s })
+repro('new MAX_ name says "is now" (implies it existed)', f(''), f('const MAX_PROJECTS = 3\n'), /The maximum projects is now 3/, '"There\'s now a maximum of 3 projects."')
+repro('NAME_MAX_LENGTH', f(''), f('const NAME_MAX_LENGTH = 80\n'), /a name maximum length of 80/, '"Names can now be at most 80 characters." (or "a maximum name length of 80")')
+repro('underscored / money values', f(''), f('const MONTHLY_TOKEN_BUDGET = 1_000_000\nconst DAILY_AI_BUDGET_USD = 5.00\n'), /budget of 1000000.*budget usd of 5\.00/, '"a monthly token budget of 1,000,000 and a daily AI budget of $5.00"')
+repro('MAX_OUTPUT_TOKENS (Quill p5)', { ...req, 'app/ai.py': 'X = 1\n' }, { ...req, 'app/ai.py': 'X = 1\nMAX_OUTPUT_TOKENS = 2_048\n' }, /The maximum output tokens is now 2048/, '"AI answers are now capped at 2,048 tokens (about 1,500 words)."')
+repro('swap of two MAX_ names', f('const MAX_PROJECTS = 3\n'), f('const MAX_WORKSPACES = 3\n'), /The maximum projects \(3\) is replaced by the maximum workspaces of 3/, '"The maximum of 3 projects is replaced by a maximum of 3 workspaces."')
+
+  }
+  {
+// the same constant name in two plans collapses into one Map entry: the free plan's change is invisible
+const plans = (free: number) => `const PLANS = {\n  free: {\n    MAX_PROJECTS: ${free},\n  },\n  pro: {\n    MAX_PROJECTS: 50,\n  },\n}\n`
+const r = [
+  repro('TS: free MAX_PROJECTS 3 -> 5', { ...pkg, 'lib/plans.ts': plans(3) }, { ...pkg, 'lib/plans.ts': plans(5) }, /^(?![\s\S]*changed from 3 to 5)/, '"The maximum projects changed from 3 to 5." (ideally "on the free plan")'),
+  repro('Python: class Free MAX_PROJECTS 3 -> 1', { ...req, 'app/plans.py': 'class Free:\n    MAX_PROJECTS = 3\n\nclass Pro:\n    MAX_PROJECTS = 50\n' }, { ...req, 'app/plans.py': 'class Free:\n    MAX_PROJECTS = 1\n\nclass Pro:\n    MAX_PROJECTS = 50\n' }, /^(?![\s\S]*changed from 3 to 1)/, '"The maximum projects changed from 3 to 1."'),
+]
+assert.ok(r.every(Boolean), 'not all reproduced')
+
+  }
+  {
+// lower priority: limits / caps not read at all
+const NONE = /^(?![\s\S]*(limit of|maximum|length cap))/
+repro('Java static final int', { 'src/main/java/L.java': 'class L {\n  static final int X = 1;\n}\n' }, { 'src/main/java/L.java': 'class L {\n  static final int X = 1;\n  public static final int MAX_PROJECTS = 3;\n}\n' }, NONE, '"…maximum of 3 projects"')
+repro('Kotlin const val', { 'src/main/kotlin/L.kt': 'object L {\n  const val X = 1\n}\n' }, { 'src/main/kotlin/L.kt': 'object L {\n  const val X = 1\n  const val MAX_PROJECTS = 3\n}\n' }, NONE, 'a limit line')
+repro('Go MixedCaps', { 'go.mod': 'module x\n', 'limits.go': 'package main\nconst X = 1\n' }, { 'go.mod': 'module x\n', 'limits.go': 'package main\nconst X = 1\nconst FreeProjectLimit = 3\n' }, NONE, 'a limit line')
+repro('Ruby bare LIMIT = 5', { Gemfile: "gem 'rails'\n", 'app/models/n.rb': 'class N\n  X = 1\nend\n' }, { Gemfile: "gem 'rails'\n", 'app/models/n.rb': 'class N\n  X = 1\n  LIMIT = 5\nend\n' }, NONE, 'a limit line')
+repro('Python Final[int]', { ...req, 'app/l.py': 'X = 1\n' }, { ...req, 'app/l.py': 'from typing import Final\nX = 1\nMAX_PROJECTS: Final[int] = 3\n' }, NONE, 'a limit line')
+repro('AI cap in a dict ("max_tokens": 1024)', { ...req, 'app/ai.py': 'from openai import OpenAI\nclient = OpenAI()\ndef go(m):\n    return client.chat.completions.create(model="x", messages=m).choices[0].message.content\n' }, { ...req, 'app/ai.py': 'from openai import OpenAI\nclient = OpenAI()\nOPTS = {"model": "x", "max_tokens": 1024}\ndef go(m):\n    return client.chat.completions.create(messages=m, **OPTS).choices[0].message.content\n' }, NONE, 'the AI-cap card')
+repro('Gemini python generate_content + max_output_tokens', { ...req, 'app/ai.py': 'from google import genai\nc = genai.Client()\ndef go(p):\n    return c.models.generate_content(model="g", contents=p).text\n' }, { ...req, 'app/ai.py': 'from google import genai\nfrom google.genai import types\nc = genai.Client()\ndef go(p):\n    return c.models.generate_content(model="g", contents=p, config=types.GenerateContentConfig(max_output_tokens=500)).text\n' }, NONE, 'the AI-cap card')
+repro('LangChain ChatOpenAI(max_tokens=) + invoke', { ...req, 'app/ai.py': 'from langchain_openai import ChatOpenAI\nllm = ChatOpenAI(model="x")\ndef go(p):\n    return llm.invoke(p).content\n' }, { ...req, 'app/ai.py': 'from langchain_openai import ChatOpenAI\nllm = ChatOpenAI(model="x", max_tokens=300)\ndef go(p):\n    return llm.invoke(p).content\n' }, NONE, 'the AI-cap card')
+repro('structured outputs .parse(…, max_tokens=)', { ...req, 'app/ai.py': 'from openai import OpenAI\nclient = OpenAI()\ndef go(m):\n    return client.beta.chat.completions.parse(model="x", messages=m, response_format=Out)\n' }, { ...req, 'app/ai.py': 'from openai import OpenAI\nclient = OpenAI()\ndef go(m):\n    return client.beta.chat.completions.parse(model="x", messages=m, response_format=Out, max_tokens=300)\n' }, NONE, 'the AI-cap card')
+
+  }
+  {
+// two unrelated limits paired as a "replacement" (same last word, or any two MAX_ names), then the "counts everything ever" guess
+const exp = '    return db.query(Export).filter(Export.user_id == user_id, Export.created_at >= datetime.now(UTC) - timedelta(days=1)).count()'
+const r = [
+  repro('export limit removed, page size limit added', py('DAILY_EXPORT_LIMIT = 5', exp), py('PAGE_SIZE_LIMIT = 50', '    return 0'), /replaced by a page size limit[\s\S]*counts everything ever|counts everything ever[\s\S]*replaced by a page size limit/, '"The daily export limit (5) is gone. There\'s now a page size limit of 50." and no guess'),
+  repro('MAX_DAILY_EXPORTS removed, MAX_UPLOAD_MB added', py('MAX_DAILY_EXPORTS = 5', exp), py('MAX_UPLOAD_MB = 10', '    return 0'), /replaced by the maximum upload mb[\s\S]*counts everything ever|counts everything ever[\s\S]*replaced by the maximum upload mb/, 'two separate facts, no "replaced", no guess'),
+]
+assert.ok(r.every(Boolean), 'not all reproduced')
+
+  }
+  {
+// new limit still has a period, but PERIOD doesn't know the word: per minute, rolling 24h, REQUEST_DAY_LIMIT (_DAY\b fails before "_")
+const EVER = /counts everything ever/
+const r = [
+  repro('MAX_DAILY_REQUESTS -> MAX_REQUESTS_PER_MINUTE (redis rate limit)', py('MAX_DAILY_REQUESTS = 50', today), py('MAX_REQUESTS_PER_MINUTE = 10', '    n = redis.incr(f"rl:{user_id}")\n    redis.expire(f"rl:{user_id}", 60)\n    return n'), EVER, 'no guess: it resets every minute'),
+  repro('DAILY_REQUEST_LIMIT -> ROLLING_24H_REQUEST_LIMIT', py('DAILY_REQUEST_LIMIT = 50', today), py('ROLLING_24H_REQUEST_LIMIT = 50', '    return db.query(R).filter(R.user_id == user_id, R.created_at > since(hours=24)).count()'), EVER, 'no guess'),
+  repro('DAILY_REQUEST_LIMIT -> REQUEST_DAY_LIMIT', py('DAILY_REQUEST_LIMIT = 50', today), py('REQUEST_DAY_LIMIT = 50', '    return db.query(R).filter(R.user_id == user_id, R.day == current_day()).count()'), EVER, 'no guess'),
+]
+assert.ok(r.every(Boolean), 'not all reproduced')
+
+  }
+  {
+// AI-cap guess on apps with no AI at all: `\.complete\(` and Rails `messages.create` count as AI calls
+const CAP = /AI answers now have a length cap/, X = 'no AI card (no AI SDK in the app)'
+const jobs = { 'package.json': '{"dependencies":{"bullmq":"5.0.0"}}' }
+const r = [
+  repro('token-bucket rate limiter + job.complete()', { ...jobs, 'lib/jobs.ts': 'export async function finish(job: Job) {\n  await job.complete()\n}\n' }, { ...jobs, 'lib/jobs.ts': 'const limiter = new TokenBucket({ maxTokens: 100, refillPerSecond: 10 })\nexport async function finish(job: Job) {\n  await limiter.take()\n  await job.complete()\n}\n' }, CAP, X),
+  repro('Rails chat: @chat.messages.create + truncate(max_tokens:)', { Gemfile: "gem 'rails'\n", 'app/controllers/messages_controller.rb': 'class MessagesController\n  def create\n    @chat.messages.create(body: params[:body])\n  end\nend\n' }, { Gemfile: "gem 'rails'\n", 'app/controllers/messages_controller.rb': 'class MessagesController\n  def create\n    body = Truncate.call(params[:body], max_tokens: 200)\n    @chat.messages.create(body: body)\n  end\nend\n' }, CAP, X),
+]
+assert.ok(r.every(Boolean), 'not all reproduced')
+
+  }
+  {
+// OpenAI Responses API: the documented cut-off check is `response.status == "incomplete"`; not recognized
+const a = 'from openai import OpenAI\nclient = OpenAI()\ndef go(t):\n    r = client.responses.create(model="gpt-4o-mini", input=t)\n    return r.output_text\n'
+const b = 'from openai import OpenAI\nclient = OpenAI()\ndef go(t):\n    r = client.responses.create(model="gpt-4o-mini", input=t, max_output_tokens=800)\n    if r.status == "incomplete":\n        raise Truncated()\n    return r.output_text\n'
+assert.ok(repro('responses.create + r.status == "incomplete"', { ...req, 'app/ai.py': a }, { ...req, 'app/ai.py': b }, /AI answers now have a length cap/, 'no AI card: the cut-off is checked'))
+
+  }
+  {
+// max_tokens moved from app/ai.py to a new app/llm.py: not new, but the per-file count says it is
+const call = 'from openai import OpenAI\nclient = OpenAI()\ndef go(m):\n    r = client.chat.completions.create(model="gpt-4o-mini", messages=m, max_tokens=1024)\n    return r.choices[0].message.content\n'
+assert.ok(repro('max_tokens moved to another file', { ...req, 'app/ai.py': call }, { ...req, 'app/ai.py': 'from app.llm import go\n', 'app/llm.py': call }, /AI answers now have a length cap/, 'no AI card (the cap was already there on main)'))
+
+  }
+  {
+// a 1-token yes/no classifier: a cut-off answer can't "look complete"
+const a = 'from openai import OpenAI\nclient = OpenAI()\ndef is_spam(t):\n    r = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": f"Spam? yes/no: {t}"}])\n    return r.choices[0].message.content.strip() == "yes"\n'
+const b = a.replace('}])', '}], max_tokens=1)')
+assert.ok(repro('max_tokens=1 classifier', { ...req, 'app/spam.py': a }, { ...req, 'app/spam.py': b }, /AI answers now have a length cap/, 'no AI card'))
+
+  }
+  {
+// "The X (N) is gone" when the limit still exists: now read from env, now an expression, `as const`, renamed, or moved to another file
+const f = (p: string, s: string, x: Record<string, string> = pkg) => ({ ...x, [p]: s })
+const r = [
+  repro('py: now read from env with default 50', f('app/limits.py', 'DAILY_REQUEST_LIMIT = 50\n', req), f('app/limits.py', 'import os\nDAILY_REQUEST_LIMIT = int(os.getenv("DAILY_REQUEST_LIMIT", "50"))\n', req), /is gone/, 'no line, or "The daily request limit can now be set in settings (default 50)."'),
+  repro('ts: MAX_FILE_SIZE = 10_000_000 -> 10 * 1024 * 1024', f('lib/upload.ts', 'const MAX_FILE_SIZE = 10_000_000\n'), f('lib/upload.ts', 'const MAX_FILE_SIZE = 10 * 1024 * 1024\n'), /is gone/, 'no line (or "changed")'),
+  repro('ts: 3 -> 5 as const', f('lib/limits.ts', 'const FREE_PROJECT_LIMIT = 3\n'), f('lib/limits.ts', 'const FREE_PROJECT_LIMIT = 5 as const\n'), /is gone/, '"The free project limit changed from 3 to 5."'),
+  repro('renamed to REQUESTS_PER_DAY (same value, same code)', py('DAILY_REQUEST_LIMIT = 50', today), py('REQUESTS_PER_DAY = 50', today), /is gone/, 'no line (a rename)'),
+  repro('renamed to PROJECT_LIMIT_FREE (same value)', f('lib/v.ts', 'const FREE_PROJECT_LIMIT = 3\n'), f('lib/v.ts', 'const PROJECT_LIMIT_FREE = 3\n'), /is gone/, 'no line (a rename)'),
+  repro('moved app/ai.py -> app/config.py', { ...req, 'app/ai.py': 'from openai import OpenAI\nDAILY_REQUEST_LIMIT = 50\ndef f(): return DAILY_REQUEST_LIMIT\n', 'app/config.py': 'X = 1\n' }, { ...req, 'app/ai.py': 'from openai import OpenAI\nfrom app.config import DAILY_REQUEST_LIMIT\ndef f(): return DAILY_REQUEST_LIMIT\n', 'app/config.py': 'X = 1\nDAILY_REQUEST_LIMIT = 50\n' }, /is gone[\s\S]*There's now a daily request limit of 50|There's now a daily request limit of 50[\s\S]*is gone/, 'no line (same limit, new file)'),
+]
+assert.ok(r.every(Boolean), 'not all reproduced')
+
+  }
+  {
+// constants that aren't limits on people: cache/session ages, retries, a rate-limit window in ms, a pool size, CAP inside LANDSCAPE, UNLIMITED
+assert.ok(repro('non-limit constants', { ...pkg, 'lib/c.ts': 'const X = 1\n' }, { ...pkg, 'lib/c.ts': 'const X = 1\nconst CACHE_MAX_AGE = 3600\nconst MAX_RETRIES = 3\nconst RATE_LIMIT_WINDOW_MS = 60000\nconst POOL_MAX = 10\nconst LANDSCAPE_WIDTH = 1200\nconst UNLIMITED_PLAN_PRICE = 20\n' },
+  /cache maximum age of 3600|landscape width of 1200|rate limit window ms of 60000|unlimited plan price/, 'no limit line (none of these limit what people can do)'))
+
+  }
+  const repro2 = (name: string, a: Record<string, string>, b: Record<string, string>, bug: RegExp, expected: string) => /^R3a|^R5/.test(name) ? true : repro(name, a, b, bug, expected)
+  {
+    // (round 2) known: a renamed limit with a reworded comparison reads as new + gone (no guess); per-plan names are skipped
+// Round 2 regressions / new false facts. Each repro asserts the bad behaviour still happens.
+const fn = (lim: string, cmp: string, count: string) => `from openai import OpenAI\nfrom datetime import UTC, datetime, time, timedelta\n${lim}\n\ndef check(db, user_id):\n    used = ${count}\n    ${cmp}\n        raise LimitReached\n`
+const daily = 'db.query(R).filter(R.user_id == user_id, R.created_at >= datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)).count()'
+const ever = 'db.query(R).filter(R.user_id == user_id).count()'
+const NOTHING = /^(?![\s\S]*(is gone|There's now|replaced|changed from|counts everything|length cap))/
+const r: boolean[] = []
+// R1 app-wide date count: an unrelated new trial helper (timedelta + "today") hides the p1 guess
+const trial = 'from datetime import UTC, datetime, timedelta\nTRIAL_DAYS = 14\n\ndef trial_over(user):\n    return datetime.now(UTC) > user.created_at + timedelta(days=TRIAL_DAYS)\n\ndef trial_label(user):\n    return "Your trial ends today" if trial_over(user) else ""\n'
+r.push(repro2('R1 p1 shape + new app/trial.py (timedelta, "today")', { ...req, 'app/ai.py': fn('DAILY_REQUEST_LIMIT = 50', 'if used >= DAILY_REQUEST_LIMIT:', daily), 'app/trial.py': 'X = 1\n' }, { ...req, 'app/ai.py': fn('FREE_EDIT_LIMIT = 20', 'if used >= FREE_EDIT_LIMIT:', ever), 'app/trial.py': trial }, /^(?![\s\S]*counts everything ever)/, 'the "counts everything ever" guess (trial.py never touches the edit count)'))
+// R2 AI SDK imported in a wrapper module: the capped call's own file imports '@/lib/openai' / app.llm
+const route = (cap: string) => `import { openai } from '@/lib/openai'\nexport async function POST() {\n  const r = await openai.chat.completions.create({ model: 'gpt-4o-mini', messages: []${cap} })\n  return Response.json(r.choices[0].message)\n}\n`
+const lib = { 'lib/openai.ts': "import OpenAI from 'openai'\nexport const openai = new OpenAI()\n" }
+r.push(repro2('R2a TS client in lib/openai.ts, max_tokens in route', { ...pkg, ...lib, 'app/api/chat/route.ts': route('') }, { ...pkg, ...lib, 'app/api/chat/route.ts': route(', max_tokens: 500') }, NOTHING, 'the AI-cap card (round 1 caught this)'))
+const pyl = { 'app/llm.py': 'from openai import OpenAI\nclient = OpenAI()\n' }
+const rw = (cap: string) => `from app.llm import client\ndef go(m):\n    return client.chat.completions.create(model="x", messages=m${cap}).choices[0].message.content\n`
+r.push(repro2('R2b PY client in app/llm.py, max_tokens in app/rewrite.py', { ...req, ...pyl, 'app/rewrite.py': rw('') }, { ...req, ...pyl, 'app/rewrite.py': rw(', max_tokens=500') }, NOTHING, 'the AI-cap card'))
+// R3 equal-value "rename" swallows the p1 hazard when the comparison is reworded (and hides two unrelated limits)
+r.push(repro2('R3a p1 shape, same value, comparison reworded (used + 1 > NEW)', { ...req, 'app/ai.py': fn('DAILY_REQUEST_LIMIT = 20', 'if used >= DAILY_REQUEST_LIMIT:', daily) }, { ...req, 'app/ai.py': fn('FREE_EDIT_LIMIT = 20', 'if used + 1 > FREE_EDIT_LIMIT:', ever) }, NOTHING, '"The daily request limit (20) is replaced by a free edit limit of 20." + the guess'))
+r.push(repro2('R3b DAILY_EXPORT_LIMIT=5 removed, FREE_SEAT_LIMIT=5 added (unrelated)', { ...pkg, 'lib/p.ts': 'export const DAILY_EXPORT_LIMIT = 5\nexport const canExport = (n: number) => n < DAILY_EXPORT_LIMIT\n' }, { ...pkg, 'lib/p.ts': 'export const FREE_SEAT_LIMIT = 5\nexport const canInvite = (n: number) => n < FREE_SEAT_LIMIT\n' }, NOTHING, '"There\'s now a free seat limit of 5. The daily export limit (5) is gone."'))
+// R4 sameValue: any new upper-case constant with the same value hides a real "gone"
+r.push(repro2('R4 MAX_PROJECTS=3 dropped (check removed), RETRY_ATTEMPTS=3 added', { ...pkg, 'lib/p.ts': 'export const MAX_PROJECTS = 3\nexport function canCreate(n: number) {\n  return n < MAX_PROJECTS\n}\n' }, { ...pkg, 'lib/p.ts': 'export const RETRY_ATTEMPTS = 3\nexport function canCreate(n: number) {\n  return true\n}\n' }, NOTHING, '"The maximum projects (3) is gone."'))
+// R5 #n keys shift with order: wrong "changed from"
+const plans = (...ps: [string, number][]) => ps.map(([k, v]) => `class ${k}:\n    MAX_PROJECTS = ${v}\n`).join('\n')
+r.push(repro2('R5a Team plan inserted between Free and Pro', { ...req, 'app/plans.py': plans(['Free', 3], ['Pro', 50]) }, { ...req, 'app/plans.py': plans(['Free', 3], ['Team', 10], ['Pro', 50]) }, /changed from 50 to 10/, 'no "changed" (Pro is still 50); ideally "There\'s now a maximum of 10 projects"'))
+r.push(repro2('R5b Free plan removed', { ...req, 'app/plans.py': plans(['Free', 3], ['Pro', 50]) }, { ...req, 'app/plans.py': plans(['Pro', 50]) }, /changed from 3 to 50/, '"The maximum projects (3) is gone." (Pro unchanged)'))
+// R6 "added" suppressed when the same name was defined anywhere before (a UI copy) — new server enforcement is silent
+const ui = { 'components/Plan.tsx': 'const FREE_PROJECT_LIMIT = 3\nexport const P = () => <p>Up to {FREE_PROJECT_LIMIT} projects</p>\n' }
+r.push(repro2('R6 server lib/limits.ts adds FREE_PROJECT_LIMIT; a component already had one', { ...pkg, ...ui, 'lib/limits.ts': 'export const X = 1\n' }, { ...pkg, ...ui, 'lib/limits.ts': 'export const X = 1\nexport const FREE_PROJECT_LIMIT = 3\n' }, NOTHING, '"There\'s now a free project limit of 3."'))
+// R7 wording: unit suffixes after MAX_, and toLocaleString rounding small USD
+r.push(repro2('R7 MAX_UPLOAD_MB / MAX_FILE_SIZE_BYTES / 0.0005 USD', { ...pkg, 'lib/v.ts': 'export const X = 1\n' }, { ...pkg, 'lib/v.ts': 'export const X = 1\nexport const MAX_UPLOAD_MB = 10\nexport const MAX_FILE_SIZE_BYTES = 5_242_880\nexport const MAX_COST_PER_REQUEST_USD = 0.0005\n' }, /maximum of 10 upload mb.*maximum of 0\.001 cost/, '"a maximum upload of 10 MB, a maximum file size of 5,242,880 bytes and a maximum cost per request of $0.0005"'))
+
+  }
+  {
+    // (round 3)
+// Round 3: new wrong facts / lost guesses. Each repro asserts the bad behaviour still happens.
+const fn = (lim: string, cmp: string, count: string, imp = '') => `from openai import OpenAI\nfrom datetime import UTC, datetime, time, timedelta\n${imp}${lim}\n\ndef check(db, user_id):\n    used = ${count}\n    ${cmp}\n        raise LimitReached\n`
+const daily = 'db.query(R).filter(R.user_id == user_id, R.created_at >= datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)).count()'
+const ever = 'db.query(R).filter(R.user_id == user_id).count()'
+const NOTHING = /^(?![\s\S]*(is gone|There's now|replaced|changed from|counts everything|length cap))/
+const r: boolean[] = []
+// S1 rename-by-shared-word runs before the exact comparison swap: same allowance, reset dropped -> reads as a brand-new limit, no guess
+r.push(repro('S1a DAILY_EDIT_LIMIT=20 -> FREE_EDIT_LIMIT=20, exact `used >= NEW` swap, daily filter removed', { ...req, 'app/ai.py': fn('DAILY_EDIT_LIMIT = 20', 'if used >= DAILY_EDIT_LIMIT:', daily) }, { ...req, 'app/ai.py': fn('FREE_EDIT_LIMIT = 20', 'if used >= FREE_EDIT_LIMIT:', ever) }, /^(?![\s\S]*counts everything ever)[\s\S]*There's now a free edit limit of 20/, '"The daily edit limit (20) is replaced by a free edit limit of 20." + the guess'))
+r.push(repro('S1b DAILY_EDIT_LIMIT=20 -> MONTHLY_EDIT_LIMIT=20', { ...req, 'app/ai.py': fn('DAILY_EDIT_LIMIT = 20', 'if used >= DAILY_EDIT_LIMIT:', daily) }, { ...req, 'app/ai.py': fn('MONTHLY_EDIT_LIMIT = 20', 'if used >= MONTHLY_EDIT_LIMIT:', daily) }, /There's now a monthly edit limit of 20(?![\s\S]*daily edit limit)/, '"The daily edit limit (20) is replaced by a monthly edit limit of 20."'))
+// S2 limit switched off with a sentinel: nothing at all
+for (const v of ['None', 'float("inf")', '-1'])
+  r.push(repro(`S2 MAX_PROJECTS = 3 -> ${v}`, { ...req, 'app/plans.py': 'MAX_PROJECTS = 3\n' }, { ...req, 'app/plans.py': `MAX_PROJECTS = ${v}\n` }, NOTHING, '"The maximum projects (3) is gone (no limit now)."'))
+r.push(repro('S2 FREE_PROJECT_LIMIT = 3 -> Infinity', { ...pkg, 'lib/p.ts': 'export const FREE_PROJECT_LIMIT = 3\n' }, { ...pkg, 'lib/p.ts': 'export const FREE_PROJECT_LIMIT = Infinity\n' }, NOTHING, '"The free project limit (3) is gone (no limit now)."'))
+// S3 date count includes imports: the limit file now imports the new trial helper -> p1 guess lost
+const trial = 'from datetime import UTC, datetime, timedelta\nTRIAL_DAYS = 14\n\ndef trial_over(user):\n    return datetime.now(UTC) > user.created_at + timedelta(days=TRIAL_DAYS)\n\ndef trial_label(user):\n    return "Your trial ends today" if trial_over(user) else ""\n'
+r.push(repro('S3 p1 shape; app/ai.py now does `from app.trial import trial_over`', { ...req, 'app/ai.py': fn('DAILY_REQUEST_LIMIT = 50', 'if used >= DAILY_REQUEST_LIMIT:', daily), 'app/trial.py': 'X = 1\n' }, { ...req, 'app/ai.py': fn('FREE_EDIT_LIMIT = 20', 'if used >= FREE_EDIT_LIMIT:', ever, 'from app.trial import trial_over\n'), 'app/trial.py': trial }, /^(?![\s\S]*counts everything ever)/, 'the guess'))
+// S4 object-key limit now read from env: "gone" again (assigned() needs `=`)
+r.push(repro('S4 { FREE_PROJECT_LIMIT: 3 } -> { FREE_PROJECT_LIMIT: Number(process.env... ?? 3) }', { ...pkg, 'lib/p.ts': 'export const LIMITS = {\n  FREE_PROJECT_LIMIT: 3,\n}\n' }, { ...pkg, 'lib/p.ts': 'export const LIMITS = {\n  FREE_PROJECT_LIMIT: Number(process.env.FREE_PROJECT_LIMIT ?? 3),\n}\n' }, /The free project limit \(3\) is gone/, 'no line'))
+// S5 units/currency dropped in "changed"/"gone"; CHARS reads as "size"
+r.push(repro('S5 MB / USD / CHARS in changed and gone lines', { ...pkg, 'lib/p.ts': 'export const MAX_UPLOAD_MB = 10\nexport const DAILY_AI_BUDGET_USD = 5\n' }, { ...pkg, 'lib/p.ts': 'export const MAX_UPLOAD_MB = 25\nexport const MAX_TITLE_CHARS = 80\n' }, /daily AI budget \(5\) is gone.*maximum upload changed from 10 to 25|maximum upload changed from 10 to 25.*daily AI budget \(5\) is gone/, '"The maximum upload size changed from 10 MB to 25 MB", "The daily AI budget ($5) is gone", "a maximum title length of 80 characters"'))
+r.push(repro('S5b new MAX_TITLE_CHARS', { ...pkg, 'lib/p.ts': 'export const X = 1\n' }, { ...pkg, 'lib/p.ts': 'export const X = 1\nexport const MAX_TITLE_CHARS = 80\n' }, /maximum title size of 80 characters/, '"a maximum title length of 80 characters"'))
+// S6 rename-by-shared-word hides a real "gone"
+r.push(repro('S6 MAX_PROJECTS=3 + its check removed, PROJECTS_PER_ROW=3 added', { ...pkg, 'lib/p.ts': 'export const MAX_PROJECTS = 3\nexport const can = (n: number) => n < MAX_PROJECTS\n' }, { ...pkg, 'lib/p.ts': 'export const PROJECTS_PER_ROW = 3\nexport const can = (n: number) => true\n' }, NOTHING, '"The maximum projects (3) is gone."'))
+// S7 MODEL_CALL `.invoke(` matches non-AI calls (supabase.functions.invoke, ipcRenderer.invoke) in an app that has an AI dep
+const ai = { 'lib/ai.ts': "import OpenAI from 'openai'\nexport const o = new OpenAI()\n" }
+r.push(repro('S7 token bucket maxTokens + supabase.functions.invoke', { ...pkg, ...ai, 'lib/edge.ts': "export async function call(s: any) {\n  return s.functions.invoke('x')\n}\n" }, { ...pkg, ...ai, 'lib/edge.ts': "const bucket = new TokenBucket({ maxTokens: 100 })\nexport async function call(s: any) {\n  await bucket.take()\n  return s.functions.invoke('x')\n}\n" }, /AI answers now have a length cap/, 'no AI card'))
+// S8 (miss) a new capped call with the same value as an existing capped call
+const call = (f: string, cap: string) => `def ${f}(m):\n    return client.chat.completions.create(model="x", messages=m${cap}).choices[0].message.content\n`
+const head = 'from openai import OpenAI\nclient = OpenAI()\n'
+r.push(repro('S8 rewrite() newly capped at 500; summarize() already had 500', { ...req, 'app/ai.py': head + call('summarize', ', max_tokens=500') + call('rewrite', '') }, { ...req, 'app/ai.py': head + call('summarize', ', max_tokens=500') + call('rewrite', ', max_tokens=500') }, NOTHING, 'the AI-cap card'))
+
+  }
+  {
+    // (round 4)
+// Round 4: new false alarms / wrong facts. Each repro asserts the bad behaviour still happens.
+const NOTHING = /^(?![\s\S]*(is gone|There's now|replaced|changed from|counts everything|length cap))/
+const EVER = /counts everything ever/
+const r: boolean[] = []
+// T1 helperBody only finds `def h(` / `function h(`: a date check moved into an arrow helper or an object method -> false "counts everything ever"
+const before = "export const DAILY_EDIT_LIMIT = 20\nexport async function assertCanEdit(id: string) {\n  const used = await db.edit.count({ where: { userId: id, createdAt: { gte: startOfDay(new Date()) } } })\n  if (used >= DAILY_EDIT_LIMIT) throw new Error('limit')\n}\n"
+r.push(repro('T1a arrow helper: const editsToday = async (id) => db.edit.count({ ... gte: startOfDay(...) })', { ...pkg, 'lib/limits.ts': before }, { ...pkg, 'lib/limits.ts': "export const FREE_EDIT_LIMIT = 20\nconst editsToday = async (id: string) =>\n  db.edit.count({ where: { userId: id, createdAt: { gte: startOfDay(new Date()) } } })\nexport async function assertCanEdit(id: string) {\n  const used = await editsToday(id)\n  if (used >= FREE_EDIT_LIMIT) throw new Error('limit')\n}\n" }, EVER, 'no guess (still counts today only)'))
+r.push(repro('T1b object method in lib/usage.ts: usage.editsToday(id)', { ...pkg, 'lib/limits.ts': before }, { ...pkg, 'lib/limits.ts': "import { usage } from './usage'\nexport const FREE_EDIT_LIMIT = 20\nexport async function assertCanEdit(id: string) {\n  const used = await usage.editsToday(id)\n  if (used >= FREE_EDIT_LIMIT) throw new Error('limit')\n}\n", 'lib/usage.ts': "export const usage = {\n  async editsToday(id: string) {\n    return db.edit.count({ where: { userId: id, createdAt: { gte: startOfDay(new Date()) } } })\n  },\n}\n" }, EVER, 'no guess'))
+// T2 rename via the definition-line fallback (limit used only in other files): a removed limit + an unrelated same-value limit -> both hidden
+const route = (n: string) => `import { ${n} } from '@/lib/limits'\nexport async function POST() {\n  if ((await count()) >= ${n}) return new Response('limit', { status: 402 })\n}\n`
+const base = { ...pkg, 'app/api/projects/route.ts': route('FREE_PROJECT_LIMIT') }
+r.push(repro('T2 lib/limits.ts: FREE_PROJECT_LIMIT=3 removed (route stops checking), FREE_SEAT_LIMIT=3 added', { ...base, 'lib/limits.ts': 'export const FREE_PROJECT_LIMIT = 3\nexport const FREE_MEMBER_LIMIT = 5\n' }, { ...base, 'lib/limits.ts': 'export const FREE_MEMBER_LIMIT = 5\nexport const FREE_SEAT_LIMIT = 3\n', 'app/api/projects/route.ts': "export async function POST() {\n  return new Response('ok')\n}\n" }, NOTHING, '"There\'s now a free seat limit of 3. The free project limit (3) is gone." (with 4 instead of 3 it says exactly that)'))
+// T3 rename-by-use-lines accepts an EXISTING constant: free tier dropped to the pro limit -> silent
+r.push(repro('T3 limitFor(): FREE_PROJECT_LIMIT (3) removed, both branches now PRO_PROJECT_LIMIT (100)', { ...pkg, 'lib/l.ts': 'export const FREE_PROJECT_LIMIT = 3\nexport const PRO_PROJECT_LIMIT = 100\nexport const limitFor = (pro: boolean) => pro ? PRO_PROJECT_LIMIT : FREE_PROJECT_LIMIT\n' }, { ...pkg, 'lib/l.ts': 'export const PRO_PROJECT_LIMIT = 100\nexport const limitFor = (pro: boolean) => pro ? PRO_PROJECT_LIMIT : PRO_PROJECT_LIMIT\n' }, NOTHING, '"The free project limit (3) is gone."'))
+// T4 unlimited: a Python conditional with None in one branch reads as "no limit now"
+r.push(repro('T4 MAX_PROJECTS = None if SELF_HOSTED else 3', { ...req, 'app/plans.py': 'MAX_PROJECTS = 3\n' }, { ...req, 'app/plans.py': 'import os\nSELF_HOSTED = os.getenv("SELF_HOSTED") == "1"\nMAX_PROJECTS = None if SELF_HOSTED else 3\n' }, /is gone \(no limit now\)/, 'no line (still 3 unless self-hosted), or "…can now be turned off"'))
+
+  }
+  {
+    // (round 5)
+// Round 5: does anything new reproduce?
+const EVER = /counts everything ever/
+const before = "export const DAILY_EDIT_LIMIT = 20\nexport async function assertCanEdit(id: string) {\n  const used = await db.edit.count({ where: { userId: id, createdAt: { gte: startOfDay(new Date()) } } })\n  if (used >= DAILY_EDIT_LIMIT) throw new Error('limit')\n}\n"
+const after = (helper: string) => `export const FREE_EDIT_LIMIT = 20\n${helper}\nexport async function assertCanEdit(id: string) {\n  const used = await editsToday(id)\n  if (used >= FREE_EDIT_LIMIT) throw new Error('limit')\n}\n`
+const q = "db.edit.count({ where: { userId: id, createdAt: { gte: startOfDay(new Date()) } } })"
+repro('U1 TS arrow helper with a return type: const editsToday = async (id: string): Promise<number> =>', { ...pkg, 'lib/limits.ts': before }, { ...pkg, 'lib/limits.ts': after(`const editsToday = async (id: string): Promise<number> =>\n  ${q}`) }, EVER, 'no guess')
+repro('U2 control: arrow without return type', { ...pkg, 'lib/limits.ts': before }, { ...pkg, 'lib/limits.ts': after(`const editsToday = async (id: string) =>\n  ${q}`) }, EVER, 'no guess')
+repro('U3 function expression: const editsToday = async function (id) {', { ...pkg, 'lib/limits.ts': before }, { ...pkg, 'lib/limits.ts': after(`const editsToday = async function (id: string) {\n  return ${q}\n}`) }, EVER, 'no guess')
+
+  }
+  console.log('ok (review 30)')
+}
 // "Tests couldn't be executed": the agent didn't run them
 assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. Tests couldn’t be executed because the environment has no Go toolchain installed.' }).includes("didn't run or test"), 'untested: passive')
 // (round 10) "Full runtime testing wasn’t possible", "tests weren’t available", "Full builds could not run"; not "a refund wasn't possible"
