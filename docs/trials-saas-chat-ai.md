@@ -758,8 +758,11 @@ cards were made with plain as pushed at that time (commit 6b3f57c).
   listed).
 
 **Rules this suggests** (not built yet):
-1. Only `DROP TABLE`, `DROP COLUMN`, `DELETE` and `TRUNCATE` count as deleting data; skip the unique-rule warning
-   when the rule includes the primary key.
+1. ✅ Done later (review 39, three rounds): only dropping a table, column, schema, partition, or a type/domain/extension
+   with CASCADE, `TRUNCATE` and `DELETE … FROM` count as deleting data (not constraints, indexes, defaults or checks; not
+   function bodies, but `DO` blocks yes). The unique-rule warning is skipped when the rule includes the model's one
+   `@id`. A migration that only adds or drops plain indexes says the new code doesn't need it first; anything else
+   keeps "before the new code goes live".
 2. A `delete` in a route or an `except` branch is a delete, not a save ("un-counts on failure").
 3. A limit constant used with a time window reads "5 per 10 seconds".
 4. A 🔴 guess when an AI client's timeout is far shorter than `max_tokens` needs and nothing streams.

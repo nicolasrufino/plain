@@ -3737,3 +3737,33 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   assert.ok(c.includes('room members only ✓'), c)
   console.log('ok (room members)')
 }
+// Migrations that only change rules: dropping a constraint or an index doesn't delete data, a unique rule with the id in it can't fail,
+// and a migration that adds no tables or columns doesn't have to run before the new code
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Project {\n  id String @id\n  workspaceId String\n  name String\n}\n' }
+  const mig = (sql: string) => ({ ...base, 'prisma/migrations/2_x/migration.sql': sql })
+  let c = card(base, mig('ALTER TABLE "Task" DROP CONSTRAINT "Task_projectId_fkey";\nDROP INDEX "Task_x_idx";\nCREATE UNIQUE INDEX "Project_workspaceId_id_key" ON "Project"("workspaceId", "id");\nALTER TABLE "Task" ADD CONSTRAINT "Task_p_fkey" FOREIGN KEY ("projectId", "workspaceId") REFERENCES "Project"("id", "workspaceId");\n'))
+  assert.ok(!c.includes('deletes data') && !c.includes('no two projects') && c.includes('before the new code goes live'), c)
+  // only plain indexes: the new code doesn't need it first
+  c = card(base, mig('CREATE INDEX "Project_name_idx" ON "Project"("name");\nDROP INDEX "Project_old_idx";\n'))
+  assert.ok(c.includes("It only adds or removes indexes, which make lookups faster, so the new code doesn't need it first."), c)
+  // (review 39) a changed foreign key (onDelete: Cascade) or a dropped unique rule: before the new code
+  for (const sql of ['ALTER TABLE "Task" DROP CONSTRAINT "Task_p_fkey";\nALTER TABLE "Task" ADD CONSTRAINT "Task_p_fkey" FOREIGN KEY ("p") REFERENCES "Project"("id") ON DELETE CASCADE;', 'DROP INDEX "Project_slug_key";', 'DROP INDEX "uniq_project_name";'])
+    { c = card(base, mig(sql)); assert.ok(c.includes('before the new code goes live'), `${sql}: ${c}`) }
+  // a type dropped with CASCADE, a dropped partition: deletes data; a DELETE inside a function body or a comment doesn't
+  for (const sql of ['DROP TYPE "Status" CASCADE;', 'ALTER TABLE t DROP PARTITION p0;', 'DO $$ BEGIN DROP TABLE "Project"; END $$;', 'DELETE p FROM `Project` p JOIN `Workspace` w ON w.id = p.workspaceId;']) { c = card(base, mig(sql)); assert.ok(c.includes('deletes data'), `${sql}: ${c}`) }
+  for (const sql of ['CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN DELETE FROM "Log"; RETURN NEW; END $$ LANGUAGE plpgsql;', '-- DROP TABLE "Project" later\nCREATE INDEX "a_idx" ON "Project"("name");'])
+    { c = card(base, mig(sql)); assert.ok(!c.includes('deletes data'), `${sql}: ${c}`) }
+  // real deletes still say so: a column, a table, MySQL's DROP without COLUMN, DELETE FROM
+  for (const sql of ['ALTER TABLE "Project" DROP COLUMN "name";', 'DROP TABLE "Project";', 'ALTER TABLE `Project` DROP `name`;', 'DELETE FROM "Project" WHERE "name" = \'x\';'])
+    { c = card(base, mig(sql)); assert.ok(c.includes('deletes data'), `${sql}: ${c}`) }
+  // a unique rule on id when id isn't the one key (a composite @@id): still warns
+  const comp = { ...base, 'prisma/schema.prisma': 'model Project {\n  id String\n  tenantId String\n  name String\n  @@id([tenantId, id])\n}\n' }
+  c = card(comp, { ...comp, 'prisma/migrations/2_x/migration.sql': 'CREATE UNIQUE INDEX "Project_id_key" ON "Project"("id");' })
+  assert.ok(c.includes('no two projects can share'), c)
+  // a unique rule on old columns without the id still warns
+  c = card(base, mig('CREATE UNIQUE INDEX "Project_workspaceId_name_key" ON "Project"("workspaceId", "name");'))
+  assert.ok(c.includes('no two projects can share'), c)
+  console.log('ok (rule-only migrations)')
+}

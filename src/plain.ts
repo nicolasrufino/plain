@@ -2291,8 +2291,15 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     ship.push(`Update your database: ${dir ? `in ${dir}, ` : ''}run \`npx prisma migrate dev${flag}\` (on your live site: \`npx prisma migrate deploy${flag}\`). The database's structure changed, but no migration was created.${added.length ? ` Until you do, anything that uses ${list(added.map(things))} will fail.` : ''}`)
   }
   // (SQLite can't alter a table in place: Prisma rebuilds it as new_X, copies every row, drops X and renames new_X back. Nothing is lost.)
+  // Deletes data: a table, a column (MySQL's `ALTER TABLE t DROP c` too), a schema, TRUNCATE, DELETE FROM. Not dropping a constraint, an
+  // index, a foreign key, a default, NOT NULL or a check: those change rules, and the rows stay.
+  // (a type, domain or extension dropped with CASCADE takes its columns with it; a dropped partition its rows. SQL comments and function
+  // bodies (`AS $$...$$`, not a `DO $$...$$` block, which runs right away) aside. `ci` false for Python, where only upper-case SQL counts: not "drop table" in a docstring)
+  const dropsData = (sql0: string, ci = true) => { const sql = sql0.replace(/--[^\n]*/g, '').replace(/\bAS\s+\$\$[\s\S]*?\$\$/gi, ''), f = ci ? 'i' : ''
+    return new RegExp(String.raw`\bDROP\s+(?:TABLE|COLUMN|SCHEMA|DATABASE)\b|\bTRUNCATE\b|\bDELETE\b[^;]*?\bFROM\b|\bDROP\s+(?:TYPE|DOMAIN|EXTENSION)\b[^;]*\bCASCADE\b`, f).test(sql)
+    || new RegExp(String.raw`\bALTER\s+TABLE\b[^;]*?\bDROP\s+(?!CONSTRAINT\b|INDEX\b|FOREIGN\b|PRIMARY\b|DEFAULT\b|NOT\b|CHECK\b|KEY\b|UNIQUE\b|IDENTITY\b|EXPRESSION\b|TRIGGER\b|COLUMN\b|IF\s+EXISTS\s+(?:CONSTRAINT|INDEX)\b)["\`\[]?\w`, f).test(sql) }
   const rebuilt = (sql: string) => sql.replace(/DROP TABLE\s+["`]?(\w+)["`]?;?/gi, (m, t: string) => new RegExp(`INSERT INTO\\s+["\`]?(?:__)?new_${t}(?!\\w)["\`]?[\\s\\S]*RENAME TO\\s+["\`]?${t}(?!\\w)`, 'i').test(sql) ? '' : m)   // drizzle-kit: __new_x
-  for (const m of newMigrations) if (/\bDROP\b/i.test(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+  for (const m of newMigrations) if (dropsData(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
   if (newMigrations.length) {
     // a new column on a table the app already had: Prisma asks for every column by default, so until it's applied, loading those rows fails
     // anywhere, not just in the new parts (`ALTER TABLE "Workspace" ADD COLUMN "plan"`, the table named for its model, no @@map, and the
@@ -2305,7 +2312,13 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     // the project's own migrate script is `prisma migrate dev`: that's for your computer (it can offer to wipe the database), not a live one
     const root = newMigrations[0].replace(/prisma\/migrations\/.*$/, ''), scripts = (() => { try { return JSON.parse(after.get(`${root}package.json`) ?? '{}').scripts ?? {} } catch { return {} } })() as Record<string, string>
     const devOnly = Object.entries(scripts).filter(([, c]) => /\bprisma\s+migrate\s+dev\b/.test(c)).sort(([, a], [, b]) => +/--create-only/.test(a) - +/--create-only/.test(b)).map(([k]) => k), deploys = Object.values(scripts).some(c => /\bprisma\s+migrate\s+deploy\b/.test(c))
-    ship.push(`Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database before the new code goes live (\`npx prisma migrate deploy\`), or ${widened.length ? `pages that load ${list(widened.map(things))} can fail too, not just the new parts (Prisma asks for every column).` : 'the parts that use it will fail.'}`
+    // (one that only adds or drops plain indexes, not unique ones (Prisma names those _key): lookups get faster, nothing else changes, so
+    // the new code doesn't need it first. A changed foreign key (onDelete), a new rule, a MODIFY, a view or a backfill: it may.)
+    const rulesOnly = newMigrations.every(m => { const st = (after.get(m) ?? '').replace(/--[^\n]*/g, '').split(';').map(x => x.trim()).filter(Boolean)
+      return st.length > 0 && st.every(x => /^CREATE\s+INDEX\b/i.test(x) || /^DROP\s+INDEX\b/i.test(x) && /_idx["`]?\s*(?:ON\b|$)/i.test(x)) })   // (a plain index as Prisma names it: not `_key`, nor a custom-named unique one)
+    ship.push(rulesOnly ? `Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database (\`npx prisma migrate deploy\`). It only adds or removes indexes, which make lookups faster, so the new code doesn't need it first.`
+      + (devOnly.length && !deploys ? ` Don't use the \`${devOnly[0]}\` script there: it runs \`prisma migrate dev\`, which is for your own computer and can offer to wipe the database.` : '')
+      : `Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database before the new code goes live (\`npx prisma migrate deploy\`), or ${widened.length ? `pages that load ${list(widened.map(things))} can fail too, not just the new parts (Prisma asks for every column).` : 'the parts that use it will fail.'}`
       + (devOnly.length && !deploys ? ` Don't use the \`${devOnly[0]}\` script there: it runs \`prisma migrate dev\`, which is for your own computer and can offer to wipe the database.` : ''))
   }
   // A new "no duplicates" rule (a unique index) on a table that already has rows fails to apply if the live data has duplicates
@@ -2324,7 +2337,10 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const had = (c: string) => !!model && A.models.get(model)!.some(f => norm_(f) === norm_(c) || f.startsWith('→') && singular(f.slice(1)).toLowerCase() === norm_(c).replace(/id$/, ''))
       // a partial index (WHERE ...) counts only when its condition is about columns that already had data
       const where = (x[3].match(/\bWHERE\b([\s\S]*)/i)?.[1] ?? '').replace(/'[^']*'/g, '').match(/[A-Za-z_]\w*/g)?.filter(w => !/^(and|or|not|in|is|null|true|false|like)$/i.test(w)) ?? []
-      if (model && cols.every(had) && where.every(had))
+      // (a rule that includes the row's own id can't fail when that id is the model's one key: `id String @id`, no @@id)
+      const body = (after.get(B.schemaPath ?? '') ?? '').match(new RegExp(String.raw`\bmodel\s+${model}\s*\{([^}]*)\}`))?.[1] ?? ''
+      const soleId = /^\s*id\s+\w+[^\n]*@id\b/m.test(body) && !/@@id\s*\(/.test(body)
+      if (model && cols.every(had) && where.every(had) && !(soleId && cols.some(c => /^id$/i.test(c))))
         ship.push(`Check your live data before applying ${m}: it adds a rule that no two ${things(model)} can share the same ${list(cols.map(c => fieldName(c) || words(camel(c).replace(/Id$/, ''))))}. If any already do, the update fails.`)
     }
   }
@@ -2391,7 +2407,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Check', text: `Any website can call your server from a visitor's browser (CORS allows all sites). Fine for a public API, not for one that uses logins. (in ${p})` })
   // Flyway (Spring Boot): a new V2__x.sql runs by itself the next time the app starts; if it fails, the app doesn't start
   const newFlyway = B.flyway.filter(m => !A.flyway.includes(m))
-  for (const m of newFlyway) if (/\bDROP\b/i.test(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+  for (const m of newFlyway) if (dropsData(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
   if (newFlyway.length && Object.keys(B.deps).some(d => /^flyway-/.test(d))) ship.push(`${list(newFlyway.map(m => m.split('/').pop()!))} will change your live database by itself the next time the app starts (Flyway). Back up first; if it fails, the app won't start.`)
   // JPA: ddl-auto=create / create-drop rebuilds every table, empty, each time the app starts (fine in tests, a wipe on a live site)
   for (const p of real.filter(p => /(^|\/)src\/main\/resources\/application\.(properties|ya?ml)$/.test(p))) {
@@ -2510,7 +2526,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     ship.push(B.dzMigrations.length ? 'Update your database: run `npx drizzle-kit generate`, then `npx drizzle-kit migrate` (also on your live site). The tables changed, but no migration was created.'
       : 'Update your database: run `npx drizzle-kit push` (also against your live database). The tables changed, and until then the parts that use them will fail.')
   for (const m of newDz) {
-    if (/\bDROP\b/i.test(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+    if (dropsData(rebuilt(after.get(m) ?? ''))) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
     ship.push(`Apply ${m} to your live database before the new code goes live (\`npx drizzle-kit migrate\`), or the parts that use it will fail.`)
   }
   // Supabase: new migrations, what they destroy (removed tables and columns are already listed above), and who the rules let in.
@@ -2554,7 +2570,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   if (speed.length) ship.push(`Apply ${list(speed)} to your live database too (${cmd}). It only makes lookups faster, so nothing breaks if it runs later.`)
   for (const m of newPyMigrations) {
     const up = (after.get(m) ?? '').split(/def downgrade|def backwards/)[0]
-    if (/op\.drop_(table|column)|RemoveField|DeleteModel|\bDROP\b/.test(up)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
+    if (/op\.drop_(table|column)|RemoveField|DeleteModel/.test(up) || dropsData(up, false)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)
   }
 
   // broken, unasked, unfinished
