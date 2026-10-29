@@ -3872,3 +3872,19 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   c = card(two); assert.ok(c.includes('lists users and requires login ✓') && !c.includes('lists users and is for admins'), `two routers: ${c}`)
   console.log('ok (inline admin middleware)')
 }
+// Express: a guard for a whole route chain, router.route('/x').all(requireAuth).get(h).post(h); not one added after the handler
+{
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","@prisma/client":"6.0.0"}}', 'auth.js': 'exports.requireAuth = (req, res, next) => { if (!req.user) return res.status(401).end(); next() }\n' }
+  const srv = (chain: string) => ({ ...ex, 'server.js': `const express = require("express")\nconst { requireAuth } = require("./auth")\nconst app = express()\nconst router = express.Router()\nrouter.route("/orders")${chain}\napp.use("/api", router)\napp.listen(3000)\n` })
+  const card = (files: Record<string, string>) => report(new Map(Object.entries(ex)), new Map(Object.entries(files)), { ref: 'main' }).replace(/\s+/g, ' ')
+  let c = card(srv('.all(requireAuth).get(async (req, res) => res.json(await prisma.order.findMany())).post(async (req, res) => res.json(await prisma.order.create({ data: req.body })))'))
+  assert.ok(c.includes('requires login ✓') && !c.includes('without logging in'), c)
+  c = card(srv('.post(async (req, res) => res.json(await prisma.order.create({ data: req.body }))).all(requireAuth)'))
+  assert.ok(!c.includes('requires login ✓'), c)
+  // (a bare optional-login middleware isn't a login check, in a chain or on a route)
+  c = card(srv('.all(optionalAuth).post(async (req, res) => res.json(await prisma.order.create({ data: req.body })))'))
+  assert.ok(!c.includes('requires login ✓'), c)
+  const route = { ...ex, 'server.js': 'const express = require("express")\nconst { optionalAuth } = require("./auth")\nconst app = express()\napp.post("/orders", optionalAuth, async (req, res) => res.json(await prisma.order.create({ data: req.body })))\napp.listen(3000)\n' }
+  c = card(route); assert.ok(!c.includes('requires login ✓'), c)
+  console.log('ok (route chain guards)')
+}

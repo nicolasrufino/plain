@@ -93,7 +93,7 @@ const isExported = (n: ts.Node) =>
 const HTTP = /^(get|post|put|patch|delete)$/
 const SERVER = /^(express(\.Router)?|Router|fastify|Fastify|new Hono|require\(['"]express['"]\)(\.Router)?)\(/   // what makes a variable a server/router
 const GUARD = /auth|admin|protect|login|logged|token|jwt|session|private/i   // server middleware that checks who you are
-const NOT_GUARD = /(^|\.)session\(|(^|\.|express|cookie)[sS]ession\(\s*\{|passport\.(initialize|session)|cookie|csrf|cors|helmet|(routes?|router)$|\boptional\w*\(|\w*Optional\(|optional\s*:\s*true|credentialsRequired\s*:\s*false|sessionRequired\s*:\s*false/i   // (expressSession({...}), optionalAuth(), expressjwt({ credentialsRequired: false }) let everyone through)   // sets up sessions or mounts routes; checks nothing
+const NOT_GUARD = /(^|\.)session\(|(^|\.|express|cookie)[sS]ession\(\s*\{|passport\.(initialize|session)|cookie|csrf|cors|helmet|(routes?|router)$|\boptional\w*\(|\w*Optional\(|^\s*optional\w*\s*$|^\s*\w*(?:auth|user|login|session)Optional\s*$|optional\s*:\s*true|credentialsRequired\s*:\s*false|sessionRequired\s*:\s*false/i   // (expressSession({...}), optionalAuth(), expressjwt({ credentialsRequired: false }) let everyone through)   // sets up sessions or mounts routes; checks nothing
 const PAGE_GUARD = /auth|protect|private|require|guard|signedin|loggedin/i   // client wrapper that does
 const empty = (printed = ''): FileFacts => ({
   fns: new Map(), used: new Set(), jsx: new Set(), services: new Set(), tables: new Set(), ops: new Set(),
@@ -484,7 +484,11 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
           addHandler(obj, last, arg, args.slice(1, -1), args.at(-1)!)
           return   // the handler's facts belong to the route, not to the whole file
         } else if (chain && servers.has(chain[1]) && HTTP.test(last) && args.length) {
-          addHandler(chain[1], last, chain[3], args.slice(0, -1), args.at(-1)!)
+          // (a guard for the whole chain: `router.route('/x').all(requireAuth).get(h)`)
+          const all: ts.Expression[] = []
+          for (let e: ts.Expression = callee.expression; ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression); e = e.expression.expression)
+            if (e.expression.name.text === 'all') all.push(...e.arguments)
+          addHandler(chain[1], last, chain[3], [...all, ...args.slice(0, -1)], args.at(-1)!)
           visit(callee.expression)   // the earlier .get(h) in the chain
           return
         } else if (HTTP.test(last) && arg?.startsWith('/') && !servers.has(obj)) f.calls.push({ name: obj, path: arg.split('?')[0], method: last.toUpperCase(), prop: true })   // axios.get('/api/x')
