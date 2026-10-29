@@ -72,9 +72,10 @@ export type FileFacts = {
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
   authStop: boolean; authReturn: boolean   // turns away people who aren't logged in (see loginGroups); authReturn: the same check ending in a return
   exportAuth?: boolean                    // Nuxt: the default-exported handler itself checks login
+  leadCalls?: string[]   // a function's first, unconditional `await X(...)` calls (see collect)
   socketEvents?: Map<string, FileFacts>; socketRefs?: Map<string, string>; socketAuth?: boolean; socketGuardish?: boolean   // Socket.IO: socket.on('send message', ...) and what each does; io.use(...) turning away connections without a login
   pageFns?: number[]   // Next.js: where the default export (the page or layout itself) and getServerSideProps start
-  authIfs: { g: string; at: number; fn: number }[]; skipIfs: { c: string; at: number; fn: number }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
+  authIfs: { g: string; at: number; fn: number; req?: boolean }[]; skipIfs: { c: string; at: number; fn: number }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
   handlers: { server: string; method: string; path: string; guard: boolean; admin?: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean; unknown?: boolean; nextAction?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
@@ -225,6 +226,31 @@ export function fileFacts(path: string, text: string): FileFacts {
 const CLIENT_MAKER = /^(await\s+)?(createClient|createServerClient|createBrowserClient|\w*[Ss]upabase\w*)\s*(<[^>]*>)?\(/
 const clientsOf = new WeakMap<ts.SourceFile, Set<string>>()   // one set per file: a client made at the top is used inside handlers
 function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
+  // lead calls: `await X(...)` / `const … = await X(...)` statements at the top of a function body, before anything that writes,
+  // loops, branches or catches (an early `if (...) return` is fine): what runs first, every time. Not `X().catch(...)`, not
+  // without await, not in a try, a loop, a ternary or Promise.all.
+  const body0 = ts.isFunctionDeclaration(root) || ts.isArrowFunction(root) || ts.isFunctionExpression(root) || ts.isMethodDeclaration(root) ? root.body : undefined
+  if (body0 && ts.isBlock(body0)) {
+    const LEAD_WRITE = /\.(create|createMany|update|updateMany|upsert|delete|deleteMany|insert|destroy|save|remove|execute\w*)\s*\(|\bsql`|\$executeRaw|\bresolve\s*\(/
+    // (a statement passed over calls nothing of the app: built-ins and methods like String(...) / formData.get(...), not an app
+    // function and not a method on something imported from the app: `repo.removeAll()` from `import * as repo from "@/lib/repo"`)
+    const appNames = new Set(sf.statements.filter(ts.isImportDeclaration).filter(d => /^(\.|@\/|~\/)/.test((d.moduleSpecifier as ts.StringLiteral).text)).flatMap(d => {
+      const c = d.importClause; return c ? [...c.name ? [c.name.text] : [], ...c.namedBindings && ts.isNamespaceImport(c.namedBindings) ? [c.namedBindings.name.text] : []] : [] }))
+    const callsApp = (t: string) => [...t.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)].some(m => !/^(String|Number|Boolean|BigInt|JSON|parseInt|parseFloat|Date|Array|Object|Math|URL|URLSearchParams|encodeURIComponent|decodeURIComponent|isNaN|Symbol|Error|if|return|typeof|await|new|async|function)$/.test(m[1]))
+      || [...t.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\.\s*[\w$.]+\s*\(/g)].some(m => appNames.has(m[1]))
+    // (and its arguments do nothing first: no await, no app call: not getMember(purge()))
+    const callOf = (e?: ts.Expression) => e && ts.isAwaitExpression(e) && ts.isCallExpression(e.expression) && ts.isIdentifier(e.expression.expression) && !e.expression.arguments.some(a => /\bawait\b/.test(a.getText(sf)) || callsApp(a.getText(sf))) ? e.expression.expression.text : undefined
+    const lead: string[] = []
+    for (const st of body0.statements) {
+      const t = st.getText(sf)
+      if (ts.isIfStatement(st) && !st.elseStatement && /^\s*\{?\s*return\b/.test(st.thenStatement.getText(sf)) && !LEAD_WRITE.test(t) && !/\bawait\b/.test(t) && !callsApp(t)) continue
+      const c = ts.isExpressionStatement(st) || ts.isReturnStatement(st) ? callOf(st.expression) : ts.isVariableStatement(st) && st.declarationList.declarations.length === 1 ? callOf(st.declarationList.declarations[0].initializer) : undefined   // (`return await requireUser()` too)
+      if (c) { lead.push(c); continue }
+      if (ts.isVariableStatement(st) && !/\bawait\b/.test(t) && !LEAD_WRITE.test(t) && !/=>|function\b/.test(t) && !callsApp(t)) continue   // const id = String(formData.get('id'))
+      break
+    }
+    f.leadCalls = lead
+  }
   const servers = new Set<string>(), guarded = new Set<string>(), guardMw = new Map<string, string[]>()   // guardMw: router.use(requireAuth, requireAdmin)'s names
   let sbClients = clientsOf.get(sf)
   if (!sbClients) {
@@ -341,7 +367,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     }
     // requireUserSession(event): everywhere, or only where the ifs around it say
     if (ts.isCallExpression(n) && (REQUIRE_LOGIN.test(n.expression.getText(sf).split('.').at(-1)!) || /^auth\.protect$/.test(n.expression.getText(sf)))) {   // (Clerk's auth.protect())
-      const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn }) }
+      const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn, req: true }) }   // (req: by name; a server action counts it only as a lead call)
     }
     // Socket.IO (server only: a file importing 'socket.io', not the client): inside io.on('connection', socket => ...), each
     // socket.on / once('event', handler) is an event the live connection takes (not the built-in disconnect / error).
@@ -1718,6 +1744,22 @@ export function appFacts(snap: Snap) {
           for (const x of c.used) usedAll.add(x); if (c.auth || c.authStop || c.sbAuth) usedAll.add('auth')
           unit.money ||= c.money; follow(q!, c, depth + 1, seen) } }
         const seen = new Set([`${p}:${h.handler}`]); follow(p, hf, 0, seen)
+        // Next.js: a helper of this app that turns guests away (requireWorkspaceMember -> requireUser -> redirect('/login')), among
+        // the action's lead calls (first, awaited, unconditional). The helper has to stop them itself (redirect, throw, notFound:
+        // not `return null`, which the action carries on from), with no early way out, or lead-call one that does (two levels).
+        // Not one imported under another name (plain would read the wrong function).
+        if (h.nextAction) { const stops = (at: string, n: string, depth: number): boolean => { const q = files.get(at)?.locals.has(n) ? at : target(at, n), c = q ? files.get(q)?.locals.get(n) : undefined
+            if (q && q !== at && new RegExp(String.raw`\b\w+\s+as\s+${n}\b`).test(files.get(at)?.printed ?? '')) return false
+            if (!c) return REQUIRE_LOGIN.test(n)   // (a requireUser plain can't read: trusted by its name, as a lead call)
+            // (its own check: not by a require* call (that counts only as its lead call), and no try whose catch doesn't rethrow)
+            // (a catch rethrows only with `throw <its error>` or unstable_rethrow; one that throws only for other errors swallows the redirect)
+            // (rethrows: `throw e` first, or guarded by isRedirectError(e), or unstable_rethrow(e); `if (e instanceof ZodError) throw e`
+            // still swallows the redirect)
+            const swallows = [...c.printed.matchAll(/\bcatch\s*(?:\(\s*(\w+)[^)]*\))?\s*\{([^}]*)\}/g)].some(m => { const v = m[1], body = m[2].trim()
+              // (each only as the catch's first statement; `if (!isRedirectError(e)) throw e` rethrows everything but the redirect)
+              return !v || !new RegExp(String.raw`^(?:throw\s+${v}\b|unstable_rethrow\(\s*${v}\s*\)|if\s*\(\s*isRedirectError\(\s*${v}\s*\)\s*\)\s*\{?\s*throw\s+${v}\b)`).test(body) })
+            return c.authIfs.some(x => !x.g && !x.req) && !c.skipIfs.length && !swallows || depth < 2 && (c.leadCalls ?? []).some(m => stops(q!, m, depth + 1)) }
+          ;(h as { helperGuard?: boolean }).helperGuard = (hf.leadCalls ?? []).some(n => stops(p, n, 0)) }
         // Next.js: nothing in it or its helpers about who's asking (no auth(), session, require*, user, role...): open to anyone
         if (h.nextAction) h.unknown = hf.auth || hf.authStop || [...usedAll, ...[...seen].slice(1).map(x => x.split(':').pop()!)].some(n => AUTH.has(n) || REQUIRE_LOGIN.test(n) || /auth|session|user|require|ensure|guard|member|permission|role|admin|clerk|supabase|verify|token|jwt|viewer|cookies|headers/i.test(n)) }
       // opening the address (GET) changes or deletes things: a link alone can do it
@@ -1745,7 +1787,7 @@ export function appFacts(snap: Snap) {
       if ([...h.mw.map(n => ({ p, n })), ...pre!.mws].some(x => /admin|role|staff|superuser|permission/i.test(x.n) && readable(x.p, x.n) === undefined || /\(\s*['"](?:super[-_]?)?(?:admin|staff|superuser)['"]/i.test(x.n))) (unit as FileFacts & { adminish?: boolean }).adminish = true
       // (a GET that updates or deletes changes things too: its login decides, like a POST's)
       // (a Next.js server action: its own structural check, not any auth() call next to a success redirect)
-      const writes = h.method !== 'GET' || getWrites, guard = h.nextAction ? handlerChecks(hf) : pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
+      const writes = h.method !== 'GET' || getWrites, guard = h.nextAction ? hf.authIfs.some(x => !x.g && !x.req) || hf.authReturn || !!(h as { helperGuard?: boolean }).helperGuard : pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
       const u = unit as FileFacts & { w?: boolean[]; r?: boolean[]; wu?: string[]; ru?: string[]; wa?: boolean[]; ra?: boolean[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)

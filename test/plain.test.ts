@@ -2444,8 +2444,14 @@ console.log('ok (review 26)')
   assert.ok(!/Anyone can|without logging in/.test(c), `server action: no false alarm\n${c}`)
   // a helper plain can't read (requireWorkspaceMember): no claim either way; nothing about who's asking at all: open
   const viaHelper = actions.replace(/requireUser/g, 'requireWorkspaceMember')
-  const vh = card({ ...base, 'lib/authz.ts': authz.replace('requireUser', 'requireWorkspaceMember') }, { ...base, 'lib/authz.ts': authz.replace('requireUser', 'requireWorkspaceMember'), 'app/actions/comments.ts': viaHelper })
+  // (a helper from a package plain can't read: no claim; one in the app that turns guests away, through another: login)
+  const pkgAuthz = 'export { requireWorkspaceMember } from "@acme/auth"\n'
+  const vh = card({ ...base, 'lib/authz.ts': pkgAuthz }, { ...base, 'lib/authz.ts': pkgAuthz, 'app/actions/comments.ts': viaHelper })
   assert.ok(!/requires login ✓|Anyone can/.test(vh), `server action through an unread helper: no claim\n${vh}`)
+  const chain = authz + 'export async function requireWorkspaceMember(id: string) {\n  const user = await requireUser()\n  return user\n}\n'
+  assert.ok(card({ ...base, 'lib/authz.ts': chain }, { ...base, 'lib/authz.ts': chain, 'app/actions/comments.ts': viaHelper }).includes('saves new comments, requires login ✓'), 'server action through two helpers: login')
+  const branchy = viaHelper.replace('  const user = await requireWorkspaceMember()', '  if (formData.get("x")) await requireWorkspaceMember()')
+  assert.ok(!card({ ...base, 'lib/authz.ts': chain }, { ...base, 'lib/authz.ts': chain, 'app/actions/comments.ts': branchy }).includes('saves new comments, requires login ✓'), 'server action: a helper called only sometimes')
   const open = '"use server"\nimport { prisma } from "@/lib/prisma"\nexport async function makeAdminAction(formData: FormData) {\n  await prisma.comment.create({ data: { body: String(formData.get("x")) } })\n}\n'
   assert.ok(/Anyone can/.test(card(base, { ...base, 'app/actions/admin.ts': open })), 'server action with no login at all: anyone can call it')
   const own = '"use server"\nimport { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nimport { prisma } from "@/lib/prisma"\nexport async function createCommentAction(formData: FormData) {\n  const session = await auth()\n  if (!session) redirect("/login")\n  await prisma.comment.create({ data: { body: "x" } })\n}\n'
@@ -3228,6 +3234,126 @@ repro('U3 function expression: const editsToday = async function (id) {', { ...p
 
   }
   console.log('ok (review 30)')
+}
+// Review 31: login through a helper in a Next.js server action (lead calls only, a helper that stops guests itself, no alias)
+{
+// Review 31 repros: `node repros.ts [plain root]`. Each prints the actual card line next to the expected one.
+const pkg = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Comment {\n  id String @id\n  body String\n}\n' }
+const line = (files: Record<string, string>) => report(new Map(Object.entries(pkg)), new Map(Object.entries({ ...pkg, ...files })), { ref: 'main' }).replace(/\s+/g, ' ').match(/New server code that [^.]*\./)?.[0]
+const H = 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\n'
+const requireUser = 'export async function requireUser() {\n  const session = await auth()\n  if (!session?.user) redirect("/login")\n  return session.user\n}\n'
+const getMember = requireUser + 'export async function getMember() {\n  return await requireUser()\n}\n'
+const act = (body: string, imp = 'import { getMember } from "@/lib/authz"') => `"use server"\nimport { prisma } from "@/lib/prisma"\n${imp}\nexport async function createCommentAction(formData: FormData) {\n${body}\n}\n`
+const W = '  await prisma.comment.create({ data: { body: "x" } })'
+const R: [string, string, string, string][] = [   // id, lib/authz.ts, action body, expected
+  ['F1 helper returns null for guests', 'export async function getMember() {\n  const session = await auth()\n  if (!session?.user) return null\n  return session.user\n}\n', '  const user = await getMember()\n' + W, 'New server code that saves new comments.'],
+  ['F2 aliased import reads the wrong fn', 'export async function getMember() {\n  const s = await auth()\n  if (!s?.user) redirect("/login")\n  return s.user\n}\nexport async function getMaybeUser() {\n  const s = await auth()\n  return s?.user ?? null\n}\n', '  const u = await getMember()\n' + W, 'New server code that saves new comments.'],
+  ['F3 write via .save() before the call', getMember, '  await comment.save()\n  await getMember()', 'New server code that accepts requests.'],
+  ['F3b write via sql`` before the call', getMember, '  await sql`DELETE FROM comments`\n  await getMember()', 'New server code that accepts requests.'],
+  ['F4 action swallows the redirect', getMember, '  try { await getMember() } catch {}\n' + W, 'New server code that saves new comments.'],
+  ['F4b not awaited', getMember, '  getMember()\n' + W, 'New server code that saves new comments.'],
+  ['F4c only inside a loop', getMember, '  for (const id of formData.getAll("ids")) await getMember()\n' + W, 'New server code that saves new comments.'],
+  ['F4d Promise.all with the write', getMember, '  await Promise.all([getMember(), prisma.comment.create({ data: { body: "x" } })])', 'New server code that saves new comments.'],
+  ['F5 helper try/catch swallows its redirect', 'export async function getMember() {\n  try {\n    const session = await auth()\n    if (!session?.user) redirect("/login")\n    return session.user\n  } catch {\n    return null\n  }\n}\n', '  await getMember()\n' + W, 'New server code that saves new comments.'],
+  ['F6 helper skips its check early', 'export async function getMember() {\n  if (process.env.DEMO) return { id: "demo" }\n  const session = await auth()\n  if (!session?.user) redirect("/login")\n  return session.user\n}\n', '  await getMember()\n' + W, 'New server code that saves new comments.'],
+  ['F7 first match in a string', getMember, '  console.log("getMember() skipped")\n' + W + '\n  await getMember()', 'New server code that saves new comments.'],
+  ['F7b first match in an uncalled closure', getMember, '  const check = async () => { await getMember() }\n' + W, 'New server code that saves new comments.'],
+  ['M1 early return before the call (safe)', getMember, '  if (!formData.get("id")) return\n  await getMember()\n' + W, 'New server code that saves new comments and requires login ✓.'],
+  ['M2 `??` then a `:` (safe)', getMember, '  const id = String(formData.get("id") ?? "")\n  const { id: uid } = await getMember()\n' + W, 'New server code that saves new comments and requires login ✓.'],
+]
+for (const [id, lib, body, want] of R) {
+  const got = line({ 'lib/authz.ts': H + lib, 'app/actions/comments.ts': act(body, id.startsWith('F2') ? 'import { getMaybeUser as getMember } from "@/lib/authz"' : undefined) })
+  assert.equal(got, want, `review 31 ${id}`)
+}
+
+  console.log('ok (review 31)')
+}
+// Review 31, round 2: a check in a try whose catch rethrows is still a check; require* by name only as a lead call; skipped
+// statements call nothing of the app
+{
+// Review 31, round 2: `node r2.ts <plain root>`. Prints login/open per route (appFacts) and the card's login wording.
+const routes = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries(files)))
+  return [...a.routes].map(([k, x]: [string, { url: string }]) => `${x.url} ${a.files.get(k)!.auth ? 'login' : 'open'}`).sort().join(' | ') }
+const alarm = (files: Record<string, string>) => { const c = report(new Map(Object.entries(files).filter(([k]) => k === 'package.json')), new Map(Object.entries(files)), { ref: 'main' }).replace(/\s+/g, ' ')
+  return /Anyone can|without logging in/.test(c) ? ' ALARM' : '' }
+const kit = { 'package.json': '{"devDependencies":{"@sveltejs/kit":"^2.8.0"},"dependencies":{"@prisma/client":"5"}}' }
+const nuxt = { 'package.json': '{"dependencies":{"nuxt":"^3.13.0","@prisma/client":"5","nuxt-auth-utils":"0.5.0"}}' }
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Comment {\n  id String @id\n}\n' }
+const del = "export const DELETE = async () => {\n  await prisma.user.deleteMany()\n  return new Response()\n}\n"
+const hook = (body: string) => ({ ...kit, 'src/hooks.server.ts': `export const handle = async ({ event, resolve }) => {\n${body}\n  return resolve(event)\n}\n`, 'src/routes/admin/users/+server.ts': del })
+const cases: [string, Record<string, string>][] = [
+  // --- context(): try with a catch, other stacks (all of these are safe: the catch rethrows or also turns people away)
+  ['kit hook: check in try, catch rethrows', hook("  try {\n    if (!event.locals.user) redirect(303, '/login')\n  } catch (e) {\n    throw e\n  }")],
+  ['kit +server: check in try, catch rethrows http errors', { ...kit, 'src/routes/api/x/+server.ts': "import { error, json, isHttpError } from '@sveltejs/kit'\nexport const POST = async ({ locals }) => {\n  try {\n    if (!locals.user) error(401)\n    await prisma.order.deleteMany()\n    return json({ ok: true })\n  } catch (e) {\n    if (isHttpError(e)) throw e\n    return json({ error: 'failed' }, { status: 500 })\n  }\n}\n" }],
+  ['kit +server: check in try, catch returns 500', { ...kit, 'src/routes/api/x/+server.ts': "import { error, json } from '@sveltejs/kit'\nexport const POST = async ({ locals }) => {\n  try {\n    if (!locals.user) return json({ error: 'login' }, { status: 401 })\n    await prisma.order.deleteMany()\n    return json({ ok: true })\n  } catch (e) {\n    return json({ error: 'failed' }, { status: 500 })\n  }\n}\n" }],
+  ['nuxt: requireUserSession in try, catch throws', { ...nuxt, 'server/api/orders.delete.ts': "export default defineEventHandler(async (event) => {\n  try {\n    await requireUserSession(event)\n    await prisma.order.deleteMany()\n  } catch (e) {\n    throw createError({ statusCode: 500 })\n  }\n})\n" }],
+  ['nuxt: requireUserSession before try (control)', { ...nuxt, 'server/api/orders.delete.ts': "export default defineEventHandler(async (event) => {\n  await requireUserSession(event)\n  try {\n    await prisma.order.deleteMany()\n  } catch (e) {\n    throw createError({ statusCode: 500 })\n  }\n})\n" }],
+  ['next action: own check in try, catch rethrows', { ...next, 'app/actions/c.ts': '"use server"\nimport { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function delAction() {\n  try {\n    const s = await auth()\n    if (!s?.user) redirect("/login")\n    await prisma.comment.deleteMany()\n  } catch (e) {\n    throw e\n  }\n}\n' }],
+  ['next action: try/finally (no catch)', { ...next, 'app/actions/c.ts': '"use server"\nimport { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function delAction() {\n  try {\n    const s = await auth()\n    if (!s?.user) redirect("/login")\n    await prisma.comment.deleteMany()\n  } finally {\n    console.log("done")\n  }\n}\n' }],
+  // --- leadCalls / stops: new false ✓?
+  ['helper: requireUser().catch(() => null)', { ...next, 'lib/authz.ts': 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function requireUser() {\n  const s = await auth()\n  if (!s?.user) redirect("/login")\n  return s.user\n}\nexport async function getMember() {\n  return await requireUser().catch(() => null)\n}\n', 'app/actions/c.ts': '"use server"\nimport { getMember } from "@/lib/authz"\nexport async function delAction() {\n  await getMember()\n  await prisma.comment.deleteMany()\n}\n' }],
+  ['helper: requireUser() not awaited', { ...next, 'lib/authz.ts': 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function requireUser() {\n  const s = await auth()\n  if (!s?.user) redirect("/login")\n  return s.user\n}\nexport async function getMember() {\n  requireUser()\n  return 1\n}\n', 'app/actions/c.ts': '"use server"\nimport { getMember } from "@/lib/authz"\nexport async function delAction() {\n  await getMember()\n  await prisma.comment.deleteMany()\n}\n' }],
+  ['action: `if (x) return purge()` before the lead call', { ...next, 'lib/authz.ts': 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function getMember() {\n  const s = await auth()\n  if (!s?.user) redirect("/login")\n  return s.user\n}\nexport async function purge() {\n  await prisma.comment.deleteMany()\n}\n', 'app/actions/c.ts': '"use server"\nimport { getMember, purge } from "@/lib/authz"\nexport async function delAction(fd: FormData) {\n  if (fd.get("all")) return purge()\n  await getMember()\n}\n' }],
+  ['action: `const p = purge()` (no await) before', { ...next, 'lib/authz.ts': 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function getMember() {\n  const s = await auth()\n  if (!s?.user) redirect("/login")\n  return s.user\n}\nexport async function purge() {\n  await prisma.comment.deleteMany()\n}\n', 'app/actions/c.ts': '"use server"\nimport { getMember, purge } from "@/lib/authz"\nexport async function delAction(fd: FormData) {\n  const p = purge()\n  await getMember()\n  await p\n}\n' }],
+  ['action: write in the lead call\'s argument', { ...next, 'lib/authz.ts': 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function getMember(id: string) {\n  const s = await auth()\n  if (!s?.user) redirect("/login")\n  return s.user\n}\nexport async function purge() {\n  await prisma.comment.deleteMany()\n  return "x"\n}\n', 'app/actions/c.ts': '"use server"\nimport { getMember, purge } from "@/lib/authz"\nexport async function delAction(fd: FormData) {\n  await getMember(await purge())\n}\n' }],
+]
+// expected: the first 7 are safe (login, no alarm; try/finally included); the last 5 are not (open)
+const want = (i: number) => i < 7 ? 'login' : 'open'
+cases.forEach(([n, files], i) => { const got = routes(files), a = alarm(files), ok = got.endsWith(want(i)) && !(i < 7 && a)
+  assert.ok(ok, `review 31 r2 ${n}: ${got}${a}`) })
+
+  console.log('ok (review 31, round 2)')
+}
+// Review 31, round 3: a catch that throws only other errors swallows the redirect; app calls in a lead call's arguments or
+// through an imported object
+{
+// Review 31, round 3: `node r3.ts <plain root>`. Server-action login per case; expected in the table.
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Comment {\n  id String @id\n}\n' }
+const login = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries({ ...next, ...files })))
+  return [...a.routes].filter(([, x]: [string, { url: string }]) => x.url.includes('delAction')).map(([k]: [string]) => a.files.get(k)!.auth ? 'login' : 'open')[0] }
+const alarm = (files: Record<string, string>) => /Anyone can|without logging in/.test(report(new Map(Object.entries(next)), new Map(Object.entries({ ...next, ...files })), { ref: 'main' }))
+const H = 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\n'
+const RU = 'export async function requireUser() {\n  const s = await auth()\n  if (!s?.user) redirect("/login")\n  return s.user\n}\n'
+const act = (imp: string, body: string) => `"use server"\n${imp}\nexport async function delAction(fd: FormData) {\n${body}\n}\n`
+const W = '  await prisma.comment.deleteMany()'
+const cases: [string, Record<string, string>, 'login' | 'open'][] = [
+  // helper's catch throws something else but swallows the redirect
+  ['helper catch throws only for ZodError', { 'lib/authz.ts': H + 'export async function getMember() {\n  try {\n    const s = await auth()\n    if (!s?.user) redirect("/login")\n    return s.user\n  } catch (e) {\n    if (e instanceof ZodError) throw new Error("bad")\n    return null\n  }\n}\n', 'app/actions/c.ts': act('import { getMember } from "@/lib/authz"', '  await getMember()\n' + W) }, 'open'],
+  // passed-over statements calling app code through a namespace / object method
+  ['if (x) return repo.removeAll() before lead', { 'lib/authz.ts': H + RU, 'lib/repo.ts': 'export async function removeAll() {\n  await prisma.comment.deleteMany()\n}\n', 'app/actions/c.ts': act('import { requireUser } from "@/lib/authz"\nimport * as repo from "@/lib/repo"', '  if (fd.get("all")) return repo.removeAll()\n  await requireUser()') }, 'open'],
+  ['const p = repo.purgeAll() (no await) before lead', { 'lib/authz.ts': H + RU, 'lib/repo.ts': 'export async function purgeAll() {\n  await prisma.comment.deleteMany()\n}\n', 'app/actions/c.ts': act('import { requireUser } from "@/lib/authz"\nimport * as repo from "@/lib/repo"', '  const p = repo.purgeAll()\n  await requireUser()\n  await p') }, 'open'],
+  ['lead call arg runs an app fn (no await)', { 'lib/authz.ts': H + 'export async function getMember(x: unknown) {\n  const s = await auth()\n  if (!s?.user) redirect("/login")\n  return s.user\n}\nexport async function purge() {\n  await prisma.comment.deleteMany()\n}\n', 'app/actions/c.ts': act('import { getMember, purge } from "@/lib/authz"', '  await getMember(purge())') }, 'open'],
+  // regressions vs HEAD's correct ✓ (should stay login)
+  ['own check (auth + redirect) in action', { 'app/actions/c.ts': act('import { auth } from "@/auth"\nimport { redirect } from "next/navigation"', '  const s = await auth()\n  if (!s?.user) redirect("/login")\n' + W) }, 'login'],
+  ['direct requireUser after await of a method', { 'lib/authz.ts': H + RU, 'app/actions/c.ts': act('import { requireUser } from "@/lib/authz"\nimport { cookies } from "next/headers"', '  const jar = await cookies()\n  const t = jar.get("t")\n  await requireUser()\n' + W) }, 'login'],
+  ['direct requireUser after zod parse (method calls)', { 'lib/authz.ts': H + RU, 'app/actions/c.ts': act('import { requireUser } from "@/lib/authz"\nimport { z } from "zod"', '  const input = z.object({ id: z.string() }).parse(Object.fromEntries(fd))\n  await requireUser()\n' + W) }, 'login'],
+  ['package requireUser, lead', { 'app/actions/c.ts': act('import { requireUser } from "@acme/auth"', '  await requireUser()\n' + W) }, 'login'],
+  ['helper with catch that rethrows (safe)', { 'lib/authz.ts': H + 'export async function getMember() {\n  try {\n    const s = await auth()\n    if (!s?.user) redirect("/login")\n    return s.user\n  } catch (e) {\n    throw e\n  }\n}\n', 'app/actions/c.ts': act('import { getMember } from "@/lib/authz"', '  await getMember()\n' + W) }, 'login'],
+]
+cases.forEach(([n, f, want]) => { const got = login(f), a = alarm(f)
+  assert.equal(got, want, `review 31 r3 ${n}`) })
+
+  console.log('ok (review 31, round 3)')
+}
+// Review 31, round 4: a catch passes the redirect on only when it rethrows first thing (throw e, unstable_rethrow(e),
+// if (isRedirectError(e)) throw e); otherwise it swallows it
+{
+// Review 31, round 5: r4 cases plus an inverted isRedirectError guard and a conditional unstable_rethrow.
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"6.0.0"}}' }
+const login = (files: Record<string, string>) => { const a = appFacts(new Map(Object.entries({ ...next, ...files })))
+  return [...a.routes].filter(([, x]: [string, { url: string }]) => x.url.includes('delAction')).map(([k]: [string]) => a.files.get(k)!.auth ? 'login' : 'open')[0] }
+const helper = (c: string) => 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function getMember() {\n  try {\n    const s = await auth()\n    if (!s?.user) redirect("/login")\n    return s.user\n  } catch (e) {\n' + c + '\n  }\n}\n'
+const act = '"use server"\nimport { getMember } from "@/lib/authz"\nexport async function delAction() {\n  await getMember()\n  await prisma.comment.deleteMany()\n}\n'
+for (const [n, c, want] of [
+  ['catch rethrows only ZodError', '    if (e instanceof ZodError) throw e\n    return null', 'open'],
+  ['catch rethrows only if !(e instanceof Error)', '    if (!(e instanceof Error)) throw e\n    return null', 'open'],
+  ['catch rethrows redirect errors (safe)', '    if (isRedirectError(e)) throw e\n    return null', 'login'],
+  ['catch throw e (safe)', '    throw e', 'login'],
+  ['catch rethrows NON-redirect errors', '    if (!isRedirectError(e)) throw e\n    return null', 'open'],
+  ['catch unstable_rethrow only sometimes', '    if (process.env.X) unstable_rethrow(e)\n    return null', 'open'],
+]) { const got = login({ 'lib/authz.ts': helper(c), 'app/actions/c.ts': act }); assert.equal(got, want, `review 31 r5 ${n}`) }
+
+  console.log('ok (review 31, round 4)')
 }
 // "Tests couldn't be executed": the agent didn't run them
 assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. Tests couldn’t be executed because the environment has no Go toolchain installed.' }).includes("didn't run or test"), 'untested: passive')

@@ -658,9 +658,7 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
      - Go's MixedCaps constants aren't read;
      - a date-check helper whose variable has a function type (`const h: (id: string) => … = async …`) isn't followed.
    - **Still open:** budget settings read from the environment (per person or total, and the default).
-4. **Login claims through helpers** like `requireWorkspaceMember`: "only members of this workspace ✓",
-   and "only owners and admins ✓" for `requireWorkspaceAdmin`. Server actions now get a description, but
-   still no access line.
+4. 🟡 **Login claims through helpers.** Partly fixed later: a server action now reads "requires login ✓" when its first awaited call is a helper of the app that turns guests away itself (a redirect, a throw or `notFound()`; not `return null`), directly or one helper further down. All of Huddle's actions now get it. Review 31 took six rounds (12, 10, 3, 1, 2, then clean). It made the check structural: only awaited calls at the top of the action, before any write, loop, try or branch. A helper whose own check sits in a try, with a catch that doesn't rethrow the redirect first, doesn't count. Still open: the stronger wording, "only members of this workspace ✓" and "only owners and admins ✓".
 5. **Public share-link pages** (Huddle p1, Quill p3): "Anyone with the link can open this without
    logging in", what it shows, whether the link can be guessed, and whether it expires.
 6. **"Only people in this room"** (Porch p2, p3): a membership check before a 403 should upgrade
