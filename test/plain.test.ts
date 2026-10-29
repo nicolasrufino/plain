@@ -3473,3 +3473,89 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   assert.ok(c.includes('shows documents to anyone with the link, no login needed'), c)
   console.log('ok (share links)')
 }
+// "Only lets the workspace's members in ✓": a server action whose lead helper looks up the user's membership with the value it's
+// given and stops when there's none, and whose every write carries that value (where for updates and deletes, data for creates)
+{
+  const card = (files: Record<string, string>) => report(new Map(Object.entries(pkg0)), new Map(Object.entries({ ...pkg0, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+  const pkg0 = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"6.0.0"}}' }
+  const authz = (lookup: string, sig = 'workspaceId: string') => 'import { notFound, redirect } from "next/navigation"\nimport { auth } from "@/auth"\nimport { prisma } from "@/lib/prisma"\n'
+    + 'export async function requireUser() {\n  const session = await auth()\n  if (!session?.user?.id) redirect("/login")\n  return session.user\n}\n'
+    + `export async function requireWorkspaceMember(${sig}) {\n  const user = await requireUser()\n${lookup}\n  return { user }\n}\n`
+    + 'export async function requireWorkspaceAdmin(workspaceId: string) {\n  const r = await requireWorkspaceMember(workspaceId)\n  return r\n}\n'
+  const rel = '  const workspace = await prisma.workspace.findFirst({ where: { id: workspaceId, memberships: { some: { userId: user.id } } } })\n  if (!workspace) notFound()'
+  const act = (write: string, helper = 'requireWorkspaceMember', imp = '{ requireWorkspaceMember, requireWorkspaceAdmin }') => `"use server"\nimport { prisma } from "@/lib/prisma"\nimport ${imp} from "@/lib/authz"\nexport async function updateTaskAction(formData: FormData) {\n  const workspaceId = String(formData.get("workspaceId"))\n  const taskId = String(formData.get("taskId"))\n  const { user } = await ${helper}(workspaceId)\n  ${write}\n}\n`
+  const scoped = 'await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { title: "x" } });'
+  const yes = "only lets the workspace's members in ✓", no = (c: string, why: string) => assert.ok(!c.includes('members in') && c.includes('requires login ✓'), `${why}: ${c}`)
+  let c = card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act(scoped) })
+  assert.ok(c.includes(`updates tasks and ${yes}`), c)
+  // the membership row itself (compound key), and an admin helper one level down
+  c = card({ 'lib/authz.ts': authz('  const m = await prisma.membership.findUnique({ where: { workspaceId_userId: { workspaceId, userId: user.id } } })\n  if (!m) throw new Error("Forbidden")'), 'app/actions/tasks.ts': act(scoped) })
+  assert.ok(c.includes(yes), c)
+  c = card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act(scoped, 'requireWorkspaceAdmin') })
+  assert.ok(c.includes(yes), c)
+  // a create carries it in its data
+  c = card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('await prisma.task.create({ data: { workspaceId, title: "x" } });') })
+  assert.ok(c.includes(`saves new tasks and ${yes}`), c)
+  // not: a task updated by its id alone (another workspace's), the value only in data, no stop, the user given, a write in a helper,
+  // a login-only helper, a helper imported under another name
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('await prisma.task.update({ where: { id: taskId }, data: { title: "x" } });') }), 'by id')
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('await prisma.task.update({ where: { id: taskId }, data: { note: workspaceId } });') }), 'in data')
+  no(card({ 'lib/authz.ts': authz('  const workspace = await prisma.workspace.findFirst({ where: { id: workspaceId, memberships: { some: { userId: user.id } } } })'), 'app/actions/tasks.ts': act(scoped) }), 'no stop')
+  no(card({ 'lib/authz.ts': authz('  const m = await prisma.membership.findFirst({ where: { workspaceId, userId } })\n  if (!m) notFound()', 'workspaceId: string, userId: string'), 'app/actions/tasks.ts': act(scoped) }), 'user given')
+  no(card({ 'lib/authz.ts': authz(rel), 'lib/tasks.ts': 'import { prisma } from "@/lib/prisma"\nexport async function rename(id: string) {\n  await prisma.task.update({ where: { id }, data: { title: "x" } })\n}\n', 'app/actions/tasks.ts': act(scoped + '\n  await rename(taskId)').replace('import { prisma }', 'import { rename } from "@/lib/tasks"\nimport { prisma }') }), 'helper write')
+  no(card({ 'lib/authz.ts': authz(''), 'app/actions/tasks.ts': act(scoped) }), 'login only')
+  c = card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act(scoped, 'requireWorkspaceAdmin', '{ requireWorkspaceMember as requireWorkspaceAdmin }') })
+  assert.ok(!c.includes('members in'), `alias: ${c}`)
+  // (review 33) the key with another value, a re-read by id, an unchecked id from the form, a row moved out, a transaction, OR
+  for (const [why, write] of [
+    ['other value', 'await prisma.task.updateMany({ where: { id: taskId, workspaceId: String(formData.get("t")) }, data: { title: "x" } });'],
+    ['re-read by id', scoped + '\n  return prisma.task.findUnique({ where: { id: taskId }, include: { comments: true } })'],
+    ['unchecked id', 'await prisma.comment.create({ data: { workspaceId, taskId, authorId: user.id, body: "x" } });'],
+    ['moved out', 'await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { workspaceId: String(formData.get("to")) } });'],
+    ['transaction', scoped + '\n  await prisma.$transaction(async (tx) => { await tx.task.delete({ where: { id: taskId } }) });'],
+    ['OR', 'await prisma.task.updateMany({ where: { OR: [{ workspaceId }, { id: taskId }] }, data: { title: "x" } });'],
+    ['checked another value', scoped.replace('workspaceId }', 'workspaceId }')]]) {
+    const a = why === 'checked another value' ? act(write).replace('requireWorkspaceMember(workspaceId)', 'requireWorkspaceMember(taskId)') : act(write)
+    no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': a }), why) }
+  // an id from the form checked first by a lookup limited to the workspace, with a stop: fine
+  c = card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('const task = await prisma.task.findFirst({ where: { id: taskId, workspaceId } });\n  if (!task) return;\n  await prisma.comment.create({ data: { workspaceId, taskId, authorId: user.id, body: "x" } });') })
+  assert.ok(c.includes(`saves new comments and ${yes}`), c)
+  // the helper: a try around the check, an early return for site admins, OR in the lookup, a local forbidden() that returns a value
+  no(card({ 'lib/authz.ts': authz('  try {\n' + rel + '\n  } catch (e) { console.error(e) }'), 'app/actions/tasks.ts': act(scoped) }), 'try')
+  no(card({ 'lib/authz.ts': authz('  if (user.role === "superadmin") return { user }\n' + rel), 'app/actions/tasks.ts': act(scoped) }), 'early return')
+  no(card({ 'lib/authz.ts': authz('  const workspace = await prisma.workspace.findFirst({ where: { OR: [{ id: workspaceId, memberships: { some: { userId: user.id } } }, { id: workspaceId, isPublic: true }] } })\n  if (!workspace) notFound()'), 'app/actions/tasks.ts': act(scoped) }), 'OR lookup')
+  no(card({ 'lib/authz.ts': authz(rel.replace('notFound()', 'return forbidden()')).replace('export async function requireUser', 'const forbidden = () => ({ error: "forbidden" })\nexport async function requireUser'), 'app/actions/tasks.ts': act(scoped) }), 'local forbidden')
+  // (review 33b) a destination from the form, data that isn't written out, a helper that reads, a nested include, a check after the
+  // write, an OrThrow caught
+  for (const [why, write, extra] of [
+    ['destination', 'const dest = String(formData.get("to"));\n  await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { projectId: dest } });'],
+    ['data variable', 'const parsed = schema.parse(Object.fromEntries(formData));\n  await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: parsed });'],
+    ['helper reads', scoped + '\n  return getBoard(taskId)', { 'lib/q.ts': 'import { prisma } from "@/lib/prisma"\nexport async function getBoard(id: string) {\n  return prisma.task.findMany({ where: { projectId: id }, include: { comments: true } })\n}\n' }],
+    ['nested include', 'return prisma.task.findMany({ where: { workspaceId }, include: { assignee: { include: { tasks: true } } } });\n  await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { title: "x" } });'],
+    ['check after', 'const projectId = String(formData.get("p"));\n  await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { projectId } });\n  const project = await prisma.project.findFirst({ where: { id: projectId, workspaceId } });\n  if (!project) return null;'],
+  ] as [string, string, Record<string, string>?][]) {
+    const a = act(write).replace('import { prisma }', extra ? 'import { getBoard } from "@/lib/q"\nimport { prisma }' : 'import { prisma }')
+    no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': a, ...extra }), why) }
+  no(card({ 'lib/authz.ts': authz('  const workspace = await prisma.workspace.findFirstOrThrow({ where: { id: workspaceId, memberships: { some: { userId: user.id } } } }).catch(() => null)'), 'app/actions/tasks.ts': act(scoped) }), 'OrThrow caught')
+  // (review 33c) a repository or namespace plain can't follow, a loop variable named user, a value reassigned, a regex literal
+  const repo = 'import { prisma } from "@/lib/prisma"\nexport async function archiveProject(id: string) {\n  await prisma.project.update({ where: { id }, data: { archived: true } })\n}\nexport const projectRepo = { archive: archiveProject }\n'
+  no(card({ 'lib/authz.ts': authz(rel), 'lib/projects.ts': repo, 'app/actions/tasks.ts': act(scoped + '\n  await projectRepo.archive(taskId)').replace('import { prisma }', 'import { projectRepo } from "@/lib/projects"\nimport { prisma }') }), 'repo object')
+  no(card({ 'lib/authz.ts': authz(rel), 'lib/projects.ts': repo, 'app/actions/tasks.ts': act(scoped + '\n  await projects.archiveProject(taskId)').replace('import { prisma }', 'import * as projects from "@/lib/projects"\nimport { prisma }') }), 'namespace')
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('const ids = formData.getAll("m").map(String);\n  await Promise.all(ids.map((user) => prisma.notification.create({ data: { workspaceId, userId: user.id } })));\n  ' + scoped) }), 'shadowed user')
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act(scoped.replace('await', 'if (formData.get("to")) workspaceId = String(formData.get("to"));\n  await')) }), 'reassigned')
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('const title = String(formData.get("t")).replace(/\'/g, "");\n  await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { title } });') }), 'regex literal')
+  // (review 33d) a helper that calls a repository, a local function passed to map, a destructured loop variable, a regex after =>
+  no(card({ 'lib/authz.ts': authz(rel), 'lib/projects.ts': repo + 'export async function archiveAll(id: string) {\n  await projectRepo.archive(id)\n}\n', 'app/actions/tasks.ts': act(scoped + '\n  await archiveAll(taskId)').replace('import { prisma }', 'import { archiveAll } from "@/lib/projects"\nimport { prisma }') }), 'helper calls repo')
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act(scoped + '\n  await Promise.all([taskId].map(archiveOne))') + 'async function archiveOne(id: string) {\n  await prisma.project.update({ where: { id }, data: { archived: true } })\n}\n' }), 'passed to map')
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('const rows = JSON.parse(String(formData.get("rows")));\n  for (const { workspaceId, title } of rows) await prisma.task.create({ data: { workspaceId, title } });') }), 'loop variable')
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('const ok = (s: string) => /^[\\w\' -]+$/.test(s);\n  if (formData.get("p") === "on") {\n    const project = await prisma.project.findFirst({ where: { id: String(formData.get("p")), workspaceId } });\n    if (!project) return;\n  }\n  ' + scoped) }), 'regex')
+  // (review 33e) a default import runs the module's default, not the checked helper; a loop that writes into a checked id
+  no(card({ 'lib/authz.ts': authz(rel) + 'export default async function requireLoggedIn(workspaceId: string) {\n  return requireUser()\n}\n', 'app/actions/tasks.ts': act(scoped, 'requireWorkspaceMember', 'requireWorkspaceMember') }), 'default import')
+  no(card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('let projectId = String(formData.get("p"));\n  const project = await prisma.project.findFirst({ where: { id: projectId, workspaceId } });\n  if (!project) return;\n  for (projectId of formData.getAll("more").map(String)) await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { projectId } });') }), 'loop target')
+  // a small local function that touches nothing is fine
+  c = card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { title: clean(String(formData.get("t"))) } });') + 'function clean(s: string) {\n  return s.trim()\n}\n' })
+  assert.ok(c.includes(yes), c)
+  // a project's lookup through its workspace's members isn't "the project's members"
+  no(card({ 'lib/authz.ts': authz('  const project = await prisma.project.findFirst({ where: { id: workspaceId, workspace: { memberships: { some: { userId: user.id } } } } })\n  if (!project) notFound()'), 'app/actions/tasks.ts': act(scoped) }), 'project via workspace')
+  console.log('ok (workspace members)')
+}

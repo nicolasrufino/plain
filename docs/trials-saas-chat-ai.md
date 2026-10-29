@@ -658,7 +658,21 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
      - Go's MixedCaps constants aren't read;
      - a date-check helper whose variable has a function type (`const h: (id: string) => … = async …`) isn't followed.
    - **Still open:** budget settings read from the environment (per person or total, and the default).
-4. 🟡 **Login claims through helpers.** Partly fixed later: a server action now reads "requires login ✓" when its first awaited call is a helper of the app that turns guests away itself (a redirect, a throw or `notFound()`; not `return null`), directly or one helper further down. All of Huddle's actions now get it. Review 31 took six rounds (12, 10, 3, 1, 2, then clean). It made the check structural: only awaited calls at the top of the action, before any write, loop, try or branch. A helper whose own check sits in a try, with a catch that doesn't rethrow the redirect first, doesn't count. Still open: the stronger wording, "only members of this workspace ✓" and "only owners and admins ✓".
+4. 🟡 **Login claims through helpers.** Partly fixed later: a server action now reads "requires login ✓" when its first awaited call is a helper of the app that turns guests away itself (a redirect, a throw or `notFound()`; not `return null`), directly or one helper further down. All of Huddle's actions now get it. Review 31 took six rounds (12, 10, 3, 1, 2, then clean). It made the check structural: only awaited calls at the top of the action, before any write, loop, try or branch. A helper whose own check sits in a try, with a catch that doesn't rethrow the redirect first, doesn't count. Then "only lets the workspace's members in ✓" (later): a server action gets it when its login helper also
+   looks up the logged-in user's membership of the workspace it's given and stops when there's none, and every Prisma read
+   and write in the action is limited to that same workspace. Five of Huddle's actions get it (create and update projects
+   and tasks, revoke an invite). Review 33 took six rounds (12, 6, 9, 3, then nits, then clean) and made it strict, read
+   with the TypeScript parser where text matching leaked:
+   - the value checked is bound once and never changed, and each write carries it under the workspace's own key
+     (`workspaceId: workspaceId`), in `where` for updates and deletes and in `data` for creates;
+   - an update can't move a row (no workspace key in its data, no `connect`), and every other id it writes is the
+     logged-in user's or was found first by a lookup limited to the workspace, with a stop;
+   - reads are limited too, with no `include`/`select` deeper than one level;
+   - nothing plain can't follow: OR/NOT, transactions, raw SQL, try, regex literals, `import()`, a repository object,
+     a namespace or default import, or a helper that touches tables. Only small local functions that touch nothing.
+   - Known misses: helpers written as arrows aren't read; ids under names without "Id" (`assignedTo`, a storage key)
+     aren't checked; a membership that's pending or soft-deleted still counts.
+   Still open: "only owners and admins ✓" (Huddle's `requireWorkspaceAdmin` checks two roles).
 5. ✅ **Public share-link pages** (Huddle p1, Quill p3). Fixed later.
    - Huddle p1's page now adds "It opens from a private link, so only people who have the link can find it."
    - Quill p3 now reads "turns sharing on or off for documents and requires login ✓" (it was "deletes

@@ -6,6 +6,7 @@
 //
 // ponytail: Next.js (app/ and pages/), Express-style servers, React Router, Prisma, Supabase, Stripe. Each framework is one more fact extractor.
 import { adminCond, adminPos, FROM_REQUEST } from './admin.ts'
+import { memberCheck, keepsTo, scan, topLevel } from './members.ts'
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
@@ -1759,7 +1760,35 @@ export function appFacts(snap: Snap) {
               // (each only as the catch's first statement; `if (!isRedirectError(e)) throw e` rethrows everything but the redirect)
               return !v || !new RegExp(String.raw`^(?:throw\s+${v}\b|unstable_rethrow\(\s*${v}\s*\)|if\s*\(\s*isRedirectError\(\s*${v}\s*\)\s*\)\s*\{?\s*throw\s+${v}\b)`).test(body) })
             return c.authIfs.some(x => !x.g && !x.req) && !c.skipIfs.length && !swallows || depth < 2 && (c.leadCalls ?? []).some(m => stops(q!, m, depth + 1)) }
-          ;(h as { helperGuard?: boolean }).helperGuard = (hf.leadCalls ?? []).some(n => stops(p, n, 0)) }
+          ;(h as { helperGuard?: boolean }).helperGuard = (hf.leadCalls ?? []).some(n => stops(p, n, 0))
+          // "Only the workspace's members": a lead-call helper that stops guests (above) and checks the logged-in user's membership of the
+          // value it's given (src/members.ts), directly or through a helper it passes that same value to; and the action keeps every read
+          // and write to that value. No write made by a helper plain follows (it couldn't check it). Not one imported under another name.
+          const memberOf = (at: string, n: string, depth: number): string | undefined => { const q = files.get(at)?.locals.has(n) ? at : target(at, n), c = q ? files.get(q)?.locals.get(n) : undefined
+            // (nor a default import: `import requireWorkspaceMember from ...` runs the module's default, whatever it's named)
+            if (!c || q !== at && new RegExp(String.raw`\b\w+\s+as\s+${n}\b|\bimport\s+${n}\s*(?:,|from\b)`).test(files.get(at)?.printed ?? '')) return undefined
+            const params = c.printed.match(/^[^(]*\(([^)]*)\)/)?.[1].split(',').map(x => x.trim().split(/[\s:=?]/)[0]).filter(Boolean) ?? []
+            if (params.length !== 1) return undefined   // (one value in: not `(workspaceId, userId)`, where the user is given)
+            const own = memberCheck(c.printed, params[0], c.leadCalls ?? [], new Set([...files.get(q!)!.binds].filter(([, m]) => m === 'next/navigation').map(([x]) => x)))
+            if (own) return own
+            return depth < 1 ? (c.leadCalls ?? []).filter(m => new RegExp(String.raw`\bawait\s+${m}\s*\(\s*${params[0]}\s*\)`).test(c.printed)).map(m => memberOf(q!, m, depth + 1)).find(Boolean) : undefined }
+          const lead = (hf.leadCalls ?? []).find(n => stops(p, n, 0) && memberOf(p, n, 0)), arg = lead && hf.printed.match(new RegExp(String.raw`\bawait\s+${lead}\s*\(\s*(\w+)\s*\)`))?.[1]
+          const group = lead && memberOf(p, lead, 0)
+          // (helpers it follows, other than its login and membership checks, touch no tables: plain doesn't check their reads)
+          const checks = new Set<string>(); const chain = (at: string, n: string, d: number) => { const q = files.get(at)?.locals.has(n) ? at : target(at, n); if (!q) return
+            checks.add(`${q}:${n}`); if (d < 3) for (const m of files.get(q)?.locals.get(n)?.leadCalls ?? []) chain(q, m, d + 1) }
+          if (lead) chain(p, lead, 0)
+          // (and every name it takes from its file is Prisma, Next's own, zod, the login helper, or a small local function that touches
+          // nothing (`validStatus`): not a helper that may write elsewhere (`projectRepo.archive(id)`, a namespace, a barrel, a class, a
+          // function passed to `.map`), nor any `import()` / `require`. By the parser.)
+          const nsImports = [...(files.get(p)?.printed ?? '').matchAll(/\bimport\s*\*\s*as\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]/g)].map(m => [m[1], m[2]] as [string, string])
+          const modOf = new Map([...(files.get(p)?.binds ?? []), ...nsImports]), tops = topLevel(files.get(p)?.printed ?? ''), sc = scan(hf.printed)
+          const pure = (x: string) => { const t = tops.get(x); if (!t?.fn || /\bprisma\b|\bawait\b/.test(t.text)) return false
+            const s2 = scan(t.text); return !s2.dynamic && [...s2.idents].every(y => y === x || !tops.has(y) && !modOf.has(y)) }
+          const importsKnown = !sc.dynamic && !tops.has('...') && [...sc.idents].every(x => x === h.handler || x === lead || !tops.has(x) && !modOf.has(x)
+            || x === 'prisma' && modOf.has('prisma') && !tops.has('prisma') || /^(?:next\/(?:cache|navigation|headers)|zod)$/.test(modOf.get(x) ?? '') || pure(x))
+          if (lead && arg && group && importsKnown && keepsTo(hf.printed, arg, group[0].toLowerCase() + group.slice(1) + 'Id', lead) && [...seen].slice(1).every(x => { const i = x.lastIndexOf(':'), g = files.get(x.slice(0, i))?.locals.get(x.slice(i + 1)); return checks.has(x) ? !g?.written.size : !g?.tables.size && !g?.written.size }))
+            (h as { member?: string }).member = words(group) }
         // Next.js: nothing in it or its helpers about who's asking (no auth(), session, require*, user, role...): open to anyone
         if (h.nextAction) h.unknown = hf.auth || hf.authStop || [...usedAll, ...[...seen].slice(1).map(x => x.split(':').pop()!)].some(n => AUTH.has(n) || REQUIRE_LOGIN.test(n) || /auth|session|user|require|ensure|guard|member|permission|role|admin|clerk|supabase|verify|token|jwt|viewer|cookies|headers/i.test(n)) }
       // opening the address (GET) changes or deletes things: a link alone can do it
@@ -1794,6 +1823,7 @@ export function appFacts(snap: Snap) {
       // "only admins": every handler that decides checks for an admin (and the reads, said apart when they don't)
       ;(writes ? (u.wa ??= []) : (u.ra ??= [])).push(guard && !!h.admin)
       unit.admin = unit.auth && (u.w?.length ? u.wa! : u.ra!).every(Boolean)
+      if (h.nextAction) (unit as FileFacts & { member?: string }).member = guard ? (h as { member?: string }).member : undefined
       // Spring: plain can't tell whether this address is open, when the handlers that decide it are unknown and none is plainly open
       ;(writes ? (u.wu ??= []) : (u.ru ??= [])).push(guard ? 'login' : h.unknown ? 'unknown' : 'open')
       const deciding = u.w?.length ? u.wu! : u.ru!
@@ -2110,7 +2140,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         const ra = (u as { ra?: boolean[] }).ra, readsAdmin = !ra?.length || ra.every(Boolean)
         if (b.auth && !isPublic(r.url)) clauses.push(b.admin ? (reads.includes('open') ? 'lets only admins change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'lets only admins change anything ✓'
             : readsAdmin ? 'is for admins only ✓' : 'lets only admins change anything ✓ (anyone logged in can view it)')
-          : reads.includes('open') ? 'needs login to change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'needs login to change anything ✓' : 'requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
+          : reads.includes('open') ? 'needs login to change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'needs login to change anything ✓'
+          : (b as FileFacts & { member?: string }).member ? `only lets the ${(b as FileFacts & { member?: string }).member}'s members in ✓` : 'requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
         else if (!link && !b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown) clauses.push('works without logging in')   // (not when plain can't tell)   // read-only; changing ones get a warning instead
       } else {
         // what it now does to them: an address that gains update and delete doesn't "save" anything new
