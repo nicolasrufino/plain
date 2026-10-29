@@ -95,6 +95,7 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 - **Workspace members.** A Next.js server action reads "only lets the workspace's members in ✓" when its login helper
   also checks the user's membership of the workspace it's given, and every Prisma read and write in it stays in that
   workspace (`src/members.ts`, read with the TypeScript parser). Anything it can't follow keeps "requires login ✓".
+  "Only lets the workspace's owners and admins in ✓" when that helper then turns away other roles, on the user's own role.
 - **Share links.** A new page whose address carries a secret (`/share/[token]`, `/s/[public_id]`) and looks up a link
   field with it "opens from a private link". No login claim on pages, since an app-wide guard plain can't read may
   still ask. Read-only server code with nothing login-ish anywhere says "anyone with the link, no login needed". An

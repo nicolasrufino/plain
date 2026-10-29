@@ -54,6 +54,19 @@ export function topLevel(text: string): Map<string, { fn: boolean; text: string 
   return m
 }
 
+// A function's only top-level return (not one in a nested function), when it's the last statement of its body
+export function lastReturn(text: string): ts.Expression | undefined {
+  const sf = ts.createSourceFile('x.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const fn = sf.statements.find(x => ts.isFunctionDeclaration(x) || ts.isVariableStatement(x))
+  const body = fn && ts.isFunctionDeclaration(fn) ? fn.body : fn && ts.isVariableStatement(fn) ? (() => { const i = fn.declarationList.declarations[0]?.initializer; return i && (ts.isArrowFunction(i) || ts.isFunctionExpression(i)) && ts.isBlock(i.body) ? i.body : undefined })() : undefined
+  if (!body) return undefined
+  const returns: ts.ReturnStatement[] = []
+  const visit = (n: ts.Node) => { if (ts.isFunctionLike(n)) return; if (ts.isReturnStatement(n)) returns.push(n); n.forEachChild(visit) }
+  body.statements.forEach(visit)
+  const last = body.statements.at(-1)
+  return returns.length === 1 && last === returns[0] ? returns[0].expression : undefined
+}
+
 // The text inside the bracket that opens at s[i], or undefined when it doesn't close
 export function inside(s: string, i: number): string | undefined {
   let d = 0
@@ -111,7 +124,9 @@ const limitedTo = (obj: Map<string, string>, v: string, key: string) => obj.get(
 // The helper's own membership check. `text` is the helper's code; `param` its first parameter; `logins` the login helpers it calls first
 // (requireUser); `nav` the names it imports from next/navigation. Returns the group's name ("workspace") when it looks up a membership of the logged-in user for `param` and stops right
 // after when there's none, with nothing before it that returns or could swallow the stop.
-export function memberCheck(text: string, param: string, logins: string[], nav: Set<string>): string | undefined {
+// `out.ownRole` says whether the role it returns is the user's own in that workspace: `role: workspace.memberships[0].role` with the
+// lookup's include keeping only the user's membership, or `role: m.role` / the row itself when it looked up the membership row.
+export function memberCheck(text: string, param: string, logins: string[], nav: Set<string>, out: { ownRole?: boolean } = {}): string | undefined {
   // (a regex literal, `.replace(/'/g, "")`: its quotes and braces would throw off the bracket counting)
   const sc = scan(text)
   if (/\btry\s*\{/.test(text) || sc.regex || sc.dynamic) return undefined
@@ -144,12 +159,29 @@ export function memberCheck(text: string, param: string, logins: string[], nav: 
     const before = text.slice(text.indexOf('{') + 1, c.at)
     if (/\breturn\b/.test(before) || depth(text, c.at).n !== 1) continue
     const decl = text.slice(0, c.at).match(/\b(?:const|let)\s+(\w+)\s*=\s*await\s*$/)
-    if (c.op.endsWith('OrThrow')) { if ((decl || /\bawait\s*$/.test(text.slice(0, c.at))) && !/^\s*[.?]/.test(text.slice(c.end))) return group; continue }
+    // (by the parser: the helper's only top-level return, its last statement, is the membership row itself or an object, no spread,
+    // whose role is exactly the row's role (`m.role`) or the filtered relation's first one (`workspace.memberships[0].role`): not
+    // `m.user`, `?? user.role`, nor an early `return { user, role: "owner" }` for staff)
+    const own = (v?: string) => { if (!v || (sc.bound.get(v) ?? 0) !== 1 || sc.assigned.has(v)) return false
+      const relName = rel ? (keys(c.top.get('include')).has('memberships') ? 'memberships' : 'members') : ''
+      if (rel) { const w = keys(keys(keys(c.top.get('include')).get(relName)).get('where')); if (w.size !== 1 || !isUser(w.get('userId') ?? '')) return false }
+      const r = lastReturn(text)
+      if (!r) return false
+      // (nothing touches it between the lookup and the return: not `m.role = "owner"`, `Object.assign(m, ...)`, an alias: only the
+      // declaration and the `if (!m)` stop, or the declaration alone with OrThrow)
+      const uses = (text.slice(0, r.getStart()).match(new RegExp(String.raw`(?<![\w$.])${v}\b`, 'g')) ?? []).length
+      if (uses !== (c.op.endsWith('OrThrow') ? 1 : 2)) return false
+      if (ts.isIdentifier(r)) return !rel && r.text === v
+      if (!ts.isObjectLiteralExpression(r) || r.properties.some(x => !ts.isPropertyAssignment(x) && !ts.isShorthandPropertyAssignment(x))) return false
+      const roles = r.properties.filter(x => x.name && x.name.getText().replace(/^[\['"]+|['"\]]+$/g, '') === 'role'), role = roles[0] as ts.PropertyAssignment | undefined
+      const other = r.properties.filter(x => x !== role).every(x => ts.isShorthandPropertyAssignment(x) || !new RegExp(String.raw`(?<![\w$.])${v}\b`).test((x as ts.PropertyAssignment).initializer.getText()) || (x as ts.PropertyAssignment).initializer.getText() === v)
+      return roles.length === 1 && other && !!role && ts.isPropertyAssignment(role) && role.initializer.getText().replace(/\s+/g, '') === (rel ? `${v}.${relName}[0].role` : `${v}.role`) }
+    if (c.op.endsWith('OrThrow')) { if ((decl || /\bawait\s*$/.test(text.slice(0, c.at))) && !/^\s*[.?]/.test(text.slice(c.end))) { out.ownRole = own(decl?.[1]); return group } continue }
     if (!decl) continue
     const next = text.slice(c.end).replace(/^\s*;?\s*/, '')
     // (Next's own notFound / redirect / forbidden / unauthorized, which throw; not a local `forbidden()` that returns a value)
     const stop = next.match(new RegExp(String.raw`^if\s*\(\s*!\s*${decl[1]}\s*\)\s*\{?\s*(?:return\s+)?(?:(notFound|redirect|forbidden|unauthorized)\s*\(|(throw)\b)`))?.slice(1).find(Boolean)
-    if (stop === 'throw' || stop && nav.has(stop)) return group
+    if (stop === 'throw' || stop && nav.has(stop) && !sc.bound.has(stop) && !new RegExp(String.raw`\bfunction\s+${stop}\b`).test(text)) { out.ownRole = own(decl[1]); return group }
   }
   return undefined
 }
@@ -193,4 +225,19 @@ export function keepsTo(text: string, v: string, key: string, lead: string): boo
     }
   }
   return true
+}
+
+// The roles a helper lets through once the member check has run: `const r = await requireWorkspaceMember(workspaceId)` as its first step,
+// then right away `if (r.role !== "owner" && r.role !== "admin") notFound()` (or `if (!["owner", "admin"].includes(r.role))`), stopping
+// with Next's own function or a throw. Nothing else comes first.
+export function roleGate(text: string, inner: string, param: string, nav: Set<string>): string[] | undefined {
+  const sc = scan(text)
+  if (/\btry\s*\{/.test(text) || sc.regex || sc.dynamic) return undefined
+  const m = text.match(new RegExp(String.raw`^[^{]*\{\s*(?:const|let)\s+(\w+)\s*=\s*await\s+${inner}\s*\(\s*${param}\s*\)\s*;?\s*if\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*\{?\s*(?:return\s+)?(?:(notFound|redirect|forbidden|unauthorized)\s*\(|(throw)\b)`))
+  if (!m || (sc.bound.get(m[1]) ?? 0) !== 1 || sc.assigned.has(m[1]) || m[3] && (!nav.has(m[3]) || sc.bound.has(m[3]) || new RegExp(String.raw`\bfunction\s+${m[3]}\b`).test(text))) return undefined
+  const r = m[1].replace(/\$/g, '\\$'), cond = m[2].trim()
+  const list = cond.match(new RegExp(String.raw`^!\s*\[\s*((?:['"]\w+['"]\s*,?\s*)+)\]\s*\.includes\(\s*${r}\.role\s*\)$`))
+  if (list) return [...list[1].matchAll(/['"](\w+)['"]/g)].map(x => x[1])
+  const parts = cond.split('&&').map(x => x.trim().match(new RegExp(String.raw`^${r}\.role\s*!==?\s*['"](\w+)['"]$`))?.[1])
+  return parts.length && parts.every(Boolean) ? parts as string[] : undefined
 }

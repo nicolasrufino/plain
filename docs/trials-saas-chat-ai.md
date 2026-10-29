@@ -672,7 +672,12 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
      a namespace or default import, or a helper that touches tables. Only small local functions that touch nothing.
    - Known misses: helpers written as arrows aren't read; ids under names without "Id" (`assignedTo`, a storage key)
      aren't checked; a membership that's pending or soft-deleted still counts.
-   Still open: "only owners and admins ✓" (Huddle's `requireWorkspaceAdmin` checks two roles).
+   Then "only lets the workspace's owners and admins in ✓" (later): when the login helper runs the member check and,
+   right away, turns away every other role, on the role from the user's own membership row. Huddle's revoke-invite
+   action gets it. Review 35 took three rounds (2, 1, then clean): the role must be returned exactly as read
+   (`m.role`, or the filtered relation's first row), from the helper's only return, with nothing changing it before
+   (no staff override, no `?? user.role`, not the user's site-wide role). Roles that aren't kinds of person read
+   "members with the billing role".
 5. ✅ **Public share-link pages** (Huddle p1, Quill p3). Fixed later.
    - Huddle p1's page now adds "It opens from a private link, so only people who have the link can find it."
    - Quill p3 now reads "turns sharing on or off for documents and requires login ✓" (it was "deletes

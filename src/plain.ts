@@ -6,7 +6,7 @@
 //
 // ponytail: Next.js (app/ and pages/), Express-style servers, React Router, Prisma, Supabase, Stripe. Each framework is one more fact extractor.
 import { adminCond, adminPos, FROM_REQUEST } from './admin.ts'
-import { memberCheck, keepsTo, scan, topLevel } from './members.ts'
+import { memberCheck, keepsTo, scan, topLevel, roleGate } from './members.ts'
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
@@ -1764,16 +1764,23 @@ export function appFacts(snap: Snap) {
           // "Only the workspace's members": a lead-call helper that stops guests (above) and checks the logged-in user's membership of the
           // value it's given (src/members.ts), directly or through a helper it passes that same value to; and the action keeps every read
           // and write to that value. No write made by a helper plain follows (it couldn't check it). Not one imported under another name.
-          const memberOf = (at: string, n: string, depth: number): string | undefined => { const q = files.get(at)?.locals.has(n) ? at : target(at, n), c = q ? files.get(q)?.locals.get(n) : undefined
+          // (and which roles: a helper that runs the member check, then right away turns away every role but some, on the role the member
+          // check returns from the user's own membership: requireWorkspaceAdmin -> "owners and admins")
+          const navOf = (q: string) => new Set([...files.get(q)!.binds].filter(([, m]) => m === 'next/navigation').map(([x]) => x))
+          const memberOf = (at: string, n: string, depth: number, info: { ownRole?: boolean; roles?: string[] } = {}): string | undefined => { const q = files.get(at)?.locals.has(n) ? at : target(at, n), c = q ? files.get(q)?.locals.get(n) : undefined
             // (nor a default import: `import requireWorkspaceMember from ...` runs the module's default, whatever it's named)
             if (!c || q !== at && new RegExp(String.raw`\b\w+\s+as\s+${n}\b|\bimport\s+${n}\s*(?:,|from\b)`).test(files.get(at)?.printed ?? '')) return undefined
             const params = c.printed.match(/^[^(]*\(([^)]*)\)/)?.[1].split(',').map(x => x.trim().split(/[\s:=?]/)[0]).filter(Boolean) ?? []
             if (params.length !== 1) return undefined   // (one value in: not `(workspaceId, userId)`, where the user is given)
-            const own = memberCheck(c.printed, params[0], c.leadCalls ?? [], new Set([...files.get(q!)!.binds].filter(([, m]) => m === 'next/navigation').map(([x]) => x)))
+            const own = memberCheck(c.printed, params[0], c.leadCalls ?? [], navOf(q!), info)
             if (own) return own
-            return depth < 1 ? (c.leadCalls ?? []).filter(m => new RegExp(String.raw`\bawait\s+${m}\s*\(\s*${params[0]}\s*\)`).test(c.printed)).map(m => memberOf(q!, m, depth + 1)).find(Boolean) : undefined }
+            if (depth >= 1) return undefined
+            for (const m of (c.leadCalls ?? []).filter(m => new RegExp(String.raw`\bawait\s+${m}\s*\(\s*${params[0]}\s*\)`).test(c.printed))) {
+              const sub: { ownRole?: boolean } = {}, g = memberOf(q!, m, depth + 1, sub)
+              if (g) { info.roles = sub.ownRole ? roleGate(c.printed, m, params[0], navOf(q!)) : undefined; return g } }
+            return undefined }
           const lead = (hf.leadCalls ?? []).find(n => stops(p, n, 0) && memberOf(p, n, 0)), arg = lead && hf.printed.match(new RegExp(String.raw`\bawait\s+${lead}\s*\(\s*(\w+)\s*\)`))?.[1]
-          const group = lead && memberOf(p, lead, 0)
+          const roleInfo: { roles?: string[] } = {}, group = lead && memberOf(p, lead, 0, roleInfo)
           // (helpers it follows, other than its login and membership checks, touch no tables: plain doesn't check their reads)
           const checks = new Set<string>(); const chain = (at: string, n: string, d: number) => { const q = files.get(at)?.locals.has(n) ? at : target(at, n); if (!q) return
             checks.add(`${q}:${n}`); if (d < 3) for (const m of files.get(q)?.locals.get(n)?.leadCalls ?? []) chain(q, m, d + 1) }
@@ -1788,7 +1795,7 @@ export function appFacts(snap: Snap) {
           const importsKnown = !sc.dynamic && !tops.has('...') && [...sc.idents].every(x => x === h.handler || x === lead || !tops.has(x) && !modOf.has(x)
             || x === 'prisma' && modOf.has('prisma') && !tops.has('prisma') || /^(?:next\/(?:cache|navigation|headers)|zod)$/.test(modOf.get(x) ?? '') || pure(x))
           if (lead && arg && group && importsKnown && keepsTo(hf.printed, arg, group[0].toLowerCase() + group.slice(1) + 'Id', lead) && [...seen].slice(1).every(x => { const i = x.lastIndexOf(':'), g = files.get(x.slice(0, i))?.locals.get(x.slice(i + 1)); return checks.has(x) ? !g?.written.size : !g?.tables.size && !g?.written.size }))
-            (h as { member?: string }).member = words(group) }
+            (h as { member?: string }).member = words(group) + (roleInfo.roles?.length ? `|${roleInfo.roles.join(',')}` : '') }
         // Next.js: nothing in it or its helpers about who's asking (no auth(), session, require*, user, role...): open to anyone
         if (h.nextAction) h.unknown = hf.auth || hf.authStop || [...usedAll, ...[...seen].slice(1).map(x => x.split(':').pop()!)].some(n => AUTH.has(n) || REQUIRE_LOGIN.test(n) || /auth|session|user|require|ensure|guard|member|permission|role|admin|clerk|supabase|verify|token|jwt|viewer|cookies|headers/i.test(n)) }
       // opening the address (GET) changes or deletes things: a link alone can do it
@@ -1898,6 +1905,10 @@ const ACRONYM: Record<string, string> = { ai: 'AI', api: 'API', sms: 'SMS', pdf:
 const words = (s: string) => s.replace(/OAuth/g, 'Oauth').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').replace(/[-_]/g, ' ').toLowerCase()
   .split(' ').map(w => ACRONYM[w] ?? w).join(' ')
 const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : /(sses|xes|ches|shes)$/.test(s) ? s.slice(0, -2) : s.endsWith('s') ? s.slice(0, -1) : s   // boxes -> box
+// "owners and admins"; a role that isn't a kind of person reads as itself: "members with the billing or staff role"
+const roleWords = (roles: string[]) => { const w = roles.map(x => words(x))
+  return w.every(x => /^(?:owner|admin|super admin|superadmin|editor|member|manager|moderator|viewer|maintainer|contributor|guest|writer|reader|collaborator|developer|analyst|author|reviewer)$/.test(x))
+    ? list(w.map(pluralize)) : `members with the ${w.length < 2 ? w[0] : `${w.slice(0, -1).join(', ')} or ${w.at(-1)}`} role` }
 const pluralize = (s: string) => s.endsWith('s') ? s : /[^aeiou]y$/i.test(s) ? s.slice(0, -1) + 'ies' : s + 's'   // (keys, surveys, categories)
 export const things = (model: string) => pluralize(words(model))
 const an = (w: string) => ((/^[A-Z]{2}/.test(w) ? /^[AEFHILMNORSX]/.test(w) : /^([aeio]|u(?!s|ni))/i.test(w)) ? 'an ' : 'a ') + w   // a user, an umbrella, an AI request, an SMS
@@ -2141,7 +2152,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         if (b.auth && !isPublic(r.url)) clauses.push(b.admin ? (reads.includes('open') ? 'lets only admins change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'lets only admins change anything ✓'
             : readsAdmin ? 'is for admins only ✓' : 'lets only admins change anything ✓ (anyone logged in can view it)')
           : reads.includes('open') ? 'needs login to change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'needs login to change anything ✓'
-          : (b as FileFacts & { member?: string }).member ? `only lets the ${(b as FileFacts & { member?: string }).member}'s members in ✓` : 'requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
+          : (b as FileFacts & { member?: string }).member ? (([g, r]) => `only lets the ${g}'s ${r ? roleWords([...new Set(r.split(','))]) : 'members'} in ✓`)((b as FileFacts & { member?: string }).member!.split('|')) : 'requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
         else if (!link && !b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown) clauses.push('works without logging in')   // (not when plain can't tell)   // read-only; changing ones get a warning instead
       } else {
         // what it now does to them: an address that gains update and delete doesn't "save" anything new

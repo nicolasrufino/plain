@@ -3555,6 +3555,43 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   // a small local function that touches nothing is fine
   c = card({ 'lib/authz.ts': authz(rel), 'app/actions/tasks.ts': act('await prisma.task.updateMany({ where: { id: taskId, workspaceId }, data: { title: clean(String(formData.get("t"))) } });') + 'function clean(s: string) {\n  return s.trim()\n}\n' })
   assert.ok(c.includes(yes), c)
+  // Owners and admins: the admin helper runs the member check, then right away turns away other roles, on the role from the user's own
+  // membership (the include keeps only theirs)
+  const relRole = '  const workspace = await prisma.workspace.findFirst({ where: { id: workspaceId, memberships: { some: { userId: user.id } } }, include: { memberships: { where: { userId: user.id }, select: { role: true } } } })\n  if (!workspace) notFound()'
+  const roled = (lookup: string, gate: string) => authz(lookup).replace('  return { user }\n}\nexport async function requireWorkspaceAdmin', '  return { user, role: workspace.memberships[0].role }\n}\nexport async function requireWorkspaceAdmin')
+    .replace('  const r = await requireWorkspaceMember(workspaceId)\n  return r', `  const r = await requireWorkspaceMember(workspaceId)\n${gate}\n  return r`)
+  const adminAct = act(scoped, 'requireWorkspaceAdmin')
+  const admins = "only lets the workspace's owners and admins in ✓"
+  c = card({ 'lib/authz.ts': roled(relRole, '  if (r.role !== "owner" && r.role !== "admin") notFound()'), 'app/actions/tasks.ts': adminAct })
+  assert.ok(c.includes(admins), c)
+  c = card({ 'lib/authz.ts': roled(relRole, '  if (!["owner", "admin"].includes(r.role)) notFound()'), 'app/actions/tasks.ts': adminAct })
+  assert.ok(c.includes(admins), c)
+  // no gate: members; || lets everyone but one through; the role from an unfiltered include (anyone's); a gate after something else;
+  // a local forbidden(); the result reassigned
+  c = card({ 'lib/authz.ts': roled(relRole, ''), 'app/actions/tasks.ts': adminAct })
+  assert.ok(c.includes(yes) && !c.includes('admins'), c)
+  for (const [why, lookup, gate] of [['||', relRole, '  if (r.role !== "owner" || r.role !== "admin") notFound()'],
+    ['unfiltered include', relRole.replace('memberships: { where: { userId: user.id }, select: { role: true } }', 'memberships: { select: { role: true } }'), '  if (r.role !== "owner" && r.role !== "admin") notFound()'],
+    ['not right after', relRole, '  console.log(r)\n  if (r.role !== "owner" && r.role !== "admin") notFound()'],
+    ['local forbidden', relRole, '  if (r.role !== "owner" && r.role !== "admin") return forbidden()'],
+    ['reassigned', relRole, '  if (r.role !== "owner" && r.role !== "admin") notFound()\n  r = { ...r, role: "owner" }']]) {
+    c = card({ 'lib/authz.ts': roled(lookup, gate).replace('const r = await', why === 'reassigned' ? 'let r = await' : 'const r = await'), 'app/actions/tasks.ts': adminAct })
+    assert.ok(!c.includes('admins in'), `${why}: ${c}`) }
+  // (review 35) the user's site-wide role (`return m.user`), a staff override in another return, a fallback: members only
+  const rowLookup = '  const m = await prisma.membership.findUnique({ where: { workspaceId_userId: { workspaceId, userId: user.id } }, include: { user: true } })\n  if (!m) notFound()'
+  const gate = '  if (r.role !== "owner" && r.role !== "admin") notFound()'
+  for (const [why, files] of [
+    ['site-wide role', authz(rowLookup).replace('  return { user }\n}\nexport async function requireWorkspaceAdmin', '  return m.user\n}\nexport async function requireWorkspaceAdmin')],
+    ['staff override', roled(relRole, gate).replace('  return { user, role: workspace.memberships[0].role }', '  if (user.email === process.env.SUPPORT_EMAIL) return { user, role: "owner" }\n  return { user, role: workspace.memberships[0].role }')],
+    ['fallback', roled(relRole, gate).replace('role: workspace.memberships[0].role }', 'role: workspace.memberships[0].role ?? user.role }')]]) {
+    const f = why === 'site-wide role' ? files.replace('  const r = await requireWorkspaceMember(workspaceId)\n  return r', `  const r = await requireWorkspaceMember(workspaceId)\n${gate}\n  return r`) : files
+    c = card({ 'lib/authz.ts': f, 'app/actions/tasks.ts': adminAct }); assert.ok(!c.includes('admins in') && c.includes(yes), `${why}: ${c}`) }
+  // (review 35b) the role changed before the return
+  c = card({ 'lib/authz.ts': roled(relRole, gate).replace('  return { user, role: workspace.memberships[0].role }', '  if (user.email === process.env.SUPPORT_EMAIL) workspace.memberships[0].role = "owner"\n  return { user, role: workspace.memberships[0].role }'), 'app/actions/tasks.ts': adminAct })
+  assert.ok(!c.includes('admins in') && c.includes(yes), `role changed: ${c}`)
+  // a role that isn't a kind of person reads as itself
+  c = card({ 'lib/authz.ts': roled(relRole, '  if (r.role !== "billing") notFound()'), 'app/actions/tasks.ts': adminAct })
+  assert.ok(c.includes("only lets the workspace's members with the billing role in ✓"), c)
   // a project's lookup through its workspace's members isn't "the project's members"
   no(card({ 'lib/authz.ts': authz('  const project = await prisma.project.findFirst({ where: { id: workspaceId, workspace: { memberships: { some: { userId: user.id } } } } })\n  if (!project) notFound()'), 'app/actions/tasks.ts': act(scoped) }), 'project via workspace')
   console.log('ok (workspace members)')
