@@ -3888,3 +3888,13 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   c = card(route); assert.ok(!c.includes('requires login ✓'), c)
   console.log('ok (route chain guards)')
 }
+// A GET at an address ending in an id that looks up one row: "looks up one room", not "lists rooms"
+{
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","@prisma/client":"6.0.0"}}' }
+  const card = (h: string) => report(new Map(Object.entries(ex)), new Map(Object.entries({ ...ex, 'server.js': `const express = require("express")\nconst app = express()\napp.get("/api/rooms/:roomId", requireAuth, async (req, res) => {\n${h}\n})\napp.listen(3000)\n` })), { ref: 'main' }).replace(/\s+/g, ' ')
+  let c = card('  res.json(await prisma.room.findUnique({ where: { id: req.params.roomId } }))')
+  assert.ok(c.includes('looks up one room') && !c.includes('lists rooms'), c)
+  c = card('  const room = await prisma.room.findUnique({ where: { id: req.params.roomId } })\n  res.json({ room, messages: await prisma.message.findMany({ where: { roomId: room.id } }) })')
+  assert.ok(!c.includes('looks up one room'), c)
+  console.log('ok (one row)')
+}

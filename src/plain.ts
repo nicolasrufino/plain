@@ -2165,7 +2165,10 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         // (what it changes: a table it writes, or one its address names; not just the first one it reads)
         const wnoun = b.written.size || named(r.url).some(seg => [...b.tables].some(x => things(x) === pluralize(seg))) ? noun : 'data'
         const link = linkOnly(r.url, b), share = shareRoute(r.url, b, t)
-        if (b.fns.has('GET')) can.push(link ? `shows ${noun} to anyone with the link, no login needed` : `lists ${noun}`)
+        // (an address ending in an id whose GET only looks up one row, `findUnique`, `db.get(Model, id)`, `find_by`: one, not a list)
+        const getText = b.fns.get('GET') ?? '', oneRow = !!t && /\]$/.test(r.url) && /\b(?:findUnique|findFirst|findUniqueOrThrow|findFirstOrThrow|findOne|findByPk|findById|find_by!?|get_object_or_404|firstOrFail|findOrFail)\s*\(|\b(?:db|session)\.get\s*\(|\.first\s*\(\s*\)/.test(getText)
+          && !/\b(?:findMany|findAll|\.all\s*\(|\.filter\s*\(|\.where\s*\(|select\s*\(|\.list\s*\(|\$queryRaw|\.from\s*\()/.test(getText.replace(/\b(?:findUnique|findFirst)\w*\s*\(\s*\{[^]*?\}\s*\)/g, ''))
+        if (b.fns.has('GET')) can.push(link ? `shows ${noun} to anyone with the link, no login needed` : oneRow ? `looks up one ${words(t!)}` : `lists ${noun}`)
         if (share) can.push(`turns sharing on or off for ${noun}`)   // (not which: a POST may set the token to nothing)
         if (!share && (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m)))) can.push(creates ? (can.length && (!t || b.written.has(t)) ? 'saves new ones' : `saves new ${t && !b.written.has(t) && b.written.size ? things([...b.written][0]) : noun}`)
           : b.ops.has('update') && b.ops.has('delete') && !['PUT', 'PATCH', 'DELETE'].some(m => b.fns.has(m)) ? `updates and deletes ${list([...(b.written.size ? b.written : [t ?? 'data'])].map(x => x === 'data' ? x : things(x)))}`   // (not which one each: plain doesn't keep that)
