@@ -3898,3 +3898,11 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   assert.ok(!c.includes('looks up one room'), c)
   console.log('ok (one row)')
 }
+// A new address that another changed file calls (through a wrapper that adds /api) isn't "unrelated"
+{
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","react":"18.0.0","@prisma/client":"6.0.0"}}', 'server/rooms.ts': 'import { Router } from "express"\nexport const router = Router()\nrouter.get("/", async (req, res) => res.json(await prisma.room.findMany()))\n', 'client/Room.tsx': 'export function Room({ id }: { id: string }) {\n  return <main>{id}</main>\n}\n', 'server/index.ts': 'import express from "express"\nimport { router } from "./rooms"\nconst app = express()\napp.use("/api/rooms", router)\napp.listen(3000)\n' }
+  const after = { ...ex, 'server/rooms.ts': ex['server/rooms.ts'] + 'router.get("/:roomId", async (req, res) => res.json(await prisma.room.findUnique({ where: { id: req.params.roomId } })))\n', 'client/Room.tsx': 'import { api } from "./api"\nexport function Room({ id }: { id: string }) {\n  const room = api(`/rooms/${id}`)\n  return <main>{id}</main>\n}\n' }
+  const c = report(new Map(Object.entries(ex)), new Map(Object.entries(after)), { ref: 'main', asked: 'messages show up twice and the app is slow' }).replace(/\s+/g, ' ')
+  assert.ok(!c.includes("server/rooms.ts, which doesn't look related"), c)
+  console.log('ok (called endpoint is related)')
+}

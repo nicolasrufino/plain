@@ -2623,7 +2623,13 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       // Part of the feature if it adds something new (ApiError) that the rest of this change uses.
       const added = [...b.exports].filter(x => !a.exports.has(x))
       const feature = added.some(x => [...B.files].some(([q, f]) => q !== p && real.includes(q) && (f.used.has(x) || f.jsx.has(x))))
-      if (!fns.length && !feature && !linked(before.get(p), after.get(p))) problems.push({ kind: 'Unasked', text: `The agent also changed ${p}, which doesn't look related to what you asked for.` })
+      // (or it adds an address that another file of this change calls: the new endpoint a changed page now loads)
+      const newUrls = [...B.routes].filter(([k]) => k.startsWith(p + '#') && !A.routes.has(k)).map(([, r]) => norm(r.url))
+      // (through a wrapper too, `api(\`/rooms/${id}\`)` adding /api itself: the address's path written in another changed file)
+      const pathRe = (u: string) => new RegExp(String.raw`['"\`](?:/api)?` + u.replace(/^\/api(?=\/)/, '').split('/').map(seg => /^\[/.test(seg) ? String.raw`(?:\$\{[^}]+\}|:\w+)` : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('/') + String.raw`['"\`?]`)
+      const called = newUrls.length > 0 && real.some(q => q !== p && ([...B.files.get(q)?.fetches ?? []].some(x => newUrls.includes(norm(x.slice(x.indexOf(' ') + 1))))
+        || [...B.routes].filter(([k]) => k.startsWith(p + '#') && !A.routes.has(k)).some(([, r]) => pathRe(r.url).test(after.get(q) ?? ''))))
+      if (!fns.length && !feature && !called && !linked(before.get(p), after.get(p))) problems.push({ kind: 'Unasked', text: `The agent also changed ${p}, which doesn't look related to what you asked for.` })
       for (const n of fns.filter(n => !added.some(x => new RegExp(`\\b${x}\\b`).test(b.fns.get(n) ?? '')) && !linked(a.fns.get(n), b.fns.get(n)))) {
         const u = usersOf(n, p)
         problems.push({ kind: 'Unasked', text: `The agent also changed ${n}() in ${p}, which doesn't look related to what you asked for.${u.length ? ` It's used by ${list(u)}, so check that ${u.length > 1 ? 'they' : 'it'} still ${u.length > 1 ? 'work' : 'works'}.` : ''}` })
