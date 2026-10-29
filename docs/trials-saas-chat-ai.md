@@ -634,8 +634,11 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
 
 ## Still open
 
-1. **Uploads** (Porch p3 🔴). Describe them: types, size limit, where files are stored, who can see them.
-   Flag 🔴 when there's no per-person limit and signup is open: "One account can fill the server's disk."
+1. ✅ **Uploads** (Porch p3 🔴). Fixed later. A new upload is described with its accepted types, its size limit and where files go. The card adds a guess when there's no size limit or no per-person limit, and when SVG is allowed. Porch p3 now reads "People can now upload pictures (JPEG, PNG, WebP or GIF), up to 5 MB each. They're stored in your database." and gets "Nothing limits how many files one person can upload: one account can fill your database and stop the whole app."
+
+   The independent review (round 28) took five rounds (8, 13, 1, 1, then clean). It made the rule count only real request entry points, not previews, webhooks or files the server makes itself. It reads sizes only from limits and framework defaults, and storage only from the upload code and its imports. It skips the per-person guess for admin-only uploads.
+
+   Known miss: a new upload with no size limit, added beside a size-checked one in the same file, gets no size warning.
    When files live in the database, add that a full disk stops the whole app.
 2. **Socket.IO events and their access** (all Porch cards). "Live chat needs a login ✓", "only people in
    that room ✓", and "pictures appear live for everyone in the room".

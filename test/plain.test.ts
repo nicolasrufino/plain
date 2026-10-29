@@ -2564,6 +2564,300 @@ for (const [l, mw] of [['verifySession({ checkDatabase: true })', 'verifySession
   }
   console.log('ok (review 27, round 2)')
 }
+// Uploads (round 10, Porch p3's 🔴): what's accepted, how big, where files go; a guess when nothing caps size or how much
+// one person can upload. A Stripe webhook's express.raw({ type: 'application/json' }) isn't an upload.
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"express":"4.19.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Photo {\n  id Int @id\n  image Bytes\n}\n',
+    'src/index.ts': "import express from 'express'\nimport { photos } from './photos.js'\nconst app = express()\napp.use('/api/photos', photos)\napp.listen(3000)\n" }
+  const route = (mw: string, extra = '') => `import express, { Router } from 'express'\nimport { prisma } from './db.js'\n${extra}\nexport const photos = Router()\nphotos.post('/', ${mw}, async (req, res) => res.json(await prisma.photo.create({ data: { image: req.body } })))\n`
+  const raw = "express.raw({ type: ['image/jpeg', 'image/png'], limit: 5 * 1024 * 1024 })"
+  const c1 = card(base, { ...base, 'src/photos.ts': route(raw) })
+  assert.ok(c1.includes('People can now upload pictures (JPEG or PNG), up to 5 MB each. They\'re stored in your database.'), `uploads: described\n${c1}`)
+  assert.ok(c1.includes('one account can fill your database and stop the whole app'), `uploads: no per-person cap\n${c1}`)
+  assert.ok(!c1.includes('no size limit'), 'uploads: size is limited')
+  const c2 = card(base, { ...base, 'src/photos.ts': route("multer({ storage: multer.memoryStorage() }).single('photo')", "import multer from 'multer'") })
+  assert.ok(c2.includes('Uploads have no size limit plain can see'), `uploads: no size limit\n${c2}`)
+  const c3 = card(base, { ...base, 'src/photos.ts': route(raw, "import rateLimit from 'express-rate-limit'\nconst limiter = rateLimit({ windowMs: 60000, max: 5 })") })
+  assert.ok(!c3.includes('Nothing limits how many files'), `uploads: a rate limiter caps it\n${c3}`)
+  const c4 = card(base, { ...base, 'src/photos.ts': route(raw.replace("'image/png'", "'image/svg+xml'")) })
+  assert.ok(c4.includes('SVG pictures are allowed'), `uploads: SVG\n${c4}`)
+  const hook = "import express, { Router } from 'express'\nexport const photos = Router()\nphotos.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => res.json({}))\n"
+  assert.ok(!card(base, { ...base, 'src/photos.ts': hook }).includes('upload'), 'uploads: a webhook body isn\'t an upload')
+  const s3 = { ...base, 'src/photos.ts': route("multer({ limits: { fileSize: 2 * 1024 * 1024 } }).single('photo')", "import multer from 'multer'\nimport { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'\nconst s3 = new S3Client({})\nasync function save(f) { await s3.send(new PutObjectCommand({ Bucket: 'b', Key: 'k', Body: f })) }") }
+  const c5 = card(base, s3)
+  assert.ok(c5.includes("stored in Amazon S3") && c5.includes('adds to your Amazon S3 bill'), `uploads: S3\n${c5}`)
+  const mod = { ...base, 'src/photos.ts': route(raw) + "photos.delete('/:id', async (req, res) => { if (req.user.role === 'admin') await prisma.photo.delete({ where: { id: 1 } }); res.json({}) })\n" }
+  assert.ok(card(base, mod).includes('Nothing limits how many files'), 'uploads: an admin check elsewhere in the file isn\'t an admins-only upload')
+  console.log('ok (uploads)')
+}
+// Review 28: uploads (real entry points only, sizes from limits and framework defaults, storage from the upload code and its
+// imports, allow-lists not rejections, server-side caps, admins-only and has_one_attached not scared)
+{
+  const up = (before: Record<string, string>, after: Record<string, string>) => {
+    const r = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' })
+    return r.replace(/\n\s{2,}(?![!+•\d])/g, ' ').split('\n').map(l => l.trim()).filter(l => /upload|size limit|SVG pictures/i.test(l)).join('\n')
+  }
+  const got = new Map<string, string>()
+  const show = (name: string, before: Record<string, string>, after: Record<string, string>) => { got.set(name, up(before, after)) }
+  {
+// FALSE ALARMS: things detected as uploads that aren't, plus false "no size limit" / "nothing limits"
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","react":"19.0.0"}}', 'app/page.tsx': 'export default function P() { return <p/> }\n' }
+show('client-side image preview (instanceof File)', next, { ...next, 'components/AvatarPreview.tsx':
+  "'use client'\nexport function AvatarPreview({ value }: { value: File | string }) {\n  const src = value instanceof File ? URL.createObjectURL(value) : value\n  return <img src={src} />\n}\n" })
+show('client fetch wrapper (instanceof Blob)', next, { ...next, 'lib/api.ts':
+  "export async function api(url: string, body: unknown) {\n  const headers = body instanceof Blob ? {} : { 'content-type': 'application/json' }\n  return fetch(url, { method: 'POST', headers, body: body instanceof Blob ? body : JSON.stringify(body) })\n}\n" })
+const ex = { 'package.json': '{"dependencies":{"express":"4.19.0"}}', 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n" }
+show("webhook with express.raw({ type: '*/*' })", ex, { ...ex, 'src/webhooks.ts':
+  "import express, { Router } from 'express'\nimport crypto from 'node:crypto'\nexport const hooks = Router()\nhooks.post('/shopify', express.raw({ type: '*/*' }), (req, res) => {\n  const ok = crypto.createHmac('sha256', process.env.SECRET!).update(req.body).digest('base64') === req.get('x-shopify-hmac-sha256')\n  res.sendStatus(ok ? 200 : 401)\n})\n" })
+show('nightly report job writes CSV to S3 (PutObjectCommand)', ex, { ...ex, 'src/jobs/export.ts':
+  "import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'\nimport { prisma } from '../db.js'\nconst s3 = new S3Client({})\nexport async function nightlyExport() {\n  const rows = await prisma.order.findMany()\n  await s3.send(new PutObjectCommand({ Bucket: 'reports', Key: `orders-${Date.now()}.csv`, Body: rows.map(r => r.id).join('\\n') }))\n}\n" })
+const sb = { 'package.json': '{"dependencies":{"@supabase/supabase-js":"2.45.0","express":"4.19.0"}}', 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n" }
+show('server generates invoice PDF, saves to Supabase storage', sb, { ...sb, 'src/invoices.ts':
+  "import { createClient } from '@supabase/supabase-js'\nimport { renderPdf } from './pdf.js'\nconst supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)\nexport async function saveInvoice(orderId: string) {\n  const pdf = await renderPdf(orderId)\n  await supabase.storage.from('invoices').upload(`${orderId}.pdf`, pdf, { contentType: 'application/pdf' })\n}\n" })
+// refactor: an existing upload handler moved to a new file (no new upload)
+const multerRoute = "import multer from 'multer'\nimport { Router } from 'express'\nconst upload = multer({ dest: 'uploads/' })\nexport const r = Router()\nr.post('/avatar', upload.single('avatar'), (req, res) => res.json({ ok: true }))\n"
+show('refactor: existing multer route moved to a new file', { ...ex, 'src/routes.ts': multerRoute }, { ...ex, 'src/routes/avatar.ts': multerRoute })
+// Laravel: a second $request->file() read of an existing upload (log the name)
+const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'routes/web.php': "<?php\nuse App\\Http\\Controllers\\AvatarController;\nRoute::post('/avatar', [AvatarController::class, 'store'])->middleware(['auth','throttle:5,1']);\n" }
+const ctl = (extra: string) => `<?php\nnamespace App\\Http\\Controllers;\nuse Illuminate\\Http\\Request;\nclass AvatarController extends Controller {\n  public function store(Request $request) {\n    $request->validate(['avatar' => 'required|image|max:2048']);\n    $path = $request->file('avatar')->store('avatars');${extra}\n    return back();\n  }\n}\n`
+show('Laravel: existing upload, add a log line reading the same file', { ...lv, 'app/Http/Controllers/AvatarController.php': ctl('') }, { ...lv, 'app/Http/Controllers/AvatarController.php': ctl("\n    logger()->info('avatar', ['name' => $request->file('avatar')->getClientOriginalName()]);") })
+
+  }
+  {
+// MISSES of common upload shapes
+const ex = { 'package.json': '{"dependencies":{"express":"4.19.0"}}', 'src/db.ts': 'export const prisma = {} as any\n',
+  'prisma/schema.prisma': 'model User {\n  id Int @id\n  totpSecret Bytes\n}\n',
+  'src/storage.ts': "import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'\nconst s3 = new S3Client({})\nexport const saveToBucket = (f: { buffer: Buffer; originalname: string }) => s3.send(new PutObjectCommand({ Bucket: 'photos', Key: f.originalname, Body: f.buffer }))\n",
+  'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n" }
+show('(storage) multer + existing S3 helper in another file; unrelated Bytes column', ex, { ...ex, 'src/index.ts':
+  "import express from 'express'\nimport multer from 'multer'\nimport { saveToBucket } from './storage.js'\nconst app = express()\nconst upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })\napp.post('/photos', upload.single('photo'), async (req, res) => res.json(await saveToBucket(req.file!)))\napp.listen(3000)\n" })
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","react":"19.0.0"}}', 'app/page.tsx': 'export default function P() { return <p/> }\n' }
+show('Next route handler: formData().get() as File + arrayBuffer', next, { ...next, 'app/api/upload/route.ts':
+  "import { writeFile } from 'node:fs/promises'\nexport async function POST(req: Request) {\n  const form = await req.formData()\n  const file = form.get('file') as File\n  const bytes = Buffer.from(await file.arrayBuffer())\n  await writeFile(`public/uploads/${file.name}`, bytes)\n  return Response.json({ url: `/uploads/${file.name}` })\n}\n" })
+show('UploadThing file router', next, { ...next, 'app/api/uploadthing/core.ts':
+  "import { createUploadthing, type FileRouter } from 'uploadthing/next'\nconst f = createUploadthing()\nexport const ourFileRouter = {\n  imageUploader: f({ image: { maxFileSize: '4MB', maxFileCount: 1 } }).middleware(async () => ({ userId: 'x' })).onUploadComplete(async ({ file }) => ({ url: file.ufsUrl })),\n} satisfies FileRouter\n" })
+const sbc = { 'package.json': '{"dependencies":{"@supabase/supabase-js":"2.45.0","react":"18.3.1","vite":"5.0.0"}}', 'src/main.tsx': 'export {}\n' }
+show('Supabase storage from a client component (chained over lines)', sbc, { ...sbc, 'src/components/AvatarUpload.tsx':
+  "import { supabase } from '../lib/supabase'\nexport function AvatarUpload({ userId }: { userId: string }) {\n  async function onChange(e: React.ChangeEvent<HTMLInputElement>) {\n    const file = e.target.files![0]\n    await supabase.storage\n      .from('avatars')\n      .upload(`${userId}/${file.name}`, file, { upsert: true })\n  }\n  return <input type=\"file\" accept=\"image/png,image/jpeg\" onChange={onChange} />\n}\n" })
+const dj = { 'requirements.txt': 'django\ndjangorestframework\n', 'photos/models.py': 'from django.db import models\n', 'photos/views.py': 'from django.views.generic import ListView\n' }
+show('Django ImageField model + CreateView (no request.FILES)', dj, { ...dj,
+  'photos/models.py': "from django.db import models\nclass Photo(models.Model):\n    owner = models.ForeignKey('auth.User', on_delete=models.CASCADE)\n    image = models.ImageField(upload_to='photos/')\n",
+  'photos/views.py': "from django.contrib.auth.mixins import LoginRequiredMixin\nfrom django.views.generic import CreateView\nfrom .models import Photo\nclass PhotoCreate(LoginRequiredMixin, CreateView):\n    model = Photo\n    fields = ['image']\n" })
+show('DRF: ImageField serializer + MultiPartParser', dj, { ...dj,
+  'photos/models.py': "from django.db import models\nclass Photo(models.Model):\n    image = models.ImageField(upload_to='photos/')\n",
+  'photos/views.py': "from rest_framework import viewsets, serializers\nfrom rest_framework.parsers import MultiPartParser\nfrom .models import Photo\nclass PhotoSerializer(serializers.ModelSerializer):\n    class Meta:\n        model = Photo\n        fields = ['id', 'image']\nclass PhotoViewSet(viewsets.ModelViewSet):\n    queryset = Photo.objects.all()\n    serializer_class = PhotoSerializer\n    parser_classes = [MultiPartParser]\n" })
+const fl = { 'requirements.txt': 'flask\n', 'app.py': "from flask import Flask\napp = Flask(__name__)\n" }
+show('Flask request.files (lower case)', fl, { ...fl, 'app.py':
+  "import os\nfrom flask import Flask, request\nfrom werkzeug.utils import secure_filename\napp = Flask(__name__)\n@app.post('/upload')\ndef upload():\n    f = request.files['photo']\n    f.save(os.path.join('uploads', secure_filename(f.filename)))\n    return 'ok'\n" })
+const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'routes/web.php': "<?php\nRoute::post('/avatar', [App\\Http\\Controllers\\AvatarController::class, 'store'])->middleware('auth');\n" }
+show('Laravel docs shape: $request->avatar->store()', lv, { ...lv, 'app/Http/Controllers/AvatarController.php':
+  "<?php\nnamespace App\\Http\\Controllers;\nuse Illuminate\\Http\\Request;\nclass AvatarController extends Controller {\n  public function store(Request $request) {\n    $path = $request->avatar->store('avatars');\n    $request->user()->update(['avatar' => $path]);\n    return back();\n  }\n}\n" })
+const fy = { 'package.json': '{"dependencies":{"fastify":"4.28.0","@fastify/multipart":"8.3.0"}}', 'src/index.ts': "import Fastify from 'fastify'\nconst app = Fastify()\napp.listen({ port: 3000 })\n" }
+show('Fastify @fastify/multipart request.file()', fy, { ...fy, 'src/index.ts':
+  "import Fastify from 'fastify'\nimport multipart from '@fastify/multipart'\nimport { pipeline } from 'node:stream/promises'\nimport { createWriteStream } from 'node:fs'\nconst app = Fastify()\napp.register(multipart)\napp.post('/upload', async (req) => { const data = await req.file(); await pipeline(data!.file, createWriteStream(`uploads/${data!.filename}`)); return { ok: true } })\napp.listen({ port: 3000 })\n" })
+const sk = { 'package.json': '{"dependencies":{"@sveltejs/kit":"2.5.0","svelte":"4.2.0"}}', 'src/routes/+page.svelte': '<h1>hi</h1>\n' }
+show('SvelteKit form action: formData.get as File', sk, { ...sk, 'src/routes/avatar/+page.server.ts':
+  "import { writeFile } from 'node:fs/promises'\nexport const actions = {\n  default: async ({ request }) => {\n    const data = await request.formData()\n    const file = data.get('avatar') as File\n    await writeFile(`static/avatars/${file.name}`, Buffer.from(await file.arrayBuffer()))\n  }\n}\n" })
+const nx = { 'package.json': '{"dependencies":{"nuxt":"3.12.0"}}', 'pages/index.vue': '<template><p/></template>\n' }
+show('Nuxt readMultipartFormData', nx, { ...nx, 'server/api/upload.post.ts':
+  "import { writeFile } from 'node:fs/promises'\nexport default defineEventHandler(async (event) => {\n  const parts = await readMultipartFormData(event)\n  for (const p of parts ?? []) if (p.filename) await writeFile(`uploads/${p.filename}`, p.data)\n  return { ok: true }\n})\n" })
+
+  }
+  {
+// FALSE "no size limit" / "nothing limits how many" / admin-only / tests
+const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'routes/web.php': "<?php\nuse App\\Http\\Controllers\\PhotoController;\nRoute::post('/photos', [PhotoController::class, 'store'])->middleware(['auth', 'throttle:10,1']);\n" }
+show('Laravel: max:2048 validation + throttle middleware', lv, { ...lv, 'app/Http/Controllers/PhotoController.php':
+  "<?php\nnamespace App\\Http\\Controllers;\nuse Illuminate\\Http\\Request;\nclass PhotoController extends Controller {\n  public function store(Request $request) {\n    $request->validate(['photo' => 'required|image|mimes:jpg,png|max:2048']);\n    $request->file('photo')->store('photos', 's3');\n    return back();\n  }\n}\n" })
+const rb = { 'Gemfile': "gem 'rails', '~> 7.1'\n", 'config/routes.rb': 'Rails.application.routes.draw do\n  resources :users\nend\n', 'app/models/user.rb': 'class User < ApplicationRecord\nend\n' }
+show('Rails: has_one_attached + size validation + per-user count', rb, { ...rb, 'app/models/user.rb':
+  "class User < ApplicationRecord\n  has_one_attached :avatar\n  validate :avatar_ok\n  def avatar_ok\n    return unless avatar.attached?\n    errors.add(:avatar, 'too big') if avatar.blob.byte_size > 5.megabytes\n    errors.add(:avatar, 'wrong type') unless avatar.content_type.in?(%w[image/jpeg image/png])\n  end\nend\n" })
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","react":"19.0.0"}}', 'app/page.tsx': 'export default function P() { return <p/> }\n',
+  'next.config.mjs': "export default { experimental: { serverActions: { bodySizeLimit: '2mb' } } }\n" }
+show('Next server action, bodySizeLimit 2mb in next.config', next, { ...next, 'app/profile/actions.ts':
+  "'use server'\nimport { put } from '@vercel/blob'\nimport { auth } from '@/lib/auth'\nexport async function saveAvatar(form: FormData) {\n  const session = await auth()\n  const file = form.get('avatar')\n  if (!(file instanceof File)) throw new Error('no file')\n  await put(`avatars/${session.user.id}`, file, { access: 'public', allowOverwrite: true })\n}\n" })
+const sp = { 'pom.xml': '<project><dependencies><dependency><artifactId>spring-boot-starter-web</artifactId></dependency></dependencies></project>',
+  'src/main/resources/application.properties': 'spring.servlet.multipart.max-file-size=5MB\nspring.servlet.multipart.max-request-size=5MB\n' }
+show('Spring: max-file-size in application.properties', sp, { ...sp, 'src/main/java/com/x/PhotoController.java':
+  "package com.x;\nimport org.springframework.web.bind.annotation.*;\nimport org.springframework.web.multipart.MultipartFile;\n@RestController\npublic class PhotoController {\n  @PostMapping(\"/photos\")\n  public String upload(@RequestParam(\"file\") MultipartFile file) throws Exception {\n    file.transferTo(new java.io.File(\"/data/\" + java.util.UUID.randomUUID()));\n    return \"ok\";\n  }\n}\n" })
+const ex = { 'package.json': '{"dependencies":{"express":"4.19.0"}}', 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n" }
+show("express.raw({ type: 'image/*' }) with no limit (express default caps at 100kb)", ex, { ...ex, 'src/photos.ts':
+  "import express, { Router } from 'express'\nimport { writeFile } from 'node:fs/promises'\nexport const photos = Router()\nphotos.post('/', express.raw({ type: 'image/*' }), async (req, res) => { await writeFile(`uploads/${Date.now()}`, req.body); res.json({}) })\n" })
+show('FastAPI: len(contents) > MAX_BYTES', { 'requirements.txt': 'fastapi\n', 'app/main.py': 'from fastapi import FastAPI\napp = FastAPI()\n' }, { 'requirements.txt': 'fastapi\n', 'app/main.py':
+  "from fastapi import FastAPI, UploadFile, HTTPException, Depends\nfrom .auth import current_user\napp = FastAPI()\nMAX_BYTES = 5_000_000\n@app.post('/photos')\nasync def upload(file: UploadFile, user=Depends(current_user)):\n    contents = await file.read()\n    if len(contents) > MAX_BYTES:\n        raise HTTPException(413)\n    with open(f'uploads/{user.id}-{file.filename}', 'wb') as f:\n        f.write(contents)\n" })
+const ms = "import multer from 'multer'\nimport { Router } from 'express'\nconst upload = multer({ dest: 'uploads/', limits: { fileSize: 5 * 1024 * 1024 } })\nexport const r = Router()\n"
+show('admin-only multer upload (requireAdmin middleware)', ex, { ...ex, 'src/admin.ts': ms + "import { requireAdmin } from './auth.js'\nr.post('/admin/banner', requireAdmin, upload.single('banner'), (req, res) => res.json({ ok: true }))\n" })
+show('admin-only Next route under app/admin', { ...next }, { ...next, 'app/api/admin/logo/route.ts':
+  "import { requireAdmin } from '@/lib/auth'\nimport { writeFile } from 'node:fs/promises'\nexport async function POST(req: Request) {\n  await requireAdmin()\n  const form = await req.formData()\n  const file = form.get('logo')\n  if (!(file instanceof File) || file.size > 1024 * 1024) return new Response('bad', { status: 400 })\n  await writeFile('public/logo.png', Buffer.from(await file.arrayBuffer()))\n  return Response.json({ ok: true })\n}\n" })
+const dj = { 'requirements.txt': 'django\n', 'photos/views.py': 'from django.shortcuts import render\n' }
+show('Django test file test_views.py (not under tests/)', dj, { ...dj, 'photos/test_views.py':
+  "from django.test import RequestFactory, TestCase\nfrom django.core.files.uploadedfile import SimpleUploadedFile\nfrom .views import upload\nclass T(TestCase):\n    def test_upload(self):\n        request = RequestFactory().post('/u')\n        request.FILES['photo'] = SimpleUploadedFile('a.png', b'x')\n        upload(request)\n" })
+show('FastAPI unit test test_upload.py beside app', { 'requirements.txt': 'fastapi\n', 'app/main.py': 'x = 1\n' }, { 'requirements.txt': 'fastapi\n', 'app/main.py': 'x = 1\n', 'app/test_upload.py':
+  "import io\nfrom fastapi import UploadFile\nfrom .photos import save\ndef test_save():\n    save(UploadFile(filename='a.png', file=io.BytesIO(b'x')))\n" })
+const rb2 = { ...rb, 'app/models/user.rb': 'class User < ApplicationRecord\n  has_many_attached :photos\nend\n', 'app/controllers/photos_controller.rb': 'class PhotosController < ApplicationController\nend\n' }
+show('Rails: per-user cap as photos.count (no parens)', rb, { ...rb, 'app/models/user.rb':
+  "class User < ApplicationRecord\n  has_many_attached :photos\n  validate :photo_cap\n  def photo_cap\n    errors.add(:photos, 'max 20') if photos.count > 20\n    photos.each { |p| errors.add(:photos, 'too big') if p.blob.byte_size > 5.megabytes }\n  end\nend\n" })
+
+  }
+  {
+// WRONG FACTS: size, storage, types
+const ex = { 'package.json': '{"dependencies":{"express":"4.19.0"}}', 'src/db.ts': 'export const prisma = {} as any\n',
+  'prisma/schema.prisma': 'model User {\n  id Int @id\n  totpSecret Bytes\n}\n' }
+show('multer, no fileSize; same file sets express.json({ limit: "1mb" })', { ...ex, 'src/index.ts': "import express from 'express'\nconst app = express()\napp.use(express.json({ limit: '1mb' }))\napp.listen(3000)\n" },
+  { ...ex, 'src/index.ts': "import express from 'express'\nimport multer from 'multer'\nimport { saveToBucket } from './storage.js'\nconst app = express()\napp.use(express.json({ limit: '1mb' }))\nconst upload = multer({ storage: multer.memoryStorage() })\napp.post('/photos', upload.single('photo'), async (req, res) => res.json(await saveToBucket(req.file!)))\napp.listen(3000)\n",
+    'src/storage.ts': "import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'\nconst s3 = new S3Client({})\nexport const saveToBucket = (f: { buffer: Buffer; originalname: string }) => s3.send(new PutObjectCommand({ Bucket: 'photos', Key: f.originalname, Body: f.buffer }))\n" })
+show('multer 5 MB limit, but a 50 MB cache constant earlier in the file', { ...ex, 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n" },
+  { ...ex, 'src/index.ts': "import express from 'express'\nimport multer from 'multer'\nconst CACHE_BYTES = 50 * 1024 * 1024\nconst app = express()\nconst upload = multer({ dest: 'uploads/', limits: { fileSize: 5 * 1024 * 1024 } })\napp.post('/photos', upload.single('photo'), (req, res) => res.json({}))\napp.listen(3000)\n" })
+show('SVG explicitly rejected', { ...ex, 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n" },
+  { ...ex, 'src/index.ts': "import express from 'express'\nimport multer from 'multer'\nconst app = express()\nconst upload = multer({ dest: 'uploads/', limits: { fileSize: 2 * 1024 * 1024 }, fileFilter: (req, file, cb) => cb(null, file.mimetype !== 'image/svg+xml') })\napp.post('/photos', upload.single('photo'), (req, res) => res.json({}))\napp.listen(3000)\n" })
+const fa = { 'requirements.txt': 'fastapi\nsqlalchemy\n', 'app/models.py': "from sqlalchemy import Column, Integer, LargeBinary\nclass ApiKey(Base):\n    __tablename__ = 'keys'\n    id = Column(Integer, primary_key=True)\n    hash = Column(LargeBinary)\n", 'app/main.py': 'from fastapi import FastAPI\napp = FastAPI()\n' }
+show('FastAPI canonical shutil.copyfileobj to disk; unrelated LargeBinary column', fa, { ...fa, 'app/main.py':
+  "import shutil\nfrom fastapi import FastAPI, UploadFile\napp = FastAPI()\n@app.post('/photos')\nasync def upload(file: UploadFile):\n    if file.size > 5 * 1024 * 1024:\n        raise ValueError('too big')\n    with open(f'uploads/{file.filename}', 'wb') as buffer:\n        shutil.copyfileobj(file.file, buffer)\n" })
+
+  }
+  {
+// MISSED ALARMS: per-person cap / size wrongly assumed
+const ex = { 'package.json': '{"dependencies":{"express":"4.19.0","lodash":"4.17.21","react":"18.3.1"}}', 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n",
+  'client/src/Feed.tsx': "import throttle from 'lodash/throttle'\nexport const onScroll = throttle(() => window.dispatchEvent(new Event('more')), 200)\n" }
+show('lodash throttle for scrolling in the client suppresses the per-person alarm', ex, { ...ex, 'src/photos.ts':
+  "import multer from 'multer'\nimport { Router } from 'express'\nconst upload = multer({ dest: 'uploads/', limits: { fileSize: 5 * 1024 * 1024 } })\nexport const r = Router()\nr.post('/photos', upload.single('photo'), (req, res) => res.json({ ok: true }))\n" })
+const go = { 'go.mod': 'module x\n\ngo 1.22\n', 'main.go': 'package main\nfunc main() {}\n' }
+show('Go: ParseMultipartForm(10 << 20) is only a memory threshold, not a cap', go, { ...go, 'upload.go':
+  "package main\nimport (\n  \"io\"\n  \"net/http\"\n  \"os\"\n)\nfunc upload(w http.ResponseWriter, r *http.Request) {\n  r.ParseMultipartForm(10 << 20)\n  f, h, _ := r.FormFile(\"photo\")\n  defer f.Close()\n  out, _ := os.Create(\"uploads/\" + h.Filename)\n  io.Copy(out, f)\n}\n" })
+
+  }
+  const has = (n: string, re: RegExp, yes = true) => { const g = got.get(n); assert.ok(g !== undefined, `review 28: missing case ${n}`); assert.ok(re.test(g!) === yes, `review 28 ${n}: ${yes ? 'expected' : 'unexpected'} ${re}\n${g}`) }
+  const names = [...got.keys()]
+  // not uploads: a preview, a fetch wrapper, a webhook, a job's S3 file, a server-made PDF, moved code, a re-read file
+  for (const n of names.filter(n => /preview|fetch wrapper|webhook|nightly|invoice PDF|refactor|log line/.test(n))) has(n, /upload/i, false)
+  // common upload shapes: all found
+  for (const n of names.filter(n => /storage\) multer|route handler|UploadThing|Supabase storage from a client|Django ImageField|DRF|Flask|Laravel docs|Fastify|SvelteKit|Nuxt/.test(n))) has(n, /People can now upload/)
+  // limits plain should see
+  for (const n of names.filter(n => /max:2048|has_one_attached|bodySizeLimit|max-file-size|express\.raw\(\{ type: 'image|len\(contents\)/.test(n))) has(n, /no size limit/, false)
+  for (const n of names.filter(n => /max:2048|has_one_attached|admin-only|photos\.count/.test(n))) has(n, /Nothing limits how many/, false)
+  for (const n of names.filter(n => /test_views|test_upload/.test(n))) has(n, /People can now upload/, false)
+  // the right size, the right place, no SVG when it's rejected
+  has(names.find(n => /express\.json/.test(n))!, /no size limit/); has(names.find(n => /express\.json/.test(n))!, /1 MB/, false)
+  has(names.find(n => /50 MB cache/.test(n))!, /up to 5 MB/)
+  has(names.find(n => /SVG explicitly rejected/.test(n))!, /SVG/, false)
+  has(names.find(n => /copyfileobj/.test(n))!, /on your server's disk/)
+  has(names.find(n => /max:2048/.test(n))!, /Amazon S3/)
+  // a client-side throttle isn't a cap; Go's ParseMultipartForm isn't a size limit
+  has(names.find(n => /lodash throttle/.test(n))!, /Nothing limits how many/)
+  has(names.find(n => /ParseMultipartForm/.test(n))!, /no size limit/)
+  console.log('ok (review 28)')
+}
+// Review 28, round 2: admin gates from the route statement, server/client files, imports resolved by path, binary fields named
+// in the upload, Laravel max: on a file rule, a second endpoint, a webhook's express.raw, Laravel 10's Kernel throttle, Post has_one_attached
+{
+  const up = (before: Record<string, string>, after: Record<string, string>) => {
+    const r = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' })
+    return r.replace(/\n\s{2,}(?![!+•\d])/g, ' ').split('\n').map(l => l.trim()).filter(l => /upload|size limit|SVG pictures/i.test(l)).join('\n')
+  }
+  const got = new Map<string, string>()
+  const show = (name: string, before: Record<string, string>, after: Record<string, string>) => { got.set(name, up(before, after)) }
+  {
+// Round 2 regressions / new false alarms / wrong facts
+const ex = { 'package.json': '{"dependencies":{"express":"4.19.0"}}', 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n" }
+const mul = "import multer from 'multer'\nimport { Router } from 'express'\nimport { requireAdmin } from './auth.js'\nconst upload = multer({ dest: 'uploads/', limits: { fileSize: 5 * 1024 * 1024 } })\nexport const r = Router()\n"
+show('A1 public upload next to an admin upload in the same router', ex, { ...ex, 'src/photos.ts': mul +
+  "r.post('/admin/banner', requireAdmin, upload.single('banner'), (req, res) => res.json({ ok: true }))\nr.post('/photos', upload.single('photo'), (req, res) => res.json({ ok: true }))\n" })
+show("A2 public upload; app.use('/admin', ...) mounted just above", ex, { ...ex, 'src/index.ts':
+  "import express from 'express'\nimport multer from 'multer'\nimport { adminRouter } from './admin.js'\nconst app = express()\napp.use('/admin', adminRouter)\nconst upload = multer({ dest: 'uploads/', limits: { fileSize: 5 * 1024 * 1024 } })\napp.post('/photos', upload.single('photo'), (req, res) => res.json({ ok: true }))\napp.listen(3000)\n" })
+show('A3 public upload returns { isAdmin } to the client', ex, { ...ex, 'src/photos.ts': mul.replace("import { requireAdmin } from './auth.js'\n", '') +
+  "r.post('/photos', upload.single('photo'), (req, res) => res.json({ ok: true, isAdmin: req.user.isAdmin }))\n" })
+const vite = { 'package.json': '{"dependencies":{"react":"18.3.1","vite":"5.0.0"}}', 'src/main.tsx': 'export {}\n' }
+show('S1 React SPA fetch wrapper in src/api/ (instanceof File)', vite, { ...vite, 'src/api/client.ts':
+  "export async function post(url: string, body: unknown) {\n  const isFile = body instanceof File\n  return fetch(url, { method: 'POST', headers: isFile ? {} : { 'content-type': 'application/json' }, body: isFile ? body : JSON.stringify(body) })\n}\n" })
+show("S2 client component previews a form's file (.get('x') as File)", vite, { ...vite, 'src/components/AvatarForm.tsx':
+  "export function AvatarForm({ onPick }: { onPick: (u: string) => void }) {\n  return <form onChange={e => { const f = new FormData(e.currentTarget).get('avatar') as File; onPick(URL.createObjectURL(f)) }}><input type=\"file\" name=\"avatar\" /></form>\n}\n" })
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","react":"19.0.0","@vercel/blob":"0.27.0"}}', 'app/page.tsx': 'export default function P() { return <p/> }\n' }
+show('S3 Next server component page that only lists Vercel Blob images', next, { ...next, 'app/gallery/page.tsx':
+  "import { list } from '@vercel/blob'\nexport default async function Gallery() {\n  const { blobs } = await list({ prefix: 'photos/' })\n  return <div>{blobs.map(b => <img key={b.url} src={b.url} />)}</div>\n}\n" })
+// import resolver: monorepo with two lib/storage files
+const mono = { 'package.json': '{"dependencies":{"express":"4.19.0","@supabase/supabase-js":"2.45.0","react":"18.3.1"}}', 'server/src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n",
+  'server/src/lib/storage.ts': "import { writeFile } from 'node:fs/promises'\nexport const save = (name: string, b: Buffer) => writeFile(`/data/uploads/${name}`, b)\n",
+  'client/src/lib/storage.ts': "import { supabase } from './supabase'\nexport const avatarUrl = (p: string) => supabase.storage.from('avatars').getPublicUrl(p).data.publicUrl\n" }
+show('I1 monorepo: server route imports ../lib/storage (disk); client has its own lib/storage (Supabase)', mono, { ...mono, 'server/src/routes/photos.ts':
+  "import multer from 'multer'\nimport { Router } from 'express'\nimport { save } from '../lib/storage.js'\nconst upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })\nexport const r = Router()\nr.post('/photos', upload.single('photo'), async (req, res) => { await save(req.file!.originalname, req.file!.buffer); res.json({}) })\n" })
+// binary-field name match
+const fa = { 'requirements.txt': 'fastapi\nhttpx\nsqlalchemy\n', 'app/models.py': "from sqlalchemy import Column, Integer\nclass Photo(Base):\n    __tablename__ = 'photos'\n    id = Column(Integer, primary_key=True)\n    size = Column(Integer)  # size in bytes\n", 'app/main.py': 'from fastapi import FastAPI\napp = FastAPI()\n' }
+show("B1 '# size in bytes' comment makes 'in' a binary field; upload only forwarded to an API", fa, { ...fa, 'app/main.py':
+  "import httpx\nfrom fastapi import FastAPI, UploadFile, HTTPException\napp = FastAPI()\nALLOWED = {'image/png', 'image/jpeg'}\n@app.post('/describe')\nasync def describe(file: UploadFile):\n    if file.content_type not in ALLOWED:\n        raise HTTPException(415)\n    if file.size > 5 * 1024 * 1024:\n        raise HTTPException(413)\n    r = httpx.post('https://vision.example.com/v1', files={'f': await file.read()})\n    return r.json()\n" })
+const px = { 'package.json': '{"dependencies":{"express":"4.19.0","@prisma/client":"6.0.0"}}', 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n",
+  'prisma/schema.prisma': 'model Session {\n  id String @id\n  data Bytes\n}\nmodel Photo {\n  id Int @id\n  url String\n}\n' }
+show("B2 unrelated 'Session.data Bytes'; upload goes to an external service", px, { ...px, 'src/photos.ts':
+  "import multer from 'multer'\nimport { Router } from 'express'\nimport { prisma } from './db.js'\nconst upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })\nexport const r = Router()\nr.post('/photos', upload.single('photo'), async (req, res) => {\n  const { url } = await fetch('https://img.example.com/upload', { method: 'POST', body: req.file!.buffer }).then(x => x.json())\n  res.json(await prisma.photo.create({ data: { url } }))\n})\n" })
+// Laravel KB conversion
+const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'routes/web.php': "<?php\nRoute::post('/posts', [App\\Http\\Controllers\\PostController::class, 'store'])->middleware('auth');\n" }
+show("L1 Laravel 'title' => 'max:255' before 'photo' => 'max:5120'", lv, { ...lv, 'app/Http/Controllers/PostController.php':
+  "<?php\nnamespace App\\Http\\Controllers;\nuse Illuminate\\Http\\Request;\nclass PostController extends Controller {\n  public function store(Request $request) {\n    $request->validate(['title' => 'required|string|max:255', 'photo' => 'required|image|max:5120']);\n    $request->file('photo')->store('photos');\n    return back();\n  }\n}\n" })
+// a second upload endpoint in a file that already has one
+const fb = { 'requirements.txt': 'fastapi\n', 'app/main.py': "from fastapi import FastAPI, UploadFile\napp = FastAPI()\n@app.post('/avatar')\nasync def avatar(file: UploadFile):\n    if file.size > 1024 * 1024:\n        raise ValueError\n    open('avatars/x', 'wb').write(await file.read())\n" }
+show('D1 FastAPI: new /videos upload (no limit) added beside an existing /avatar upload', fb, { ...fb, 'app/main.py': fb['app/main.py'] +
+  "@app.post('/videos')\nasync def videos(file: UploadFile):\n    open(f'videos/{file.filename}', 'wb').write(await file.read())\n" })
+// webhook express.raw in the same file hides multer's missing size limit
+show("Z1 Stripe webhook express.raw in same file as a multer upload with no fileSize", ex, { ...ex, 'src/index.ts':
+  "import express from 'express'\nimport multer from 'multer'\nconst app = express()\napp.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => res.json({}))\nconst upload = multer({ dest: 'uploads/' })\napp.post('/photos', upload.single('photo'), (req, res) => res.json({}))\napp.listen(3000)\n" })
+// Laravel 10 default Kernel.php ('throttle:api', 'throttle' alias) makes every upload "capped"
+show('Z2 Laravel 10 default Kernel.php throttle:api; upload on a web route', { ...lv, 'app/Http/Kernel.php': "<?php\nnamespace App\\Http;\nclass Kernel extends HttpKernel {\n  protected $middlewareGroups = ['api' => [\\Illuminate\\Routing\\Middleware\\ThrottleRequests::class.':api']];\n  protected $middlewareAliases = ['throttle' => \\Illuminate\\Routing\\Middleware\\ThrottleRequests::class];\n}\n" },
+  { ...lv, 'app/Http/Kernel.php': "<?php\nnamespace App\\Http;\nclass Kernel extends HttpKernel {\n  protected $middlewareGroups = ['api' => [\\Illuminate\\Routing\\Middleware\\ThrottleRequests::class.':api']];\n  protected $middlewareAliases = ['throttle' => \\Illuminate\\Routing\\Middleware\\ThrottleRequests::class];\n}\n",
+    'app/Http/Controllers/PostController.php': "<?php\nnamespace App\\Http\\Controllers;\nuse Illuminate\\Http\\Request;\nclass PostController extends Controller {\n  public function store(Request $request) {\n    $request->validate(['photo' => 'required|image|max:2048']);\n    $request->file('photo')->store('photos');\n    return back();\n  }\n}\n" })
+const rb = { 'Gemfile': "gem 'rails'\n", 'config/routes.rb': 'Rails.application.routes.draw do\n  resources :posts\nend\n', 'app/models/post.rb': 'class Post < ApplicationRecord\n  belongs_to :user\nend\n' }
+show('R1 Rails Post has_one_attached :image (many posts per user)', rb, { ...rb, 'app/models/post.rb': 'class Post < ApplicationRecord\n  belongs_to :user\n  has_one_attached :image\nend\n' })
+
+  }
+  const g2 = (re: RegExp) => [...got.keys()].find(n => re.test(n))!
+  const has2 = (n: string, re: RegExp, yes = true) => { const g = got.get(n)!; assert.ok(re.test(g) === yes, `review 28 r2 ${n}: ${yes ? 'expected' : 'unexpected'} ${re}\n${g}`) }
+  for (const n of [g2(/^A1/), g2(/^A2/), g2(/^A3/), g2(/^Z2/), g2(/^R1/)]) has2(n, /Nothing limits how many/)
+  for (const n of [g2(/^S1/), g2(/^S2/), g2(/^S3/)]) has2(n, /upload/i, false)
+  has2(g2(/^I1/), /on your server's disk/); has2(g2(/^I1/), /Supabase/, false)
+  for (const n of [g2(/^B1/), g2(/^B2/)]) has2(n, /database/, false)
+  has2(g2(/^L1/), /up to 5 MB/)
+  has2(g2(/^D1/), /People can now upload/)
+  has2(g2(/^Z1/), /no size limit/)
+  console.log('ok (review 28, round 2)')
+}
+// Review 28, round 3: an admin gate on a route written over several lines, and one at the top of a Next.js handler
+{
+  const up = (before: Record<string, string>, after: Record<string, string>) => report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const got = new Map<string, string>()
+  const show = (name: string, before: Record<string, string>, after: Record<string, string>) => { got.set(name, up(before, after)) }
+  {
+// Round 3: admin gate now reads only the current line up to the upload match
+const ex = { 'package.json': '{"dependencies":{"express":"4.19.0"}}', 'src/index.ts': "import express from 'express'\nconst app = express()\napp.listen(3000)\n" }
+show('G1 admin route formatted over several lines (Prettier style)', ex, { ...ex, 'src/banner.ts':
+  "import multer from 'multer'\nimport { Router } from 'express'\nimport { requireAdmin } from './auth.js'\nconst upload = multer({ dest: 'uploads/', limits: { fileSize: 5 * 1024 * 1024 } })\nexport const r = Router()\nr.post(\n  '/banner',\n  requireAdmin,\n  upload.single('banner'),\n  (req, res) => res.json({ ok: true }),\n)\n" })
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","react":"19.0.0"}}', 'app/page.tsx': 'export default function P() { return <p/> }\n' }
+show('G2 Next route outside /admin, await requireAdmin() first line of handler', next, { ...next, 'app/api/site/logo/route.ts':
+  "import { requireAdmin } from '@/lib/auth'\nimport { writeFile } from 'node:fs/promises'\nexport async function POST(req: Request) {\n  await requireAdmin()\n  const form = await req.formData()\n  const file = form.get('logo') as File\n  if (file.size > 1024 * 1024) return new Response('too big', { status: 413 })\n  await writeFile('public/logo.png', Buffer.from(await file.arrayBuffer()))\n  return Response.json({ ok: true })\n}\n" })
+
+  }
+  for (const [n, c] of got) { assert.ok(c.includes('People can now upload'), `review 28 r3 ${n}: upload seen\n${c}`); assert.ok(!c.includes('Nothing limits how many'), `review 28 r3 ${n}: admins only\n${c}`) }
+  assert.ok(got.size === 2, 'review 28 r3: both cases')
+  console.log('ok (review 28, round 3)')
+}
+// Review 28, round 4: an `if (user.isAdmin)` branch in a public upload isn't an admin gate
+{
+  const up = (before: Record<string, string>, after: Record<string, string>) => report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const got = new Map<string, string>()
+  const show = (name: string, before: Record<string, string>, after: Record<string, string>) => { got.set(name, up(before, after)) }
+  {
+// Round 4: function-body admin window sees an admin *branch* (not a gate) in a public upload
+const next = { 'package.json': '{"dependencies":{"next":"15.0.0","react":"19.0.0"}}', 'app/page.tsx': 'export default function P() { return <p/> }\n' }
+show('H1 public Next route: admins get a bigger size limit via if (user.isAdmin)', next, { ...next, 'app/api/photos/route.ts':
+  "import { auth } from '@/lib/auth'\nimport { writeFile } from 'node:fs/promises'\nexport async function POST(req: Request) {\n  const { user } = await auth()\n  const form = await req.formData()\n  const file = form.get('photo') as File\n  const max = isAdminUser(user) ? 50 : 5\n  if (!(user.isAdmin) && file.size > max * 1024 * 1024) return new Response('too big', { status: 413 })\n  await writeFile(`uploads/${user.id}-${file.name}`, Buffer.from(await file.arrayBuffer()))\n  return Response.json({ ok: true })\n}\n" })
+const fl = { 'requirements.txt': 'flask\n', 'app.py': "from flask import Flask\napp = Flask(__name__)\n" }
+show('H2 public Flask upload; admins skip moderation via if is_admin(user)', fl, { ...fl, 'app.py':
+  "import os\nfrom flask import Flask, request, g\napp = Flask(__name__)\n@app.post('/photos')\ndef upload():\n    user = g.user\n    approved = is_staff_or(user) or check_isAdmin(user)\n    f = request.files['photo']\n    f.save(os.path.join('uploads', f.filename))\n    return {'approved': approved}\n" })
+show('H3 public Next route: admin branch (if (user.isAdmin)) before the file read', next, { ...next, 'app/api/photos/route.ts':
+  "import { auth } from '@/lib/auth'\nimport { writeFile } from 'node:fs/promises'\nexport async function POST(req: Request) {\n  const { user } = await auth()\n  const folder = 'uploads'\n  if (user.isAdmin) console.log('admin upload')\n  const form = await req.formData()\n  const file = form.get('photo') as File\n  if (file.size > 5 * 1024 * 1024) return new Response('too big', { status: 413 })\n  await writeFile(`${folder}/${user.id}-${file.name}`, Buffer.from(await file.arrayBuffer()))\n  return Response.json({ ok: true })\n}\n" })
+
+  }
+  for (const [n, c] of got) assert.ok(c.includes('Nothing limits how many'), `review 28 r4 ${n}: a public upload\n${c}`)
+  assert.ok(got.size === 3, 'review 28 r4: three cases')
+  console.log('ok (review 28, round 4)')
+}
 // "Tests couldn't be executed": the agent didn't run them
 assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. Tests couldn’t be executed because the environment has no Go toolchain installed.' }).includes("didn't run or test"), 'untested: passive')
 // (round 10) "Full runtime testing wasn’t possible", "tests weren’t available", "Full builds could not run"; not "a refund wasn't possible"

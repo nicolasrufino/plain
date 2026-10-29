@@ -2625,6 +2625,96 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // (old rows are already freed if main freed them, if only recent pending rows count, or if the change expires them)
   else if (holds && grew && byStripe(CA) && !byTime(CA) && !byStripe(CB) && !byTime(CB) && [...CB.values()].some(makesPending) && !cleansUp(CA))
     problems.push({ kind: 'Check', text: "Old unpaid checkouts already in your database now take up spots, and nothing will free them: their payment pages expired long ago, so Stripe won't say so again. Before this goes live, mark the old unpaid (\"pending\") orders as expired. (This is a guess.)" })
+  // Uploads: a new way for people to send files. Counted where files come in from a request (multer, express.raw with a file
+  // type, formData().get(...) as File in server code, readMultipartFormData, Fastify's req.file(), request.files / FILES,
+  // UploadFile, MultiPartParser, ImageField / FileField, Active Storage, $request->file / ->store, FormFile, IFormFile,
+  // MultipartFile, UploadThing) or from a page the visitor uses (a storage service's upload in a component). A file the server
+  // makes itself (a nightly export to S3, an invoice PDF) isn't one. New only when the app's count grows (a move isn't new).
+  // Said: what's accepted (the allow-list, not what's rejected), how big (from a limit, or the framework's default), where
+  // files go (the upload code and its own imports; the database only when it writes a binary field). Guessed: no size limit;
+  // nothing caps how much one person can upload (not for an admins-only upload); SVG allowed.
+  // ponytail: text-level, across stacks; a per-person cap is a server-side rate limiter or a count next to the upload
+  // Size is judged per file: a new unlimited upload beside an existing size-checked one in the same file says nothing (a miss).
+  const UPLOAD = /\bmulter\s*\(|\bupload\.(?:single|array|fields|any)\s*\(|express\.raw\s*\(\s*\{[^}]*type\s*:[^}]*(?:image|IMAGE|octet|video|audio|pdf)|\bbusboy\b|\bformidable\b|\breadMultipartFormData\b|\b(?:req|request)\.file\(\s*\)|\brequest\.(?:files|FILES)\b|\bUploadFile\b|\bMultiPartParser\b|models\.(?:Image|File)Field\b|\b(?:has_one|has_many)_attached\b|\$request->(?:file\s*\(|hasFile\s*\(|\w+->store(?:As)?\s*\()|\bFormFile\s*\(|\bIFormFile\b|\bMultipartFile\b|\bcreateUploadthing\b/
+  const SINK = /\.storage\s*\.from\([^)]*\)\s*\.upload\s*\(|\bPutObjectCommand\b|\bupload_fileobj\b|cloudinary\.\w*uploader\.\w*\(/
+  // (Next.js app/ files are server components unless 'use client')
+  const clientFile = (p: string, t: string) => /^\s*['"]use client['"]/.test(t) || /\.(tsx|jsx|vue|svelte)$/.test(p) && !/(^|\/)app\//.test(p) && !/\+page\.server|\+server|\/api\//.test(p)
+  // (server code that answers requests: a Next.js route handler or pages/api, a 'use server' file, SvelteKit server files, Nuxt server/api)
+  const serverFile = (p: string, t: string) => /(^|\/)app\/.*\/route\.[jt]s$|(^|\/)pages\/api\/|\+(page\.)?server\.[jt]s$|(^|\/)server\/(api|routes)\//.test(p) || /^\s*['"]use server['"]/.test(t)
+  // where a hit sits: the route or function around it (two endpoints are two uploads; reading the same file again in one isn't)
+  const owner = (t: string, i: number) => [...t.slice(0, i).matchAll(/\.(?:post|put|patch|route)\(\s*['"]([^'"]+)['"]|\b(?:def|function|func)\s+(\w+)|\bpublic\s+function\s+(\w+)|(\w+)\s*(?::\s*\w+\s*)?=\s*async\b/g)].at(-1)?.slice(1).find(Boolean) ?? ''
+  const upHits = (p: string, t = '') => { if (!srcFile(p) || isTest(p)) return 0
+    const keys = [...t.matchAll(new RegExp(UPLOAD.source, 'g'))].map(m => `${owner(t, m.index!)}|${m[0].replace(/\s+/g, '').replace(/\(.*$/, '')}`)
+    // (formData().get('file') as File / instanceof File in server code; a storage service's upload call from a page or component
+    // the visitor drives, not from a job or a server-made file)
+    if (serverFile(p, t)) for (const m of t.matchAll(/\.get\(\s*['"][^'"]+['"]\s*\)\s*as\s+File\b|\binstanceof\s+File\b/g)) keys.push(`${owner(t, m.index!)}|file`)
+    if (clientFile(p, t)) for (const m of t.matchAll(new RegExp(SINK.source + (/@vercel\/blob/.test(t) ? String.raw`|\bput\s*\(` : ''), 'g'))) keys.push(`${owner(t, m.index!)}|sink`)
+    return new Set(keys).size }
+  const upTotal = (m: Snap) => [...m].reduce((n, [p, t]) => n + upHits(p, t), 0)
+  const upFiles = real.filter(p => !p.includes('#') && upHits(p, after.get(p)) > upHits(p, before.get(p)))
+  if (upFiles.length && upTotal(after) > upTotal(before)) {
+    // the upload code and the files it imports (a storage helper in lib/)
+    const noExt = (x: string) => x.replace(/\.(?:[jt]sx?|mjs)$/, '')
+    const importsOf = (p: string) => [...(after.get(p) ?? '').matchAll(/from\s+['"]((?:\.{1,2}|@|~)\/[^'"]+)['"]/g)].map(m => m[1]).flatMap(spec => {
+      if (/^[@~]\//.test(spec)) { const rest = noExt(spec.slice(2)); return [...after.keys()].filter(k => !k.includes('#') && (noExt(k) === rest || noExt(k).endsWith('/' + rest))) }
+      const parts = p.split('/').slice(0, -1); for (const seg of spec.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg) }
+      const want = noExt(parts.join('/')); return [...after.keys()].filter(k => !k.includes('#') && (noExt(k) === want || noExt(k) === want + '/index'))
+    })
+    const t = upFiles.map(p => after.get(p) ?? '').join('\n'), near = [...new Set([...upFiles, ...upFiles.flatMap(importsOf)])].map(p => after.get(p) ?? '').join('\n')
+    // accepted types: the allow-list (not `mimetype !== 'image/svg+xml'`, not a reject / deny / block list)
+    const types = [...new Set([...t.matchAll(/['"]image\/(jpeg|jpg|png|webp|gif|svg\+xml|heic|avif)['"]/gi)]
+      .filter(m => !/(!==?|!=|\bnot\s+in\b)\s*[[(]?\s*$/.test(t.slice(Math.max(0, m.index! - 16), m.index)) && !/(?:reject|deny|block|disallow|banned|forbidden)\w*\s*[=:]\s*[[{(]?[^\]\n;]*$/i.test(t.slice(Math.max(0, m.index! - 120), m.index)))
+      .map(m => m[1].toLowerCase().replace('jpg', 'jpeg').replace('svg+xml', 'svg')))]
+    const docs = /['"]application\/pdf['"]/.test(t)
+    // size: only from a limit (multer's fileSize, express.raw's limit, maxFileSize, bodySizeLimit, max:<KB>, 5.megabytes, size checks)
+    const SZ = String.raw`(\d+(?:\.\d+)?)\s*(?:\*\s*1024\s*\*\s*1024|(?:mb|MB)\b)`
+    const mbRaw = t.match(new RegExp(String.raw`(?:fileSize|maxFileSize|bodySizeLimit|max_?(?:file|upload|image)?_?size|MAX_\w*(?:SIZE|BYTES))\s*[:=]\s*['"]?${SZ}`, 'i'))?.[1]
+      ?? t.match(new RegExp(String.raw`express\.raw\s*\(\s*\{[^}]*limit\s*:\s*['"]?${SZ}`))?.[1] ?? t.match(/(\d+)\.megabytes?/)?.[1]
+      ?? ((k => k ? String(Math.round(+k / 1024 * 10) / 10) : undefined)([...t.matchAll(/['"]([^'"]*\bmax:(\d+)[^'"]*)['"]/g)].find(m => /\b(?:image|file|mimes:)/.test(m[1]))?.[2]))   // (Laravel max: in KB, on a file rule)
+    const mb = mbRaw && +mbRaw > 0 ? String(+mbRaw) : undefined
+    const cfg = [...after].filter(([p]) => /next\.config\.|application\.(properties|ya?ml)$/.test(p)).map(([, x]) => x).join('\n')
+    const sized = !!mb || /\bfileSize\s*:|express\.raw\s*\(\s*\{[^}]*type\s*:[^}]*(?:image|IMAGE|octet|video|audio|pdf)|\.size\s*>|\bbyte_size\s*>|\blen\(\s*\w+\s*\)\s*>|\bMaxBytesReader\b|max_upload_size|upload_max_filesize|RequestSizeLimit|\bmaxFileSize\b|\bcontent_length\b/.test(t)
+      || /bodySizeLimit|max-file-size|max_file_size/.test(cfg) || /\bMultipartFile\b/.test(t)   // (Spring caps a file at 1 MB unless set)
+      || upFiles.some(p => /^\s*['"]use server['"]/.test(after.get(p) ?? ''))   // (Next.js server actions: 1 MB unless bodySizeLimit)
+    // where files go: the upload code and its own imports
+    // (binary columns: Prisma's Bytes, LargeBinary, BinaryField, t.binary, BLOB / bytea; comments skipped, not short or generic names)
+    const bin = [...after].filter(([p]) => /schema\.prisma$|models\.py$|migrat|\.sql$|schema\.(?:ts|rb)$/.test(p))
+      .flatMap(([, x]) => [...x.replace(/(^|\s)(?:#|\/\/|--)[^\n]*/g, '$1').matchAll(/(\w+)\s+Bytes\b|(\w+)\s*[:=][^\n]*\b(?:LargeBinary|BinaryField)\b|t\.binary\s+:(\w+)|(\w+)\s+(?:BLOB|bytea|varbinary)\b/g)].map(m => m[1] ?? m[2] ?? m[3] ?? m[4]))
+      .filter(n => n && n.length > 2 && !/^(data|body|content|value|file|blob|payload|raw|bytes)$/i.test(n))
+    const where = /\b(?:PutObjectCommand|S3Client|upload_fileobj|boto3)\b|->store\w*\([^)]*['"]s3['"]|Storage::disk\(\s*['"]s3['"]/.test(near) ? 'Amazon S3' : /\.storage\s*\.from\(/.test(near) ? 'Supabase Storage'
+      : /@vercel\/blob/.test(near) ? 'Vercel Blob' : /cloudinary/i.test(near) ? 'Cloudinary' : /\bcreateUploadthing\b/.test(near) ? 'UploadThing'
+      : /\b(?:has_one|has_many)_attached\b/.test(t) ? 'Active Storage'
+      : /writeFile|createWriteStream|diskStorage|\bdest\s*:|->store(?:As)?\s*\(|MEDIA_ROOT|default_storage|open\([^)]*['"]wb['"]|copyfileobj|\.save\s*\(\s*(?:path|os\.path)|os\.Create\(|File\.Create|transferTo\(|models\.(?:Image|File)Field/.test(near) ? 'disk'
+      : bin.some(n => new RegExp(String.raw`\b${n}\b\s*[:,}=]`).test(t)) ? 'database' : undefined
+    const placeOf: Record<string, string> = { disk: "on your server's disk", database: 'in your database', 'Active Storage': 'with Active Storage (on the server\'s disk unless config/storage.yml says otherwise)' }
+    const nice = (x: string) => ({ svg: 'SVG', webp: 'WebP', heic: 'HEIC', avif: 'AVIF' } as Record<string, string>)[x] ?? x.toUpperCase()
+    const or = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs.at(-1)}`
+    const what = types.length ? `pictures (${or(types.map(nice))})` : docs ? 'files (PDFs)' : 'files'
+    changes.push({ group: 'Server', isNew: true, text: `People can now upload ${what}${mb ? `, up to ${mb} MB each` : ''}.${where ? ` They're stored ${placeOf[where] ?? `in ${where}`}.` : ''}`, detail: upFiles[0] })
+    if (!sized) problems.push({ kind: 'Check', text: `Uploads have no size limit plain can see: one person can send huge files. Set a maximum size. (This is a guess.)` })
+    // a per-person cap: a server-side rate limiter (not lodash's throttle in a component), or a count next to the upload; and
+    // only when ordinary accounts can upload (not an admins-only upload)
+    const server = [...after].filter(([p, x]) => srcFile(p) && !clientFile(p, x)).map(([, x]) => x).join('\n')
+    const capped = /express-rate-limit|\brateLimit\s*\(|@upstash\/ratelimit|\bslowapi\b|@ratelimit|\bRateLimiter\b|\bLimiter\s*\(|rack-attack|AddRateLimiter|middleware\([^)]*throttle|throttle_classes|UserRateThrottle|@Throttle|\bquota\b/i.test(server)
+      || /\.count\b|\bcount\s*\(|COUNT\(/.test(t)   // (a count in the upload code itself: photos.count > 20, not an unread counter elsewhere)
+    // (Active Storage's has_one_attached keeps one file per record: a new one replaces the old, so nothing piles up)
+    const oneEach = /\bhas_one_attached\b/.test(t) && /\bclass\s+(?:User|Account|Profile|Member)\b/.test(t) && !/\bhas_many_attached\b/.test(t) && upFiles.every(p => !/\b(?:multer|FormFile|IFormFile|MultipartFile|UploadFile|request\.files|\$request->file)\b/i.test(after.get(p) ?? ''))
+    // (admins only: an admin path, or an admin check right around the upload itself, not elsewhere in the file)
+    // (the route statement the upload sits in: `router.post('/admin/banner', requireAdmin, upload.single(...)`, not text nearby)
+    // (isAdmin only as a gate: a bare middleware argument, or `if (!…isAdmin)` / `role !== 'admin'` that turns people away;
+    // not `if (user.isAdmin) console.log(...)`)
+    const ADMIN_GATE = /\brequire(?:Admin|Staff|Superuser)\b|\badminOnly\b|[(,]\s*isAdmin\s*,|middleware\(\s*\[?\s*['"](?:admin|role:admin)|['"]\/?admin(?:\/|['"])|if\s*\(\s*(?:!\s*[\w.?]*\bis_?[Aa]dmin\b|[\w.?]*\brole\s*!==?\s*['"]admin['"])[^)]*\)\s*\{?\s*(?:return|throw|redirect|abort)\b/
+    // (inside a route call: from that call's opening, found by counting brackets back across lines; otherwise the function
+    // around it, up to the upload: `await requireAdmin()` two lines above `form.get('logo') as File`)
+    const stmtOf = (i: number) => { let d = 0
+      for (let k = i - 1; k >= Math.max(0, i - 3000); k--) { const c = t[k]
+        if (c === ')') d++; else if (c === '(') { if (d) d--; else if (/\.(?:post|put|patch|route)$/.test(t.slice(Math.max(0, k - 8), k))) return t.slice(Math.max(0, k - 8), i) } }
+      const heads = [...t.slice(0, i).matchAll(/\b(?:def|function|func)\s+\w+|\bpublic\s+function\s+\w+|\w+\s*(?::\s*\w+\s*)?=\s*async\b|\bexport\s+(?:async\s+)?function\b/g)]
+      return t.slice(heads.at(-1)?.index ?? Math.max(0, i - 400), i) }
+    const adminOnly = oneEach || upFiles.some(p => /(^|\/)admin(\/|$)/.test(p)) || (ms => ms.length > 0 && ms.every(m => ADMIN_GATE.test(stmtOf(m.index!))))((ms => { const r = ms.filter(m => /\.(?:post|put|patch|route)\(/.test(stmtOf(m.index!))); return r.length ? r : ms })([...t.matchAll(new RegExp(UPLOAD.source + (upFiles.some(p => serverFile(p, after.get(p) ?? '')) ? String.raw`|\.get\(\s*['"][^'"]+['"]\s*\)\s*as\s+File\b|\binstanceof\s+File\b` : ''), 'g'))]))   // (the routes that take uploads, not `const upload = multer(...)`)
+    if (!capped && !adminOnly) problems.push({ kind: 'Check', text: `Nothing limits how many files one person can upload${where === 'database' || where === 'disk' ? `: one account can fill ${where === 'database' ? 'your database' : "your server's disk"} and stop the whole app` : where && where !== 'Active Storage' ? `, and each one adds to your ${where} bill` : ''}. Add a limit per person (a few per minute, or a total). (This is a guess.)` })
+    if (types.includes('svg')) problems.push({ kind: 'Check', text: `SVG pictures are allowed. An SVG can carry code that runs for whoever opens it. Leave SVG out unless you need it. (This is a guess.)` })
+  }
   // a GET that changes things: opening a link (from another site, an email preview, a browser loading ahead) is enough
   const onlyPost = 'django' in B.deps ? 'with `@require_POST`' : 'flask' in B.deps ? "with `methods=['POST']`" : 'a POST route instead of a GET one'
   // links meant to act when opened: email confirmations, payment returns. Stripe's cancel_url sends people back by GET: that view is skipped
