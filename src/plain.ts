@@ -6,7 +6,7 @@
 //
 // ponytail: Next.js (app/ and pages/), Express-style servers, React Router, Prisma, Supabase, Stripe. Each framework is one more fact extractor.
 import { adminCond, adminPos, FROM_REQUEST } from './admin.ts'
-import { memberCheck, keepsTo, scan, topLevel, roleGate, roomOnly, free, boundAll, aroundNames } from './members.ts'
+import { memberCheck, keepsTo, scan, topLevel, roleGate, roomOnly, free, boundAll, aroundNames, inside } from './members.ts'
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
@@ -2992,6 +2992,30 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const checksEnd = /finish_reason|finishReason|stop_reason|stopReason|incomplete_details|(?:===?|!==?)\s*['"]incomplete['"]|['"]incomplete['"]\s*(?:===?|!==?)/.test(appAfter)
   if (newCaps.length && !newCaps.every(v => /^\d+$/.test(v) && +v <= 50) && !checksEnd)
     problems.push({ kind: 'Check', text: `AI answers now have a length cap (max_tokens), and nothing checks whether an answer was cut short. A cut-off answer looks complete to people, and gets used as if it were. Check the finish reason and tell them. (This is a guess.)` })
+  // An AI client that now gives up sooner (`OpenAI(timeout=15)`) than its longest answer takes to write, with nothing streaming it: long
+  // answers fail every time (Quill p6). The SDKs wait 10 minutes by default; ~60 tokens a second; the cap is the largest number in the
+  // max_tokens expression (`min(6_000, ...)`), or ~4,000 when there's none.
+  const aiFiles = (m: Snap) => [...m].filter(([q, t]) => srcFile(q) && !isTest(q) && (calls(t) || /\b(?:Async)?(?:OpenAI|Anthropic)\s*\(/.test(t)))
+  // (a timeout is a number or a plain product, `15 * 1000`; anything else, `httpx.Timeout(...)`, a setting, is skipped)
+  const num = (e: string) => /^[\d_.]+(?:\s*\*\s*[\d_.]+)*$/.test(e.trim()) ? e.split('*').reduce((x, y) => x * Number(y.replace(/[_\s]/g, '')), 1) : NaN
+  // (an argument's value: up to the next comma or closing bracket at its own level)
+  const argAt = (t: string, i: number) => { let d = 0, j = i; for (; j < t.length; j++) { const ch = t[j]
+    if ('([{'.includes(ch)) d++; else if (')]}'.includes(ch)) { if (d === 0) break; d-- } else if ((ch === ',' || ch === '\n') && d === 0) break }
+    return t.slice(i, j) }
+  const timeoutOf = (m: Snap) => Math.min(...aiFiles(m).flatMap(([q, t]) => [...t.matchAll(/\b(?:new\s+)?(?:Async)?(?:OpenAI|Anthropic)\s*\(/g)]
+    .map(x => { const args = inside(t, x.index! + x[0].length - 1) ?? '', k = args.match(/\btimeout\s*[=:]\s*/); return k ? num(argAt(args, k.index! + k[0].length)) : NaN })
+    .filter(v => v > 0).map(v => /\.py$/.test(q) ? v : v / 1000)), 600)
+  const tA = timeoutOf(before), tB = timeoutOf(after), aiText = aiFiles(after).map(([, t]) => t).join('\n')
+  // (streaming, or maybe: `stream=True`, `stream=want_stream`; a timeout set again on a call overrides the client's)
+  const streams = /\bstream\s*[=:]\s*(?!False\b|false\b)\w|\.stream\(|streamText|\bstream_?mode\b/.test(aiText)
+  const clientTimeouts = [...aiText.matchAll(/\b(?:new\s+)?(?:Async)?(?:OpenAI|Anthropic)\s*\(/g)].filter(x => /\btimeout\s*[=:]/.test(inside(aiText, x.index! + x[0].length - 1) ?? '')).length
+  const perCall = (aiText.match(/\btimeout\s*[=:]/g) ?? []).length > clientTimeouts
+  if (hasAI && tB < tA && tB < 600 && !streams && !perCall) {
+    const caps = aiFiles(after).flatMap(([, t]) => [...t.matchAll(/\b(?:max_tokens|max_completion_tokens|max_output_tokens|maxTokens|maxOutputTokens)\b['"]?\s*[:=]>?\s*/g)].map(x => argAt(t, x.index! + x[0].length)))
+    const cap = Math.max(0, ...caps.flatMap(e => (e.match(/\d[\d_]*/g) ?? []).map(d => Number(d.replace(/_/g, '')))))
+    // (a clear miss only: speeds vary, 60 tokens a second is on the slow side)
+    if (cap / 60 > tB * 1.5) problems.push({ kind: 'Check', text: `Long AI answers may now always fail: the AI service now gets ${nice_(String(tB))} seconds to write a whole answer, nothing streams it, and an answer can be up to ${nice_(String(cap))} tokens (about ${Math.round(cap / 60)} seconds to write). Give it longer, or stream the answer. (This is a guess.)` })
+  }
   // Socket.IO: events the live connection now takes, what each one does, and whether connecting needs a login (that file's own
   // io.use guard). A guard that's gone is a problem.
   // ponytail: per event name; room members are read (roomOnly), moderators aren't; plain WebSockets (ws) aren't read

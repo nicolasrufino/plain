@@ -770,6 +770,8 @@ cards were made with plain as pushed at that time (commit 6b3f57c).
 3. ✅ Done later (review 41, two rounds): a count limit reads "a maximum of 5 messages per 10 seconds" when its file has
    one `WINDOW` constant with a unit in its name, used as `now - WINDOW_MS` near the limit's check, and no other limit.
    Timers, cleanups and token lifetimes (INTERVAL, PERIOD) don't count.
-4. A 🔴 guess when an AI client's timeout is far shorter than `max_tokens` needs and nothing streams.
+4. ✅ Done later (review 42, two rounds): "Long AI answers may now always fail" when an AI client's timeout is lowered
+   to well under the time its largest `max_tokens` takes to write (at 60 tokens a second, with a 1.5× margin) and
+   nothing streams. A per-call timeout, a stream flag in a variable, or no cap at all means no guess. Quill p6 gets it.
 5. Changed Socket.IO events (not only new ones) get a line.
 6. "requires login ✓" upgrades to "admins only ✓" when the route's own check is an admin role.

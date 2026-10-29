@@ -3803,3 +3803,30 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
     c = card(lim(w).replace('now - WINDOW', 'now - 1000')); assert.ok(!/ per \d|per (minute|day|second)/.test(c), `${w}: ${c}`) }
   console.log('ok (limit windows)')
 }
+// An AI client that now gives up before its longest answer could be written, with nothing streaming it
+{
+  const py = { 'requirements.txt': 'fastapi\nopenai\n' }
+  const ai = (client: string, call: string) => ({ ...py, 'app/ai.py': `from openai import OpenAI\nimport os\ndef client():\n    return ${client}\ndef rewrite(text):\n    return client().chat.completions.create(model="gpt-4o-mini", ${call}messages=[{"role": "user", "content": text}])\n` })
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = ai('OpenAI(api_key=os.getenv("K"))', '')
+  let c = card(base, ai('OpenAI(api_key=os.getenv("K"), timeout=15.0, max_retries=1)', 'max_tokens=min(6_000, max(256, len(text) // 2)), '))
+  assert.ok(c.includes('Long AI answers may now always fail: the AI service now gets 15 seconds'), c)
+  // streamed, a small cap, or a timeout that didn't change: no guess
+  for (const [cl, call] of [['OpenAI(api_key=os.getenv("K"), timeout=15.0)', 'stream=True, max_tokens=6000, '], ['OpenAI(api_key=os.getenv("K"), timeout=15.0)', 'max_tokens=300, ']]) {
+    c = card(base, ai(cl, call)); assert.ok(!c.includes('Long AI answers'), `${cl} ${call}: ${c}`) }
+  const same = ai('OpenAI(api_key=os.getenv("K"), timeout=15.0)', '')
+  c = card(same, ai('OpenAI(api_key=os.getenv("K"), timeout=15.0)', 'max_tokens=6000, '))
+  assert.ok(!c.includes('Long AI answers'), c)
+  // JavaScript: milliseconds
+  const js = { 'package.json': '{"dependencies":{"openai":"4.0.0"}}' }
+  const jai = (o: string) => ({ ...js, 'lib/ai.ts': `import OpenAI from "openai"\nconst client = new OpenAI(${o})\nexport const run = (t: string) => client.chat.completions.create({ model: "gpt-4o", max_tokens: 4000, messages: [{ role: "user", content: t }] })\n` })
+  c = card(jai('{ apiKey: process.env.K }'), jai('{ apiKey: process.env.K, timeout: 20_000 }'))
+  assert.ok(c.includes('gets 20 seconds'), c)
+  // (review 42) `15 * 1000` is 15 seconds; other numbers on the cap's line aren't the cap; a per-call timeout, a stream flag in a
+  // variable, or no cap at all: no guess
+  c = card(jai('{ apiKey: process.env.K }'), jai('{ apiKey: process.env.K, timeout: 15 * 1000 }'))
+  assert.ok(c.includes('gets 15 seconds'), c)
+  for (const [cl, call] of [['OpenAI(timeout=15.0)', 'max_tokens=300, model2="gpt-4o-2024-08-06", '], ['OpenAI(timeout=15.0)', 'max_tokens=6000, timeout=300, '], ['OpenAI(timeout=15.0)', 'stream=want_stream, max_tokens=6000, '], ['OpenAI(timeout=30)', '']]) {
+    c = card(base, ai(cl, call)); assert.ok(!c.includes('Long AI answers'), `${cl} ${call}: ${c}`) }
+  console.log('ok (AI timeouts)')
+}
