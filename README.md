@@ -116,6 +116,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 - [Trials, round 7](docs/trials-laravel.md): the same on Laravel
 - [Trials, round 8](docs/trials-rails.md): the same on Ruby on Rails
 - [Trials, round 9](docs/trials-go.md): the same on Go
+- [Trials, round 10](docs/trials-saas-chat-ai.md): apps that aren't shops (a team SaaS, a chat app, an AI writing app)
 - [Scenario](docs/scenario.md): one feature, from building to reviewing
 - [Review research](docs/review-research.md): the review bottleneck, what exists, the gap
 - [Code-to-English research](docs/research.md): line-level English and prior work

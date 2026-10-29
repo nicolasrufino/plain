@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { report, snapshot, tanstackRoute, appFacts, type FileFacts } from '../src/plain.ts'
+import { report, snapshot, tanstackRoute, appFacts, things, type FileFacts } from '../src/plain.ts'
 import { recapCli } from '../src/session.ts'
 import { readDb, findings } from '../src/supabase.ts'
 
@@ -2415,5 +2415,158 @@ bad('C2 switch to a package requireRole(admin)', card(base, pkg), NL)
 console.log('ok (review 26)')
 
 }
+// Next.js pages (round 10): login only when the page or a layout above it turns guests away; reading the session to choose a
+// button, or a /login page sending logged-in people on, isn't a login check
+{
+  const pkg = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0"}}' }
+  const page = (body: string) => `import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport default async function Page() {\n${body}\n  return <main><h1>Hi</h1></main>\n}\n`
+  const card = (files: Record<string, string>) => report(new Map(Object.entries(pkg)), new Map(Object.entries({ ...pkg, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+  const LOGIN = 'You have to log in to open it ✓'
+  assert.ok(!card({ 'app/page.tsx': page('  const session = await auth()\n  const label = session?.user ? "Open" : "Log in"') }).includes(LOGIN), 'next page: session read for a button')
+  assert.ok(!card({ 'app/login/page.tsx': page('  if (await auth()) redirect("/w")') }).includes(LOGIN), 'next page: /login sends logged-in people on')
+  assert.ok(card({ 'app/w/page.tsx': page('  const session = await auth()\n  if (!session?.user) redirect("/login")') }).includes(LOGIN), 'next page: turns guests away')
+  const layout = 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport default async function Layout({ children }) {\n  const session = await auth()\n  if (!session) redirect("/login")\n  return <>{children}</>\n}\n'
+  assert.ok(card({ 'app/(app)/layout.tsx': layout, 'app/(app)/w/[id]/page.tsx': 'export default function Page() { return <main><h1>Board</h1></main> }\n' }).includes(LOGIN), 'next page: a layout above it turns guests away')
+  console.log('ok (next pages login)')
+}
+// Round 10 (apps that aren't shops): Next.js server actions, routers made by a factory, SQLAlchemy's Base, acronyms, AI services,
+// FastAPI migrations, changes linked to the request through the names they add
+{
+  const card = (a: Record<string, string>, b: Record<string, string>, asked?: string) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main', asked }).replace(/\s+/g, ' ')
+  const pkg = { 'package.json': '{"dependencies":{"next":"15.0.0","resend":"4.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Comment {\n  id String @id\n  body String\n}\nmodel Membership {\n  id String @id\n}\nmodel Task {\n  id String @id\n}\n' }
+  const authz = 'import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nexport async function requireUser() {\n  const session = await auth()\n  if (!session?.user) redirect("/login")\n  return session.user\n}\n'
+  const email = 'import { Resend } from "resend"\nconst resend = new Resend(process.env.RESEND_API_KEY)\nexport async function sendMentionEmails(to: string[], body: string) {\n  await resend.emails.send({ from: "a@b.c", to, subject: "Mentioned", text: body })\n}\n'
+  const actions = '"use server"\nimport { prisma } from "@/lib/prisma"\nimport { requireUser } from "@/lib/authz"\nimport { sendMentionEmails } from "@/lib/email"\nexport async function createCommentAction(formData: FormData) {\n  const user = await requireUser()\n  await prisma.comment.create({ data: { body: String(formData.get("body")) } })\n  await sendMentionEmails(["x@y.z"], "hi")\n}\nexport async function removeMemberAction(formData: FormData) {\n  await requireUser()\n  await prisma.membership.delete({ where: { id: "1" } })\n  await prisma.task.updateMany({ where: {}, data: {} })\n}\n'
+  const base = { ...pkg, 'lib/authz.ts': authz, 'lib/email.ts': email }
+  const c = card(base, { ...base, 'app/actions/comments.ts': actions })
+  assert.ok(c.includes('saves new comments, requires login ✓ and emails people through Resend'), `server action: what it does, through its helpers; requireUser() turns guests away\n${c}`)
+  assert.ok(c.includes('updates and deletes memberships and tasks') || c.includes('updates and deletes tasks and memberships'), `server action: deletes named\n${c}`)
+  assert.ok(!/Anyone can|without logging in/.test(c), `server action: no false alarm\n${c}`)
+  // a helper plain can't read (requireWorkspaceMember): no claim either way; nothing about who's asking at all: open
+  const viaHelper = actions.replace(/requireUser/g, 'requireWorkspaceMember')
+  const vh = card({ ...base, 'lib/authz.ts': authz.replace('requireUser', 'requireWorkspaceMember') }, { ...base, 'lib/authz.ts': authz.replace('requireUser', 'requireWorkspaceMember'), 'app/actions/comments.ts': viaHelper })
+  assert.ok(!/requires login ✓|Anyone can/.test(vh), `server action through an unread helper: no claim\n${vh}`)
+  const open = '"use server"\nimport { prisma } from "@/lib/prisma"\nexport async function makeAdminAction(formData: FormData) {\n  await prisma.comment.create({ data: { body: String(formData.get("x")) } })\n}\n'
+  assert.ok(/Anyone can/.test(card(base, { ...base, 'app/actions/admin.ts': open })), 'server action with no login at all: anyone can call it')
+  const own = '"use server"\nimport { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nimport { prisma } from "@/lib/prisma"\nexport async function createCommentAction(formData: FormData) {\n  const session = await auth()\n  if (!session) redirect("/login")\n  await prisma.comment.create({ data: { body: "x" } })\n}\n'
+  assert.ok(card(base, { ...base, 'app/actions/comments.ts': own }).includes('saves new comments and requires login ✓'), 'server action: its own check')
+  // Express: app.use('/api/messages', createMessagesRouter(io)) keeps the prefix
+  const ex = { 'server/package.json': '{"dependencies":{"express":"4.19.0","@prisma/client":"6.0.0"}}', 'server/prisma/schema.prisma': 'model Message {\n  id Int @id\n  body String\n}\n',
+    'server/src/index.ts': "import express from 'express'\nimport { createMessagesRouter } from './routes/messages.js'\nconst app = express()\napp.use('/api/messages', createMessagesRouter(io))\napp.listen(3001)\n",
+    'server/src/routes/messages.ts': "import { Router } from 'express'\nimport { prisma } from '../db.js'\nexport function createMessagesRouter(io) {\n  const router = Router()\n  router.get('/', async (req, res) => res.json(await prisma.message.findMany()))\n  return router\n}\n" }
+  assert.ok(card({}, ex).includes('/api/messages'), 'a router made by a factory keeps its mount path')
+  // FastAPI + SQLAlchemy: class Base(DeclarativeBase) isn't a table; AIRequest reads "AI requests"; OpenAI says what it gets;
+  // no Flask-Migrate in a FastAPI app
+  const py = { 'requirements.txt': 'fastapi==0.115.5\nsqlalchemy==2.0.36\nalembic==1.14.0\nopenai==1.55.0\n',
+    'app/database.py': 'from sqlalchemy.orm import DeclarativeBase\n\nclass Base(DeclarativeBase):\n    pass\n',
+    'app/models.py': 'from sqlalchemy.orm import Mapped, mapped_column\nfrom app.database import Base\n\nclass AIRequest(Base):\n    __tablename__ = "ai_requests"\n    id: Mapped[int] = mapped_column(primary_key=True)\n    mode: Mapped[str] = mapped_column()\n',
+    'app/ai.py': 'from openai import OpenAI\nclient = OpenAI()\n\ndef rewrite(text):\n    return client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": text}])\n',
+    'alembic/versions/0001_initial.py': 'def upgrade():\n    op.create_table("ai_requests")\n\ndef downgrade():\n    op.drop_table("ai_requests")\n' }
+  const q = card({}, py)
+  assert.ok(!/stores bases/.test(q), `SQLAlchemy Base isn't a table\n${q}`)
+  assert.ok(q.includes('stores AI requests'), `acronyms kept\n${q}`)
+  assert.ok(q.includes('What people write in it can be sent to OpenAI, and each request costs you money'), `AI service wording\n${q}`)
+  assert.ok(q.includes('(`alembic upgrade head`)') && !q.includes('Flask-Migrate'), `no Flask-Migrate in a FastAPI app\n${q}`)
+  // a file that adds a name another file of the request adds too is part of it (isGuest), not "unrelated"
+  const g0 = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/types.ts': 'export type User = { id: string }\n', 'app/api/guest/route.ts': 'export async function POST() { return Response.json({}) }\n' }
+  const g1 = { ...g0, 'lib/types.ts': 'export type User = { id: string; anonymousHandle: string }\n', 'app/api/guest/route.ts': 'export async function POST() { return Response.json({ anonymousHandle: "x" }) }\n' }
+  assert.ok(!card(g0, g1, 'can people chat without signing up').includes("doesn't look related"), 'linked through a name the change adds')
+  const g2 = { ...g1, 'app/api/guest/route.ts': g0['app/api/guest/route.ts'].replace('{}', '{ ok: true }') }
+  assert.ok(card(g0, g2, 'can people chat without signing up').includes("doesn't look related"), 'control: nothing links it, still flagged')
+  console.log('ok (round 10 fixes)')
+}
+// Review 27 (round 10 fixes): a login ✓ only from a real check in the page or action itself, Clerk and Next's own stops,
+// factory routers and optional-auth middleware aren't guards, names new to the app link a change, verbs per handler
+{
+  const card = (a: Record<string, string>, b: Record<string, string>, opts: Record<string, string> = {}) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main', ...opts }).replace(/\s+/g, ' ')
+  const LOGIN = 'You have to log in to open it ✓'
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Post {\n  id String @id\n  body String\n}\nmodel Feedback {\n  id String @id\n  body String\n}\n' }
+  const pageWith = (top: string, body: string) => `import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\n${top}\nexport default async function Page() {\n${body}\n  return <main><h1>Posts</h1></main>\n}\n`
+  // pages: a "use server" function or a small component in the file isn't the page; a guest view isn't a stop
+  assert.ok(!card(nx, { ...nx, 'app/posts/page.tsx': pageWith('async function deletePost() {\n  "use server"\n  const session = await auth()\n  if (!session?.user) redirect("/login")\n}', '  const posts = []') }).includes(LOGIN), 'r27: a server action in the page file')
+  assert.ok(!card(nx, { ...nx, 'app/posts/page.tsx': pageWith('function NewPost({ user }) {\n  if (!user) return null\n  return <a href="/new">New</a>\n}', '  const session = await auth()') }).includes(LOGIN), 'r27: a component hiding a button')
+  assert.ok(!card(nx, { ...nx, 'app/posts/page.tsx': pageWith('', '  const session = await auth()\n  if (!session?.user) return <main><h1>Welcome, guest</h1></main>') }).includes(LOGIN), 'r27: a guest view')
+  const gssp = 'import { getServerSession } from "next-auth/next"\nexport async function getServerSideProps(ctx) {\n  const session = await getServerSession(ctx.req, ctx.res, authOptions)\n  if (!session) return { redirect: { destination: "/login", permanent: false } }\n  return { props: {} }\n}\nexport default function Account() { return <main><h1>Account</h1></main> }\n'
+  const p14 = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0"}}' }
+  assert.ok(card(p14, { ...p14, 'pages/account.tsx': gssp }).includes(LOGIN), 'r27: pages router getServerSideProps redirect')
+  assert.ok(card(p14, { ...p14, 'pages/account.tsx': gssp.replace('return { redirect: { destination: "/login", permanent: false } }', 'return { notFound: true }') }).includes(LOGIN), 'r27: getServerSideProps notFound')
+  // Clerk, and Next's own notFound() / unauthorized() / forbidden()
+  const ck = { 'package.json': '{"dependencies":{"next":"15.0.0","@clerk/nextjs":"6.0.0"}}' }
+  const clerk = (b: string) => `import { auth } from "@clerk/nextjs/server"\nimport { redirect } from "next/navigation"\nexport default async function Page() {\n${b}\n  return <main><h1>Dashboard</h1></main>\n}\n`
+  for (const b of ['  await auth.protect()', '  const { userId } = await auth()\n  if (!userId) redirect("/sign-in")', '  const { userId, redirectToSignIn } = await auth()\n  if (!userId) return redirectToSignIn()'])
+    assert.ok(card(ck, { ...ck, 'app/dashboard/page.tsx': clerk(b) }).includes(LOGIN), `r27: Clerk ${b.trim()}`)
+  for (const b of ['  const session = await auth()\n  if (session?.user?.role !== "admin") notFound()', '  const session = await auth()\n  if (!session) unauthorized()', '  const session = await auth()\n  if (!session?.user) forbidden()'])
+    assert.ok(card(nx, { ...nx, 'app/admin/page.tsx': pageWith('', b) }).includes(LOGIN), `r27: ${b.trim()}`)
+  // server actions: auth() next to a success redirect or an unrelated throw isn't a login check
+  const act = (body: string) => `"use server"\nimport { auth } from "@/auth"\nimport { redirect } from "next/navigation"\nimport { prisma } from "@/lib/prisma"\nexport async function sendFeedbackAction(formData: FormData) {\n${body}\n}\n`
+  assert.ok(!card(nx, { ...nx, 'app/actions/feedback.ts': act('  const session = await auth()\n  await prisma.feedback.create({ data: { body: "x", userId: session?.user?.id ?? null } })\n  redirect("/thanks")') }).includes('requires login ✓'), 'r27: action, success redirect')
+  assert.ok(!card(nx, { ...nx, 'app/actions/feedback.ts': act('  const session = await auth()\n  const post = await prisma.post.findFirst({})\n  if (!post) throw new Error("Post not found")\n  await prisma.post.delete({ where: { id: post.id } })') }).includes('requires login ✓'), 'r27: action, unrelated throw')
+  // Express: a factory mount or optional-auth middleware isn't a login check
+  const ex = (mw: string) => ({ 'package.json': '{"dependencies":{"express":"4.19.0","express-session":"1.18.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Post {\n  id Int @id\n  body String\n}\n',
+    'routes/posts.ts': "import { Router } from 'express'\nimport { prisma } from '../db.js'\nexport const postsRouter = Router()\npostsRouter.post('/', async (req, res) => res.json(await prisma.post.create({ data: { body: req.body.body } })))\n",
+    'index.ts': `import express from 'express'\nimport { postsRouter } from './routes/posts.js'\nconst app = express()\n${mw}\napp.use('/api/posts', postsRouter)\napp.listen(3000)\n` })
+  for (const mw of ["app.use('/api', expressSession({ secret: 'x' }))", "app.use('/api', optionalAuth())", "app.use(expressSession({ secret: 'x' }))", "app.use(expressjwt({ secret: 'x', algorithms: ['HS256'], credentialsRequired: false }))"])
+    assert.ok(!card({}, ex(mw)).includes('requires login ✓'), `r27: ${mw}`)
+  // "didn't run or test": feature sentences aren't about the tests
+  for (const said of ['Done. Free users get 3 rewrites a day; after that, AI generation is not available until tomorrow. All tests pass.', 'Health checks are not available on the free tier, so the status page hides them. Tests pass.', 'Guests can now chat. Email verification isn’t available for guest accounts. Ran the test suite: all green.', 'Search is in. Ran npm test, 12 passed. Builds are not possible without Docker, which is expected.'])
+    assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: said }).includes("didn't run or test"), `r27 untested: ${said}`)
+  // unrelated: a common new word (error, async) doesn't link a change to the request
+  const b0 = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/pricing.ts': 'export function discount(total: number) {\n  return total * 0.9\n}\n', 'app/page.tsx': 'export default function Home() { return <main><h1>Home</h1></main> }\n' }
+  const contact = '"use client"\nexport default function Contact() {\n  const [error, setError] = useState("")\n  return <main><h1>Contact us</h1>{error && <p>{error}</p>}</main>\n}\n'
+  for (const d of ['export function discount(total: number) {\n  console.error("x")\n  return total * 0.8\n}\n', 'export async function discount(total: number) {\n  return total * 0.8\n}\n'])
+    assert.ok(card(b0, { ...b0, 'lib/pricing.ts': d, 'app/contact/page.tsx': contact }, { asked: 'add a contact form' }).includes("doesn't look related"), 'r27: common words don\'t link')
+  // verbs per handler: POST updates, DELETE deletes
+  const ro = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Order {\n  id Int @id\n}\n' }
+  const route = 'import { prisma } from "@/lib/prisma"\nexport async function POST(req: Request) { const s = await auth(); if (!s) return new Response("no", { status: 401 }); await prisma.order.update({ where: { id: 1 }, data: {} }); return Response.json({}) }\nexport async function DELETE(req: Request) { const s = await auth(); if (!s) return new Response("no", { status: 401 }); await prisma.order.delete({ where: { id: 1 } }); return Response.json({}) }\n'
+  assert.ok(!card(ro, { ...ro, 'app/api/orders/[id]/route.ts': route }).includes('updates and deletes orders, deletes orders'), 'r27: no repeated verb')
+  // names: an AI request, OAuth, API keys; class Base(AsyncAttrs, DeclarativeBase) isn't a table
+  assert.ok(things('OAuthAccount') === 'oauth accounts' && things('APIKey') === 'API keys' && things('Survey') === 'surveys', 'r27: names')
+  const py = { 'requirements.txt': 'fastapi==0.115.5\nsqlalchemy==2.0.36\n', 'app/database.py': 'from sqlalchemy.orm import DeclarativeBase\nfrom sqlalchemy.ext.asyncio import AsyncAttrs\n\nclass Base(AsyncAttrs, DeclarativeBase):\n    pass\n',
+    'app/models.py': 'from sqlalchemy.orm import Mapped, mapped_column\nfrom app.database import Base\n\nclass Note(Base):\n    __tablename__ = "notes"\n    id: Mapped[int] = mapped_column(primary_key=True)\n    body: Mapped[str] = mapped_column()\n' }
+  assert.ok(!card({}, py).includes('stores bases'), 'r27: AsyncAttrs base')
+  console.log('ok (review 27)')
+}
+// Review 27, round 2: page checks through export { X as default }, a wrapper, a helper the page calls, <RedirectToSignIn />;
+// action checks inside helpers; real guards with "session" or "optional" in them
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  {
+const pkg = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@clerk/nextjs":"6.0.0"}}' }
+const head = `import { auth } from "@/auth"\nimport { redirect } from "next/navigation"\n`
+const cases: Record<string, string> = {
+  'export { Page as default }': head + `async function Page() {\n  const session = await auth()\n  if (!session) redirect("/login")\n  return <main><h1>Dashboard</h1></main>\n}\nexport { Page as default }\n`,
+  'export default withX(Page)': head + `import { withTracking } from "@/lib/track"\nasync function Page() {\n  const session = await auth()\n  if (!session) redirect("/login")\n  return <main><h1>Dashboard</h1></main>\n}\nexport default withTracking(Page)\n`,
+  'check in helper called by page': head + `async function getUserOrRedirect() {\n  const session = await auth()\n  if (!session?.user) redirect("/login")\n  return session.user\n}\nexport default async function Page() {\n  const user = await getUserOrRedirect()\n  return <main><h1>Dashboard</h1></main>\n}\n`,
+  'export default arrow const': head + `const Page = async () => {\n  const session = await auth()\n  if (!session) redirect("/login")\n  return <main><h1>Dashboard</h1></main>\n}\nexport default Page\n`,
+  'clerk <RedirectToSignIn/>': `import { auth } from "@clerk/nextjs/server"\nimport { RedirectToSignIn } from "@clerk/nextjs"\nexport default async function Page() {\n  const { userId } = await auth()\n  if (!userId) return <RedirectToSignIn />\n  return <main><h1>Dashboard</h1></main>\n}\n`,
+}
+for (const [l, page] of Object.entries(cases)) assert.ok(card(pkg, { ...pkg, 'app/dashboard/page.tsx': page }).includes('You have to log in to open it ✓'), `r27b: ${l}`)
+
+  }
+  {
+const pkg = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Post {\n  id String @id\n}\n' }
+const viewer = 'import { auth } from "@/auth"\nexport async function getViewer() {\n  const session = await auth()\n  return session?.user ?? null\n}\n'
+const act = (body: string) => `"use server"\nimport { prisma } from "@/lib/prisma"\nimport { getViewer } from "@/lib/viewer"\nimport { cookies } from "next/headers"\nimport { verifyToken } from "@/lib/jwt"\nexport async function deletePostAction(id: string) {\n${body}\n  await prisma.post.delete({ where: { id } })\n}\n`
+const jwt = 'import { jwtVerify } from "jose"\nexport async function verifyToken(t?: string) { if (!t) return null; return (await jwtVerify(t, new TextEncoder().encode(process.env.JWT_SECRET!))).payload }\n'
+const base = { ...pkg, 'lib/viewer.ts': viewer, 'lib/jwt.ts': jwt }
+assert.ok(!/Anyone can/.test(card(base, { ...base, 'app/actions/posts.ts': act('  const viewer = await getViewer()\n  if (!viewer) throw new Error("Not allowed")') })), 'r27b: action check')
+assert.ok(!/Anyone can/.test(card(base, { ...base, 'app/actions/posts.ts': act('  const payload = await verifyToken((await cookies()).get("token")?.value)\n  if (!payload) throw new Error("Not allowed")') })), 'r27b: action check')
+assert.ok(/Anyone can/.test(card(base, { ...base, 'app/actions/posts.ts': act('') })), 'r27b: action check')
+
+  }
+  {
+const pkg = { 'package.json': '{"dependencies":{"express":"4.19.0","supertokens-node":"20.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Post {\n  id Int @id\n  body String\n}\n' }
+for (const [l, mw] of [['verifySession({ checkDatabase: true })', 'verifySession({ checkDatabase: true })'], ['requireAuth({ optional: false })', 'requireAuth({ optional: false })'], ['requireAuthOptionalAdmin', 'requireAuthOptionalAdmin'], ['control verifySession()', 'verifySession()']]) {
+  const idx = `import express from 'express'\nimport { prisma } from './db.js'\nimport { verifySession } from 'supertokens-node/recipe/session/framework/express'\nimport { requireAuth, requireAuthOptionalAdmin } from './auth.js'\nconst app = express()\napp.post('/api/posts', ${mw}, async (req, res) => res.json(await prisma.post.create({ data: { body: req.body.body } })))\napp.listen(3000)\n`
+  assert.ok(card({}, { ...pkg, 'src/index.ts': idx }).includes('requires login ✓'), `r27b: ${l}`)
+}
+
+  }
+  console.log('ok (review 27, round 2)')
+}
 // "Tests couldn't be executed": the agent didn't run them
 assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. Tests couldn’t be executed because the environment has no Go toolchain installed.' }).includes("didn't run or test"), 'untested: passive')
+// (round 10) "Full runtime testing wasn’t possible", "tests weren’t available", "Full builds could not run"; not "a refund wasn't possible"
+for (const said of ['Full runtime testing wasn’t possible because dependencies aren’t installed.', 'Full runtime tests weren’t available because dependencies aren’t installed locally.', 'Full builds could not run because dependencies are not installed.'])
+  assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: said }).includes("didn't run or test"), `untested: ${said}`)
+assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. A refund wasn’t possible for free orders, so they are skipped. Tests pass.' }).includes("didn't run or test"), 'untested: not about tests')

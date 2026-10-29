@@ -47,6 +47,8 @@ const SERVICES: Record<string, string> = {
   stripe: 'Stripe', openai: 'OpenAI', '@anthropic-ai/sdk': 'Anthropic', resend: 'Resend',
   '@supabase/supabase-js': 'Supabase', nodemailer: 'email', twilio: 'Twilio', '@vercel/blob': 'Vercel Blob',
   '@sendgrid/mail': 'SendGrid', postmark: 'Postmark',
+  '@google/genai': 'Google Gemini', '@google/generative-ai': 'Google Gemini', 'groq-sdk': 'Groq', '@mistralai/mistralai': 'Mistral', replicate: 'Replicate',
+  '@ai-sdk/openai': 'OpenAI', '@ai-sdk/anthropic': 'Anthropic', '@ai-sdk/google': 'Google Gemini',
 }
 // Services called straight over the web: fetch('https://api.resend.com/emails', ...)
 const HOSTS: Record<string, string> = {
@@ -54,6 +56,8 @@ const HOSTS: Record<string, string> = {
   'api.sendgrid.com': 'SendGrid', 'api.postmarkapp.com': 'Postmark', 'api.twilio.com': 'Twilio', 'hooks.slack.com': 'Slack',
 }
 const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
+// AI services: what people type goes to them, and each request is paid for
+const AI = new Set(['OpenAI', 'Anthropic', 'Google Gemini', 'Groq', 'Mistral', 'Replicate'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
 const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java|rb|go)$|(?<!\.blade)\.php$/   // (Blade and ERB templates aren't read)
@@ -68,10 +72,11 @@ export type FileFacts = {
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
   authStop: boolean; authReturn: boolean   // turns away people who aren't logged in (see loginGroups); authReturn: the same check ending in a return
   exportAuth?: boolean                    // Nuxt: the default-exported handler itself checks login
+  pageFns?: number[]   // Next.js: where the default export (the page or layout itself) and getServerSideProps start
   authIfs: { g: string; at: number; fn: number }[]; skipIfs: { c: string; at: number; fn: number }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
-  handlers: { server: string; method: string; path: string; guard: boolean; admin?: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean; unknown?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
+  handlers: { server: string; method: string; path: string; guard: boolean; admin?: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean; unknown?: boolean; nextAction?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
   mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean; mw?: string[] }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
   pages: { path: string; comp: string; guard: boolean | 'unknown' }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
@@ -85,7 +90,7 @@ const isExported = (n: ts.Node) =>
 const HTTP = /^(get|post|put|patch|delete)$/
 const SERVER = /^(express(\.Router)?|Router|fastify|Fastify|new Hono|require\(['"]express['"]\)(\.Router)?)\(/   // what makes a variable a server/router
 const GUARD = /auth|admin|protect|login|logged|token|jwt|session|private/i   // server middleware that checks who you are
-const NOT_GUARD = /(^|\.)session\(|passport\.(initialize|session)|cookie|csrf|cors|helmet|(routes?|router)$/i   // sets up sessions or mounts routes; checks nothing
+const NOT_GUARD = /(^|\.)session\(|(^|\.|express|cookie)[sS]ession\(\s*\{|passport\.(initialize|session)|cookie|csrf|cors|helmet|(routes?|router)$|\boptional\w*\(|\w*Optional\(|optional\s*:\s*true|credentialsRequired\s*:\s*false|sessionRequired\s*:\s*false/i   // (expressSession({...}), optionalAuth(), expressjwt({ credentialsRequired: false }) let everyone through)   // sets up sessions or mounts routes; checks nothing
 const PAGE_GUARD = /auth|protect|private|require|guard|signedin|loggedin/i   // client wrapper that does
 const empty = (printed = ''): FileFacts => ({
   fns: new Map(), used: new Set(), jsx: new Set(), services: new Set(), tables: new Set(), ops: new Set(),
@@ -103,7 +108,7 @@ const STOPS = /\bthrow\b|redirect\s*\(|\b40[13]\b|unauthori[sz]ed|forbidden/i
 // navigateTo / abortNavigation, an error about logging in, or (in a handler, action or load, not in a hook) a return.
 // Not: a field of a form or body (`!body.user`), a 404/400, `user && user.role !== 'admin'` (anonymous visitors pass), any other
 // ANDed condition (`to.meta.requiresAuth && ...`, `method !== 'GET' && ...`: plain can't tell what that covers).
-const LOGIN_REF = /^(?:\(?\s*await\s+)?(?:[\w$]+(?:\??\.[\w$]+|\(\))*\??\.)?(user|session|loggedIn|isLoggedIn|isAuthenticated|authenticated|currentUser|claims|auth)(?:\(\))?\)?(?:\.value)?$/
+const LOGIN_REF = /^(?:\(?\s*await\s+)?(?:[\w$]+(?:\??\.[\w$]+|\(\))*\??\.)?(user|session|loggedIn|isLoggedIn|isAuthenticated|authenticated|currentUser|claims|auth|userId)(?:\(\))?\)?(?:\.value)?$/
 const NOT_LOGIN = /\b(body|data|form|formData|input|params|query|payload|values|args|result|row|record|item|order|req\.body)\??\./
 export const PATH_TEST = /pathname|route\.id|event\.path|to\.path|to\.fullPath|url\.path|getRequestURL/
 const strip = (e: ts.Expression): ts.Expression => ts.isParenthesizedExpression(e) || ts.isAwaitExpression(e) || ts.isNonNullExpression(e) ? strip(e.expression) : e
@@ -135,7 +140,7 @@ export function loginGroups(cond: ts.Expression, sf: ts.SourceFile): string[] {
   return out
 }
 // the branch really stops: a redirect, navigateTo / abortNavigation, SvelteKit's error(401) (it throws), or a throw about logging in / 401 / 403
-const hardStop = (t: string) => /redirect\s*\(|sendRedirect\s*\(|navigateTo\s*\(|abortNavigation\s*\(|\berror\s*\(\s*40[13]/i.test(t) || /\bthrow\b/.test(t) && /\b40[13]\b|unauthori[sz]ed|forbidden|log ?in|sign ?in|auth/i.test(t)
+const hardStop = (t: string) => /redirect\s*\(|redirectToSignIn\s*\(|<RedirectToSignIn\b|<Redirect\b|<Navigate\b|\b(?:notFound|unauthorized|forbidden)\s*\(|sendRedirect\s*\(|navigateTo\s*\(|abortNavigation\s*\(|\berror\s*\(\s*40[13]/i.test(t) || /\bthrow\b/.test(t) && /\b40[13]\b|unauthori[sz]ed|forbidden|log ?in|sign ?in|auth/i.test(t)
   || /\breturn\b/.test(t) && /status(Code)?\s*:\s*40[13]|\bResponse\([^)]*40[13]/.test(t)   // return new Response('Unauthorized', { status: 401 })
 const RETURNS = /^\s*\{?\s*return\b/
 const REQUIRE_LOGIN = /^(requireUser|requireUserSession|requireAdmin|requireAuth|requireAuthentication|requireLogin|requireLoggedIn|requireSession|requireStaff|requireRole|ensureLoggedIn|ensureAuthenticated|ensureAuth|ensureAdmin|ensureUser)$/
@@ -233,6 +238,45 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   const labelFor = new Map<string, string>(), boxes: { id?: string; type: string; v?: string; aria: boolean }[] = []
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
     : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
+  // Next.js: the page or layout itself (the default export) and getServerSideProps, where a page's own login check has to be
+  {
+    const starts: number[] = [], byName = new Map<string, number>()
+    for (const st of sf.statements) {
+      if (ts.isFunctionDeclaration(st) && st.name) byName.set(st.name.text, st.getStart(sf))
+      if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name) && d.initializer && fnLike(d.initializer)) byName.set(d.name.text, d.initializer.getStart(sf))
+    }
+    const named = new Set<string>()
+    for (const st of sf.statements) {
+      const def = ts.isFunctionDeclaration(st) && st.modifiers?.some(m => m.kind === ts.SyntaxKind.DefaultKeyword)
+      if (def) starts.push(st.getStart(sf))
+      if (ts.isExportAssignment(st) && ts.isIdentifier(st.expression)) named.add(st.expression.text)
+      if (ts.isExportAssignment(st) && fnLike(st.expression)) starts.push(st.expression.getStart(sf))
+      // export default withTracking(Page): the page inside
+      if (ts.isExportAssignment(st) && ts.isCallExpression(st.expression)) for (const a of st.expression.arguments) if (ts.isIdentifier(a)) named.add(a.text)
+      // export { Page as default }
+      if (ts.isExportDeclaration(st) && st.exportClause && ts.isNamedExports(st.exportClause)) for (const e of st.exportClause.elements) if (e.name.text === 'default') named.add((e.propertyName ?? e.name).text)
+    }
+    for (const n of named) if (byName.has(n)) starts.push(byName.get(n)!)
+    if (byName.has('getServerSideProps')) starts.push(byName.get('getServerSideProps')!)
+    // (and the file's own functions it calls, one level: `await getUserOrRedirect()`)
+    const fnAt = new Map([...byName].map(([n, at]) => [at, n]))
+    for (const at of [...starts]) { const node = sf.statements.flatMap(st => [st, ...(ts.isVariableStatement(st) ? st.declarationList.declarations.map(d => d.initializer!).filter(Boolean) : [])]).find(x => x.getStart(sf) === at)
+      if (node) for (const m of node.getText(sf).matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) if (byName.has(m[1]) && fnAt.get(at) !== m[1]) starts.push(byName.get(m[1])!) }
+    f.pageFns = starts
+  }
+  // Next.js server actions: a file that starts with 'use server' makes each exported function one (a POST anyone can send).
+  // Login is claimed only when its own code turns guests away; through a helper (requireWorkspaceMember) plain can't tell yet,
+  // so it says nothing either way.
+  // ponytail: own-code checks only; follow imported require* helpers to claim login through them
+  const first = sf.statements[0]
+  if (first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === 'use server')
+    for (const st of sf.statements) {
+      const fn = ts.isFunctionDeclaration(st) && isExported(st) && st.name ? st : ts.isVariableStatement(st) && isExported(st) ? st.declarationList.declarations.find(d => d.initializer && fnLike(d.initializer)) : undefined
+      const name = fn?.name && ts.isIdentifier(fn.name) ? fn.name.text : undefined
+      if (!name) continue
+      // (its facts are the file's top-level function of that name; guard decided in appFacts, unknown unless its own code checks)
+      f.handlers.push({ server: '', method: 'POST', path: `(server action) ${name}`, guard: false, mw: [], handler: name, facts: empty(''), unknown: true, nextAction: true } as FileFacts['handlers'][number]); f.serverFns.set(name, 'POST')
+    }
   // Where a check sits decides whether it runs for the request, and in time:
   //  - inside a callback, an inner function, a catch, an else branch or a switch case: not on every request -> unread (null)
   //  - in handleFetch / handleError: not the request's own hook -> null
@@ -277,7 +321,9 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const branch = branchNode ? own(branchNode) : '', ctx = branch ? context(n) : null
       // SvelteKit hides admin pages with a 404 too: error(404) under `!locals.user` turns people away
       const stops = hardStop(branch) || /\berror\s*\(\s*404/.test(branch) && /\blocals\./.test(n.expression.getText(sf))
-      if (ctx && stops) { f.authStop = true; f.authIfs.push(...(groups.length ? groups : ['']).map(g => ({ g: [g, ...ctx.conds].filter(Boolean).join(' && '), at: n.getStart(sf), fn: ctx.fn }))) }
+      // (Next.js pages router: getServerSideProps turns guests away with `return { redirect: ... }` / `return { notFound: true }`)
+      if (ctx && !stops && /\breturn\s*\{\s*(?:redirect|notFound)\b/.test(branch)) { f.authStop = true; f.authIfs.push(...(groups.length ? groups : ['']).map(g => ({ g: [g, ...ctx.conds].filter(Boolean).join(' && '), at: n.getStart(sf), fn: ctx.fn }))) }
+      else if (ctx && stops) { f.authStop = true; f.authIfs.push(...(groups.length ? groups : ['']).map(g => ({ g: [g, ...ctx.conds].filter(Boolean).join(' && '), at: n.getStart(sf), fn: ctx.fn }))) }
       else if (ctx && RETURNS.test(branch)) {
         // in a handler a return-style check stops the request; in a hook or middleware it lets anonymous visitors through: a skip for them
         f.authReturn = true; f.skipIfs.push({ c: groups.length ? groups.join(' || ') || 'true' : 'true', at: n.getStart(sf), fn: ctx.fn })
@@ -293,7 +339,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn }) }
     }
     // requireUserSession(event): everywhere, or only where the ifs around it say
-    if (ts.isCallExpression(n) && REQUIRE_LOGIN.test(n.expression.getText(sf).split('.').at(-1)!)) {
+    if (ts.isCallExpression(n) && (REQUIRE_LOGIN.test(n.expression.getText(sf).split('.').at(-1)!) || /^auth\.protect$/.test(n.expression.getText(sf)))) {   // (Clerk's auth.protect())
       const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn }) }
     }
     // TanStack Start server action: const book = createServerFn({ method: 'POST' }).middleware([auth]).validator(...).handler(async () => ...)
@@ -357,8 +403,10 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         if (servers.has(obj) && last === 'use') {
           const t = args.at(-1)!, spec = ts.isCallExpression(t) && t.expression.getText(sf) === 'require' ? str(t.arguments[0]) : undefined
           // app.use('/api/x', thing): a router, or a login check for everything under /api/x. appFacts decides by looking at the file.
-          if (arg?.startsWith('/') && (ts.isIdentifier(t) || spec)) f.mounts.push({ server: obj, path: arg, target: spec ?? t.getText(sf),
-            guard: guarded.has(obj) || args.slice(1, -1).some(isGuard), guardLike: args.length === 2 && !spec && isGuard(t), mw: [...guardMw.get(obj) ?? [], ...args.slice(1, -1).filter(isGuard).map(a => a.getText(sf))] })
+          // (a router made by a factory, createMessagesRouter(io): the function's file declares the routes)
+          const made = ts.isCallExpression(t) && ts.isIdentifier(t.expression) && !spec ? t.expression.text : undefined
+          if (arg?.startsWith('/') && (ts.isIdentifier(t) || spec || made)) f.mounts.push({ server: obj, path: arg, target: spec ?? made ?? t.getText(sf),
+            guard: guarded.has(obj) || args.slice(1, -1).some(isGuard), guardLike: args.length === 2 && !spec && !made && isGuard(t), mw: [...guardMw.get(obj) ?? [], ...args.slice(1, -1).filter(isGuard).map(a => a.getText(sf))] })
           else if (!arg && args.some(isGuard)) { guarded.add(obj); guardMw.set(obj, [...guardMw.get(obj) ?? [], ...args.filter(isGuard).map(a => a.getText(sf))]) }
         } else if (servers.has(obj) && HTTP.test(last) && arg?.startsWith('/') && args.length > 1) {
           addHandler(obj, last, arg, args.slice(1, -1), args.at(-1)!)
@@ -701,6 +749,15 @@ export function appFacts(snap: Snap) {
     // .NET: <PackageReference Include="Stripe.net" Version="47.0.0" />
     ...[...snap].filter(([p]) => p.endsWith('.csproj')).map(([, t]) => Object.fromEntries([...t.matchAll(/<PackageReference\s+Include="([^"]+)"(?:\s+Version="([^"]*)")?/g)].map(m => [m[1], m[2] ?? '*'])))) as Record<string, string>
   for (const p of files.keys()) { const r = route(p, 'next' in deps_); if (r) routes.set(p, r) }
+  // Next.js pages: logged in when the page, or a layout above it, turns guests away (`if (!session) redirect('/login')`).
+  // Reading the session to pick a "Log in" button, or sending logged-in people on from /login, doesn't.
+  for (const [p, r] of routes) if (r.kind === 'page' && /^(?:src\/)?(?:app|pages)\//.test(p)) {
+    const dirs = p.split('/').slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join('/')).filter(d => /^(?:src\/)?app(\/|$)/.test(d))
+    const layouts = dirs.flatMap(d => ['tsx', 'jsx', 'js', 'ts'].map(x => `${d}/layout.${x}`)).filter(l => files.has(l))
+    // (only the page or layout itself: not a "use server" function or a small component in the same file, not a guest-view return)
+    const own = (g?: FileFacts) => !!g && g.authIfs.some(x => !x.g && (g.pageFns ?? []).includes(x.fn))
+    files.get(p)!.auth = own(files.get(p)) || layouts.some(l => own(files.get(l)))
+  }
   // TanStack Start: route files are pages (or server routes); a login check on a parent layout covers its children.
   const browserPages = new Set<string>()
   if (Object.keys(deps_).some(d => /^@tanstack\/(react-start|start|react-router|solid-start)$/.test(d))) {
@@ -1614,6 +1671,17 @@ export function appFacts(snap: Snap) {
       for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'fetches', 'refuses'] as const) for (const x of hf[k]) unit[k].add(x)
       unit.money ||= hf.money
       if (p.endsWith('.py')) pyFold(p, hf, unit, new Set())
+      // a server action's helpers (sendMentionEmails in lib/email.ts, a service it calls): what they write and who they talk to
+      if (h.path.startsWith('(server action) ')) { const usedAll = new Set(hf.used); const follow = (at: string, g: FileFacts, depth: number, seen: Set<string>) => { if (depth > 3) return
+        for (const n of g.used) { const q = files.get(at)?.locals.has(n) ? at : target(at, n), c = q ? files.get(q)?.locals.get(n) : undefined
+          if (!c || seen.has(`${q}:${n}`)) continue
+          seen.add(`${q}:${n}`)
+          for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'refuses'] as const) for (const x of c[k]) unit[k].add(x)
+          for (const x of c.used) usedAll.add(x); if (c.auth || c.authStop || c.sbAuth) usedAll.add('auth')
+          unit.money ||= c.money; follow(q!, c, depth + 1, seen) } }
+        const seen = new Set([`${p}:${h.handler}`]); follow(p, hf, 0, seen)
+        // Next.js: nothing in it or its helpers about who's asking (no auth(), session, require*, user, role...): open to anyone
+        if (h.nextAction) h.unknown = hf.auth || hf.authStop || [...usedAll, ...[...seen].slice(1).map(x => x.split(':').pop()!)].some(n => AUTH.has(n) || REQUIRE_LOGIN.test(n) || /auth|session|user|require|ensure|guard|member|permission|role|admin|clerk|supabase|verify|token|jwt|viewer|cookies|headers/i.test(n)) }
       // opening the address (GET) changes or deletes things: a link alone can do it
       // (not a view that checks request.method == 'POST': its GET and POST share one body; not a views counter: F('views') + 1)
       const shared = f.handlers.some(o => o !== h && o.facts === h.facts && o.method !== 'GET')
@@ -1638,7 +1706,8 @@ export function appFacts(snap: Snap) {
       // (or a factory given the role, requireRole('admin'): its test is on a parameter plain doesn't follow)
       if ([...h.mw.map(n => ({ p, n })), ...pre!.mws].some(x => /admin|role|staff|superuser|permission/i.test(x.n) && readable(x.p, x.n) === undefined || /\(\s*['"](?:super[-_]?)?(?:admin|staff|superuser)['"]/i.test(x.n))) (unit as FileFacts & { adminish?: boolean }).adminish = true
       // (a GET that updates or deletes changes things too: its login decides, like a POST's)
-      const writes = h.method !== 'GET' || getWrites, guard = pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
+      // (a Next.js server action: its own structural check, not any auth() call next to a success redirect)
+      const writes = h.method !== 'GET' || getWrites, guard = h.nextAction ? handlerChecks(hf) : pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
       const u = unit as FileFacts & { w?: boolean[]; r?: boolean[]; wu?: string[]; ru?: string[]; wa?: boolean[]; ra?: boolean[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
@@ -1669,7 +1738,7 @@ export function appFacts(snap: Snap) {
   // <form method="POST"> sends to its own page: SvelteKit's form actions (also from a child component, folded in above); elsewhere it says nothing
   for (const [p, f] of files) for (const x of [...f.fetches]) if (x.endsWith(' @self')) { f.fetches.delete(x); if (svelteUrls.has(p)) f.fetches.add(`POST ${svelteUrls.get(p)}`) }
   // Reading the session in the browser redirects nobody; on a server (edge function, Next.js) it's a real check.
-  for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k)) files.get(k)!.auth = true
+  for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k) && !(routes.get(k)!.kind === 'page' && /^(?:src\/)?(?:app|pages)\//.test(k))) files.get(k)!.auth = true
   // Whether a page or address checks login is part of what it is: losing the check counts as a change.
   for (const k of routes.keys()) files.get(k)!.printed += `\n[login: ${files.get(k)!.auth}${files.get(k)!.admin ? ', admins only' : ''}]`
   const schemaPath = [...snap.keys()].find(p => p.endsWith('schema.prisma') && !p.includes('node_modules/'))
@@ -1714,11 +1783,14 @@ export function appFacts(snap: Snap) {
 // ---------- English ----------
 // Every sentence below is a fixed template filled with facts. No model writes any of it.
 
-const words = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[-_]/g, ' ').toLowerCase()
+// (AIRequest -> "AI request", ai_requests -> "AI requests": acronyms split off and kept in capitals)
+const ACRONYM: Record<string, string> = { ai: 'AI', api: 'API', sms: 'SMS', pdf: 'PDF', url: 'URL', faq: 'FAQ', csv: 'CSV', sso: 'SSO', otp: 'OTP' }
+const words = (s: string) => s.replace(/OAuth/g, 'Oauth').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').replace(/[-_]/g, ' ').toLowerCase()
+  .split(' ').map(w => ACRONYM[w] ?? w).join(' ')
 const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : /(sses|xes|ches|shes)$/.test(s) ? s.slice(0, -2) : s.endsWith('s') ? s.slice(0, -1) : s   // boxes -> box
-const pluralize = (s: string) => s.endsWith('s') ? s : s.endsWith('y') ? s.slice(0, -1) + 'ies' : s + 's'
+const pluralize = (s: string) => s.endsWith('s') ? s : /[^aeiou]y$/i.test(s) ? s.slice(0, -1) + 'ies' : s + 's'   // (keys, surveys, categories)
 export const things = (model: string) => pluralize(words(model))
-const an = (w: string) => (/^([aeio]|u(?!s|ni))/.test(w) ? 'an ' : 'a ') + w   // a user, an umbrella
+const an = (w: string) => ((/^[A-Z]{2}/.test(w) ? /^[AEFHILMNORSX]/.test(w) : /^([aeio]|u(?!s|ni))/i.test(w)) ? 'an ' : 'a ') + w   // a user, an umbrella, an AI request, an SMS
 export const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`
 const DATES: Record<string, string> = { createdAt: 'date created', updatedAt: 'date updated', expiresAt: 'expiry date', deletedAt: 'date deleted' }
 const camel = (c: string) => c.replace(/_([a-z])/g, (_, x) => x.toUpperCase())   // created_at -> createdAt
@@ -1727,7 +1799,7 @@ const fieldList = (fs: string[]) => list(fs.filter(f => !f.startsWith('→')).ma
 
 // "/products/[slug]/reviews" -> ["product", "reviews"]: a segment before a [param] is one of many
 export const named = (url: string): string[] => {
-  if (url.startsWith('(server action) ')) return [words(url.slice(16).split(' in ')[0])]
+  if (url.startsWith('(server action) ')) return [words(url.slice(16).split(' in ')[0].replace(/(?<=\w)Action$/, ''))]
   const segs = url.replace(/^\/functions\/v1\//, '/').split('/').filter(s => s && s !== 'api')
   return segs.flatMap((s, i) => s.startsWith('[') ? [] : [segs[i + 1]?.startsWith('[') ? singular(words(s)) : words(s)])
 }
@@ -1879,6 +1951,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         const can: string[] = [], creates = b.ops.has('create') || (b.writes && !b.ops.size)
         if (b.fns.has('GET')) can.push(`lists ${noun}`)
         if (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m))) can.push(creates ? (can.length && (!t || b.written.has(t)) ? 'saves new ones' : `saves new ${t && !b.written.has(t) && b.written.size ? things([...b.written][0]) : noun}`)
+          : b.ops.has('update') && b.ops.has('delete') && !['PUT', 'PATCH', 'DELETE'].some(m => b.fns.has(m)) ? `updates and deletes ${list([...(b.written.size ? b.written : [t ?? 'data'])].map(x => x === 'data' ? x : things(x)))}`   // (not which one each: plain doesn't keep that)
           : b.ops.has('update') ? `updates ${noun}` : b.ops.has('delete') ? `deletes ${noun}` : t ? `looks up ${noun}` : 'accepts requests')
         if (b.fns.has('PUT') || b.fns.has('PATCH')) can.push(`updates ${noun}`)
         if (b.fns.has('DELETE')) can.push(`deletes ${noun}`)
@@ -2246,15 +2319,18 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   for (const p of real) for (const r of (B.files.get(p) as PyFacts | undefined)?.risks ?? [])
     if (!(A.files.get(p) as PyFacts | undefined)?.risks?.has(r)) problems.push({ ...RISK[r], text: `${RISK[r].text} (in ${p})` })
   const newPyMigrations = B.pyMigrations.filter(m => !A.pyMigrations.includes(m))
-  if ([...B.pyModels, ...A.pyModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newPyMigrations.length)
+  if ([...B.pyModels, ...A.pyModels].some(m => JSON.stringify(A.models.get(m)) !== JSON.stringify(B.models.get(m))) && !newPyMigrations.length) {
+    // (Flask-Migrate's commands only when the app has it: not in a FastAPI app)
+    const fm = Object.keys(B.deps).some(k => /^flask[-_]migrate$/i.test(k))
     ship.push('django' in B.deps
       ? 'Update your database: run `python manage.py makemigrations`, then `python manage.py migrate` (also on your live site). The models changed, but no migration was created.'
-      : 'Update your database: create a migration (`alembic revision --autogenerate`, or `flask db migrate` with Flask-Migrate) and apply it (`alembic upgrade head` / `flask db upgrade`), also on your live site. The models changed, but no migration was created.')
+      : (fm ? 'Update your database: create a migration (`alembic revision --autogenerate`, or `flask db migrate` with Flask-Migrate) and apply it (`alembic upgrade head` / `flask db upgrade`), also on your live site.' : 'Update your database: create a migration (`alembic revision --autogenerate`) and apply it (`alembic upgrade head`), also on your live site.') + ' The models changed, but no migration was created.')
+  }
   // a migration the new code depends on: until it runs on the live database, those parts fail
   // one that only adds an index just speeds things up: nothing breaks if it runs late
   const indexOnly = (m: string) => { const up = (after.get(m) ?? '').split(/def downgrade/)[0], ops = [...up.matchAll(/migrations\.(\w+)\(|\b(?:op|batch_op)\.(\w+)\(/g)].map(x => x[1] ?? x[2]).filter(o => !/^(f|batch_alter_table)$/.test(o))
     return ops.length > 0 && ops.every(o => /^(AddIndex|RemoveIndex|RenameIndex|create_index|drop_index)$/.test(o)) }
-  const cmd = 'django' in B.deps ? '`python manage.py migrate`' : '`alembic upgrade head`, or `flask db upgrade` with Flask-Migrate'
+  const cmd = 'django' in B.deps ? '`python manage.py migrate`' : Object.keys(B.deps).some(k => /^flask[-_]migrate$/i.test(k)) ? '`alembic upgrade head`, or `flask db upgrade` with Flask-Migrate' : '`alembic upgrade head`'
   const needed = newPyMigrations.filter(m => !indexOnly(m)), speed = newPyMigrations.filter(indexOnly)
   if (needed.length) ship.push(`Apply ${list(needed)} to your live database before the new code goes live (${cmd}), or the parts that use it will fail.`)
   if (speed.length) ship.push(`Apply ${list(speed)} to your live database too (${cmd}). It only makes lookups faster, so nothing breaks if it runs later.`)
@@ -2272,6 +2348,15 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     if (users.length) problems.push({ kind: 'Broken', text: `${n}() was deleted from ${p}, but ${list(users)} still ${users.length > 1 ? 'use' : 'uses'} it, so that will break.` })
   }
   const kw = opts.asked ? keywords(opts.asked) : []
+  // Linked to the request through names this change adds: a file that adds isGuest or imageId, which a file of the request
+  // (it names what was asked for, or it's a page or an address) adds too
+  // (only names new to the whole app: not `error`, `async`, `data` or any word the app already had)
+  const ids = (t = '') => new Set(t.match(/[A-Za-z_]\w{3,}/g) ?? [])
+  const known = new Set([...before.values()].flatMap(t => [...ids(t)]))
+  const added_ = (a?: string, b?: string) => { const was = ids(a); return [...ids(b)].filter(x => !was.has(x) && !known.has(x) && !/^(async|await|const|function|return|export|import|static|class|self|this|true|false|null|None|True|False|error|data|value|result|items?)$/.test(x)) }
+  const ownFiles = real.filter(p => !p.includes('#') && (route(p) || kw.some(k => (after.get(p) ?? '').toLowerCase().includes(k))))
+  const askedIds = new Set(ownFiles.flatMap(p => added_(before.get(p), after.get(p))))
+  const linked = (a?: string, b?: string) => added_(a, b).some(x => askedIds.has(x))
   for (const p of real) {
     const a = A.files.get(p), b = B.files.get(p)
     if (kw.length && a && b && !route(p) && !kw.some(k => (after.get(p) ?? '').toLowerCase().includes(k))) {
@@ -2279,8 +2364,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       // Part of the feature if it adds something new (ApiError) that the rest of this change uses.
       const added = [...b.exports].filter(x => !a.exports.has(x))
       const feature = added.some(x => [...B.files].some(([q, f]) => q !== p && real.includes(q) && (f.used.has(x) || f.jsx.has(x))))
-      if (!fns.length && !feature) problems.push({ kind: 'Unasked', text: `The agent also changed ${p}, which doesn't look related to what you asked for.` })
-      for (const n of fns.filter(n => !added.some(x => new RegExp(`\\b${x}\\b`).test(b.fns.get(n) ?? '')))) {
+      if (!fns.length && !feature && !linked(before.get(p), after.get(p))) problems.push({ kind: 'Unasked', text: `The agent also changed ${p}, which doesn't look related to what you asked for.` })
+      for (const n of fns.filter(n => !added.some(x => new RegExp(`\\b${x}\\b`).test(b.fns.get(n) ?? '')) && !linked(a.fns.get(n), b.fns.get(n)))) {
         const u = usersOf(n, p)
         problems.push({ kind: 'Unasked', text: `The agent also changed ${n}() in ${p}, which doesn't look related to what you asked for.${u.length ? ` It's used by ${list(u)}, so check that ${u.length > 1 ? 'they' : 'it'} still ${u.length > 1 ? 'work' : 'works'}.` : ''}` })
       }
@@ -2339,7 +2424,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const svcBefore = new Set([...A.files.values()].flatMap(f => [...f.services]))
   for (const s of new Set([...B.files.values()].flatMap(f => [...f.services]))) if (!svcBefore.has(s))
     changes.push({ group: 'Outside services', isNew: true, text: EMAIL.has(s)
-      ? `Your app now sends emails${s === 'email' ? '' : ` through ${s}`}. People's email addresses are shared with ${s === 'email' ? 'the email provider' : s}.` : `Your app now uses ${s}.` })
+      ? `Your app now sends emails${s === 'email' ? '' : ` through ${s}`}. People's email addresses are shared with ${s === 'email' ? 'the email provider' : s}.`
+        : AI.has(s) ? `Your app now uses ${s}. What people write in it can be sent to ${s}, and each request costs you money.` : `Your app now uses ${s}.` })
 
   // Guesses about money, worded as questions. Each says it's a guess.
   const moneyChanged = real.some(p => B.files.get(p)?.money && route(p))
@@ -2390,7 +2476,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Check', text: "Cancelling doesn't give money back: nothing in your app refunds a Stripe payment. If someone cancels after paying, they stay charged. (This is a guess.)" })
   // "I couldn't run the tests", "didn't get a chance to test", "tests not run", "untested", "the suite still needs to be run";
   // not "I didn't change the tests", "no (new) tests need to be run"
-  const NOT_RUN = /\b(did ?n[o'’]?t|could ?n[o'’]?t|was ?n[o'’]?t able to|were ?n[o'’]?t able to|unable to|not able to|have ?n[o'’]?t|has ?n[o'’]?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\b(tests?|test suite|suite|build|it|this|app|code)\s+(could|can|did|were|was) ?n[o'’]?t\s+be\s+(run|executed|tested|verified|built)\b|\buntested\b|\b(?<!\b(no|nothing)\s+(?:\w+\s+)?)(tests?|test suite|suite|it|this|everything)\s+(still\s+)?needs?\s+to\s+(be\s+)?(run|tested)\b/i
+  const NOT_RUN = /\b(did ?n[o'’]?t|could ?n[o'’]?t|was ?n[o'’]?t able to|were ?n[o'’]?t able to|unable to|not able to|have ?n[o'’]?t|has ?n[o'’]?t)\s+(?:(?:actually|yet|been able to|get to|get a chance to|have time to|manage to|be able to)\s+)?(run|test|build|verify|start|try|install|execute)\b|\b(tests?|build|it|this|app|code)\s+(?:(?:was|were|has|have)\s+)?not\s+(?:been\s+)?(run|tested|verified|built)\b|\b(tests?|test suite|suite|build|it|this|app|code)\s+(could|can|did|were|was) ?n[o'’]?t\s+be\s+(run|executed|tested|verified|built)\b|\buntested\b|\b(?:tests?|testing)\s+(?:was|were|is|are) ?n[o'’]?t\s+(?:possible|available|feasible)\b|\b(?:tests?|testing)\s+(?:was|were)\s+(?:unavailable|impossible)\b|\b(?:tests?|testing|builds?|compilation)\s+(?:could|can) ?n[o'’]?t\s+(?:run|complete)\b|\b(?<!\b(no|nothing)\s+(?:\w+\s+)?)(tests?|test suite|suite|it|this|everything)\s+(still\s+)?needs?\s+to\s+(be\s+)?(run|tested)\b/i
   // "fix it", "it's weird", "make it faster" without saying what's wrong: the agent had to guess what to fix
   const ask = said(opts.asked)
   if (/\b(fix (it|this|that|things)|broken|weird|buggy|not working|doesn'?t work|isn'?t working|glitchy|janky|(is|so|too|kinda|really) slow|make it faster|speed it up)\b/i.test(ask)

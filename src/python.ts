@@ -220,6 +220,8 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
   for (const cls of all(root, 'class_definition')) {
     const sup = cls.childForFieldName('superclasses')?.text ?? ''
     if (!/\b(db\.Model|models\.Model|Base|DeclarativeBase)\b|table\s*=\s*True/.test(sup)) continue   // not BaseModel (pydantic)
+    // (class Base(DeclarativeBase): the base every model builds on, and `__abstract__ = True` mixins: not tables)
+    if (/^\(\s*(?:(?:AsyncAttrs|MappedAsDataclass)\s*,\s*)*DeclarativeBase(?:NoMeta)?(?:\s*,\s*(?:AsyncAttrs|MappedAsDataclass))*\s*\)$/.test(sup) || /^\s*__abstract__\s*=\s*True/m.test(cls.childForFieldName('body')?.text ?? '')) continue
     const fields: string[] = []
     for (const st of cls.childForFieldName('body')?.namedChildren ?? []) {
       const a = st?.type === 'expression_statement' ? st.namedChildren[0] : undefined
