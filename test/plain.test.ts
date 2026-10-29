@@ -3680,3 +3680,60 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   assert.ok(!c.includes('nothing limits spam'), c)
   console.log('ok (spam limiter)')
 }
+// "Room members only ✓" for Socket.IO events: the handler's first step turns away anyone not in the room it names, with a member check
+// on the logged-in socket user, and everything after stays in that room
+{
+  const schema = 'model User {\n  id String @id\n  displayName String\n  messages Message[]\n}\nmodel RoomMember {\n  roomId String\n  userId String\n  joinedAt DateTime\n  @@id([roomId, userId])\n}\nmodel Message {\n  id String @id\n  roomId String\n  userId String\n  body String\n  user User @relation(fields: [userId], references: [id])\n}\n'
+  const pkg = { 'package.json': '{"dependencies":{"express":"4.0.0","socket.io":"4.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': schema }
+  const helper = 'async function isMember(roomId: string, userId: string): Promise<boolean> {\n  return Boolean(await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId, userId } }, select: { roomId: true } }))\n}\n'
+  const guard = 'io.use((socket, next) => {\n  const token = socket.handshake.auth.token\n  if (!token) return next(new Error("Authentication required"))\n  socket.data.user = verifyToken(token)\n  next()\n})\n'
+  const send = (body: string) => `  socket.on("send message", async (payload: any, ack?: any) => {\n    try {\n${body}\n    } catch {\n      ack?.({ ok: false })\n    }\n  })\n`
+  const ok = '      const roomId = typeof payload?.roomId === "string" ? payload.roomId : ""\n      if (!(await isMember(roomId, user.id))) {\n        ack?.({ ok: false })\n        return\n      }\n      const message = await prisma.message.create({ data: { roomId, userId: user.id, body: String(payload.body) } })\n      io.to(`room:${roomId}`).emit("new message", message)'
+  const file = (h: string, body: string, g = guard) => ({ 'server/socket.ts': `import { Server } from "socket.io"\nimport { prisma } from "./prisma"\n${h}export function setup(io: Server) {\n${g}io.on("connection", (socket) => {\n  const user = socket.data.user\n${send(body)}})\n}\n` })
+  const card = (files: Record<string, string>) => report(new Map(Object.entries(pkg)), new Map(Object.entries({ ...pkg, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+  let c = card(file(helper, ok))
+  assert.ok(c.includes('"send message" (saves new messages, room members only ✓)'), c)
+  const no = (files: Record<string, string>, why: string) => { const x = card(files); assert.ok(!x.includes('room members only'), `${why}: ${x}`) }
+  no(file(helper, ok.replace('      if (!(await isMember(roomId, user.id))) {\n        ack?.({ ok: false })\n        return\n      }\n', '') + '\n      if (!(await isMember(roomId, user.id))) return'), 'check after the write')
+  no(file(helper.replace('roomId_userId: { roomId, userId }', 'roomId_userId: { roomId, userId: roomId }'), ok), 'helper ignores the user')
+  no(file(helper, ok.replace('isMember(roomId, user.id)', 'isMember(roomId, payload.userId)')), 'user from the payload')
+  no(file(helper, ok.replace('io.to(`room:${roomId}`)', 'io.to(`room:${payload.other}`)')), 'another room')
+  no(file(helper, ok.replace('if (!(await isMember(roomId, user.id)))', 'if (payload.strict && !(await isMember(roomId, user.id)))')), 'and')
+  no(file(helper.replace('  return Boolean(', '  try {\n    return Boolean(').replace('}\n', '} catch { return true }\n}\n'), ok), 'helper swallows errors')
+  no(file(helper, ok, ''), 'no connection login')
+  no(file(helper, ok.replace('const roomId =', 'let roomId =') + '\n      roomId = payload.next'), 'room reassigned')
+  no(file(helper, ok.replace('        ack?.({ ok: false })\n        return\n', '        ack?.({ ok: false })\n')), 'no return')
+  // (review 38) everyone gets it, the user rebound from what the client sends, a call that writes elsewhere, a room that isn't a string,
+  // a token decoded without checking, related rows of other rooms, a member who may have left
+  no(file(helper, ok.replace('io.to(`room:${roomId}`).emit', 'io.emit')), 'io.emit')
+  no(file(helper, ok.replace('io.to(`room:${roomId}`).emit', 'socket.broadcast.emit')), 'broadcast')
+  no(file(helper, '      const { user } = payload\n' + ok), 'user rebound')
+  no(file(helper + 'async function save(roomId: string, userId: string) {\n  await prisma.message.create({ data: { roomId, userId, body: "x" } })\n}\n', ok + '\n      await save(payload.other, user.id)'), 'call that writes')
+  no(file(helper, ok.replace('const roomId = typeof payload?.roomId === "string" ? payload.roomId : ""', 'const roomId = payload.roomId')), 'room not a string')
+  no(file(helper, ok, guard.replace('verifyToken(token)', 'jwt.decode(token)')), 'decode')
+  no(file(helper, ok.replace('body: String(payload.body) } })', 'body: String(payload.body) }, include: { user: { include: { messages: true } } } })')), 'nested include')
+  no(file(helper, ok.replace('body: String(payload.body) } })', 'body: String(payload.body) }, include: { user: { select: { displayName: true, messages: true } } } })')), 'select relation')
+  // (review 38b) a helper of the connection that writes, a service object, an auto-join member check, an emit through ?.
+  no(file(helper, ok.replace('      const message =', '      const save = async (r: string) => prisma.message.deleteMany({ where: { roomId: r } })\n      await save(payload.other)\n      const message =')), 'connection helper')
+  const svc = file(helper, ok + '\n      await messages.remove(payload.id)'); svc['server/socket.ts'] = svc['server/socket.ts'].replace('import { prisma } from "./prisma"', 'import { prisma } from "./prisma"\nimport { messages } from "./services"')
+  no(svc, 'service object')
+  no(file(helper.replace('  return Boolean(', '  await prisma.roomMember.upsert({ where: { roomId_userId: { roomId, userId } }, create: { roomId, userId }, update: {} })\n  return Boolean('), ok), 'auto-join')
+  no(file(helper, ok.replace('io.to(`room:${roomId}`).emit', 'io.emit?.')), 'emit ?.')
+  // (review 38c) a callback's parameter named like an imported writer, the server handed to a helper, the user's id set from the client
+  const store = file(helper, ok + '\n      const rows = ["a"].map((msgStore) => msgStore.trim())\n      await msgStore.create({ roomId: payload.other, body: rows[0] })'); store['server/socket.ts'] = store['server/socket.ts'].replace('import { prisma } from "./prisma"', 'import { prisma } from "./prisma"\nimport { msgStore } from "./store"')
+  no(store, 'shadowed import')
+  no(file(helper + 'async function wipe(r: string) {\n  await prisma.message.deleteMany({ where: { roomId: r } })\n}\n', ok + '\n      try { JSON.parse("x") } catch (wipe) { console.log(wipe) }\n      await wipe(payload.other)'), 'catch shadows')
+  no(file(helper + 'function shout(s: any, x: string) {\n  s.send(x)\n}\n', ok + '\n      shout(io, "hi")'), 'server handed over')
+  no(file(helper, '      user.id = payload.as\n' + ok), 'user id set')
+  // (review 38e) code in a parameter's default runs before the guard; another listener for the same event
+  no(file(helper, ok).replace ? (() => { const f = file(helper, ok); f['server/socket.ts'] = f['server/socket.ts'].replace('async (payload: any, ack?: any)', 'async (payload: any, ack: any = void prisma.message.deleteMany({ where: {} }))'); return f })() : {}, 'default parameter')
+  const second = file(helper, ok); second['server/socket.ts'] = second['server/socket.ts'].replace('io.on("connection", (socket) => {\n  const user = socket.data.user\n', 'io.on("connection", (socket) => {\n  const user = socket.data.user\n  const EV = "send message"\n  socket.on(EV, async () => { await prisma.message.deleteMany({ where: {} }) })\n')
+  no(second, 'second listener')
+  const leftSchema = { 'prisma/schema.prisma': schema.replace('  joinedAt DateTime\n', '  joinedAt DateTime\n  leftAt DateTime?\n') }
+  c = report(new Map(Object.entries({ ...pkg, ...leftSchema })), new Map(Object.entries({ ...pkg, ...leftSchema, ...file(helper, ok) })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(!c.includes('room members only'), `left: ${c}`)
+  // a plain field of the author is fine
+  c = card(file(helper, ok.replace('body: String(payload.body) } })', 'body: String(payload.body) }, include: { user: { select: { displayName: true } } } })')))
+  assert.ok(c.includes('room members only ✓'), c)
+  console.log('ok (room members)')
+}

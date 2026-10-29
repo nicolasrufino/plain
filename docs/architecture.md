@@ -88,7 +88,11 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 - **Limits and AI answers.** Limits written as constants (new, changed, replaced, gone, "no limit now"). A guess when a
   per-day limit is replaced by one that never resets, and when AI answers get a length cap nothing checks.
 - **Live connection (Socket.IO).** The events the server now takes and what each one does, with "Connecting needs a
-  login ✓" from its own `io.use` guard. A guard that's gone is a thing to decide.
+  login ✓" from its own `io.use` guard. A guard that's gone is a thing to decide. An event reads "room members only ✓"
+  when its first step turns away anyone not in the room it names, on the logged-in socket user, and everything after
+  stays in that room. Every name the handler uses is resolved with the language's own scoping (`outerRefs` in
+  `src/members.ts`) and must be the user, the socket, the server, Prisma, the member check, or a helper that touches
+  nothing.
 - **Uploads.** A new way for people to send files is described: what's accepted, how big, and where files go. It's a
   guess-worded problem when nothing caps the size, or how much one person can upload (except admin-only uploads), or when
   SVG is allowed.

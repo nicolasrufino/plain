@@ -6,7 +6,7 @@
 //
 // ponytail: Next.js (app/ and pages/), Express-style servers, React Router, Prisma, Supabase, Stripe. Each framework is one more fact extractor.
 import { adminCond, adminPos, FROM_REQUEST } from './admin.ts'
-import { memberCheck, keepsTo, scan, topLevel, roleGate } from './members.ts'
+import { memberCheck, keepsTo, scan, topLevel, roleGate, roomOnly, free, boundAll, aroundNames } from './members.ts'
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
@@ -1885,7 +1885,7 @@ export function appFacts(snap: Snap) {
   const pyModels = new Set<string>()
   for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()), rbModels: new Set(rbModels.keys()), goModels: new Set(goModels.keys()), goGorm, goDb, goOld,
+    files, routes, db, models: all, schemaPath, target, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()), rbModels: new Set(rbModels.keys()), goModels: new Set(goModels.keys()), goGorm, goDb, goOld,
     goMigrations: [...snap.keys()].some(p => /(^|\/)go\.mod$/.test(p)) ? [...snap.keys()].filter(goMigration) : [],
     rbMigrations: [...snap.keys()].filter(p => /(^|\/)db\/migrate\/[^/]+\.rb$/.test(p)),
     phpMigrations: [...snap.keys()].filter(p => /(^|\/)database\/migrations\/[^/]+\.php$/.test(p)),
@@ -2960,7 +2960,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Check', text: `AI answers now have a length cap (max_tokens), and nothing checks whether an answer was cut short. A cut-off answer looks complete to people, and gets used as if it were. Check the finish reason and tell them. (This is a guess.)` })
   // Socket.IO: events the live connection now takes, what each one does, and whether connecting needs a login (that file's own
   // io.use guard). A guard that's gone is a problem.
-  // ponytail: per event name; who may send each one (room members, moderators) isn't read; plain WebSockets (ws) aren't read
+  // ponytail: per event name; room members are read (roomOnly), moderators aren't; plain WebSockets (ws) aren't read
   const evsBefore = new Set([...A.files.values()].flatMap(f => [...f.socketEvents?.keys() ?? []]))
   for (const p of real) { const b = B.files.get(p)
     const evs = [...b?.socketEvents ?? []].filter(([ev]) => !evsBefore.has(ev))
@@ -2969,7 +2969,19 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const one = ([ev, g0]: [string, FileFacts]) => { const g = facts(ev, g0), ts_ = list([...g.written].map(things))
       // (one kind of write: its verb; more than one: "changes", since plain doesn't keep which table gets which)
       const v = !g.written.size ? '' : g.ops.size > 1 ? `changes ${ts_}` : g.ops.has('create') ? `saves new ${ts_}` : g.ops.has('delete') ? `deletes ${ts_}` : g.ops.has('update') ? `updates ${ts_}` : `saves ${ts_}`
-      return `"${ev}"${v ? ` (${v})` : ''}` }
+      // (room members only: its first step turns away anyone not in the room it names, and it stays in that room; src/members.ts)
+      const ft = after.get(p) ?? '', tl = topLevel(ft), scalars = new Set([...B.models.values()].flat().filter(x => !x.startsWith('→')))
+      // (a function it calls: one of this file or one it imports, read, that does nothing: no database, no sockets, no network)
+      // (it takes nothing from around it but JavaScript's own built-ins: no other helper, no database, no sockets)
+      const callOk = (n: string) => { const q = b.locals.has(n) ? p : B.target(p, n), c = q ? B.files.get(q)?.locals.get(n) : undefined
+        // (and binds no name its own file declares at the top, which would make `free` miss a use of the outer one)
+        const tops = q ? aroundNames(after.get(q) ?? '').top : new Set<string>()
+        return !!c && !c.tables.size && !c.writes && !c.outside.size && !/prisma|\bawait\b|\.emit\s*\(|\.to\s*\(|\.join\s*\(|\.send\s*\(|\.write\s*\(|fetch\s*\(|\.constructor\b/.test(c.printed)
+          && [...free(c.printed)].every(x => x === n) && ![...boundAll(c.printed)].some(x => x !== n && tops.has(x)) }
+      const room = b.socketAuth && roomOnly(g.printed, ft, new Map([...tl, ...[...b.binds.keys()].map(k => [k, { fn: true, text: '' }] as [string, { fn: boolean; text: string }])].filter(([k]) => k !== 'prisma')),
+        { callOk, scalars, fields: m => B.models.get(m), ev })
+      const what = [v, room ? 'room members only ✓' : ''].filter(Boolean).join(', ')
+      return `"${ev}"${what ? ` (${what})` : ''}` }
     changes.push({ group: 'Server', isNew: true, text: `Your server now takes ${list(evs.map(one))} over its live connection.${b.socketAuth ? ' Connecting needs a login ✓' : ''}`, detail: p }) }
   // (gone for real: no guard plain reads anywhere, and no io.use left at all: a moved, renamed or rewritten one isn't gone)
   const anyUse = [...B.files.values()].some(f => f.socketAuth || f.socketGuardish)
