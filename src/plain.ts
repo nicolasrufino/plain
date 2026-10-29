@@ -72,6 +72,7 @@ export type FileFacts = {
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
   authStop: boolean; authReturn: boolean   // turns away people who aren't logged in (see loginGroups); authReturn: the same check ending in a return
   exportAuth?: boolean                    // Nuxt: the default-exported handler itself checks login
+  socketEvents?: Map<string, FileFacts>; socketRefs?: Map<string, string>; socketAuth?: boolean; socketGuardish?: boolean   // Socket.IO: socket.on('send message', ...) and what each does; io.use(...) turning away connections without a login
   pageFns?: number[]   // Next.js: where the default export (the page or layout itself) and getServerSideProps start
   authIfs: { g: string; at: number; fn: number }[]; skipIfs: { c: string; at: number; fn: number }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
@@ -341,6 +342,43 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     // requireUserSession(event): everywhere, or only where the ifs around it say
     if (ts.isCallExpression(n) && (REQUIRE_LOGIN.test(n.expression.getText(sf).split('.').at(-1)!) || /^auth\.protect$/.test(n.expression.getText(sf)))) {   // (Clerk's auth.protect())
       const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn }) }
+    }
+    // Socket.IO (server only: a file importing 'socket.io', not the client): inside io.on('connection', socket => ...), each
+    // socket.on / once('event', handler) is an event the live connection takes (not the built-in disconnect / error).
+    // io.use((socket, next) => { if (!token) return next(new Error(...)) }) on that same server: connecting needs a login.
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && /^(on|use)$/.test(n.expression.name.text) && (/from\s+['"]socket\.io['"]|require\(\s*['"]socket\.io['"]\s*\)/.test(sf.text) || /\bio\.on\(\s*['"]connection/.test(sf.text) && !/socket\.io-client|from\s+['"]ws['"]|require\(\s*['"]ws['"]\s*\)/.test(sf.text)) && !/(^|\/)(tests?|__tests__)\/|\.(test|spec)\.[jt]sx?$/.test(sf.fileName)) {
+      const recv = n.expression.expression.getText(sf)
+      // (the Server that socket.io gives, under the name it's imported as: not node:http's Server)
+      const ioName = sf.text.match(/import\s*\{[^}]*\bServer(?:\s+as\s+(\w+))?[^}]*\}\s*from\s*['"]socket\.io['"]/)?.[1] ?? (/import\s*\{[^}]*\bServer\b[^}]*\}\s*from\s*['"]socket\.io['"]/.test(sf.text) ? 'Server' : undefined)
+      const servers = new Set(['io', ...ioName ? [...sf.text.matchAll(new RegExp(String.raw`(\w+)\s*=\s*new\s+${ioName}\s*\(`, 'g'))].map(m => m[1]) : []])
+      const cb = n.arguments.at(-1)
+      if (n.expression.name.text === 'on' && servers.has(recv) && /^(connection|connect)$/.test(str(n.arguments[0]) ?? '') && cb && fnLike(cb)) {
+        const sock = (cb as ts.ArrowFunction).parameters[0]?.name.getText(sf)
+        const walk = (x: ts.Node): void => {
+          if (sock && ts.isCallExpression(x) && ts.isPropertyAccessExpression(x.expression) && /^(on|once)$/.test(x.expression.name.text) && x.expression.expression.getText(sf) === sock) {
+            const ev = str(x.arguments[0]), fn = x.arguments.at(-1)
+            if (ev && fn && !/^(disconnect|disconnecting|error)$/.test(ev)) {
+              ;(f.socketEvents ??= new Map()).set(ev, fnLike(fn) ? collect(sf, fn, empty(printer.printNode(ts.EmitHint.Unspecified, fn, sf))) : empty(''))
+              if (ts.isIdentifier(fn)) (f.socketRefs ??= new Map()).set(ev, fn.text)
+            }
+          }
+          ts.forEachChild(x, walk)
+        }
+        walk(cb)
+      }
+      // (a guard plain may not read: a named one, io.use(requireLogin), or one that can turn people away, next(new Error(...)):
+      // its being there means a guard isn't gone; not io.use(wrap(session)) or one that only logs)
+      // (a local one is read: it has to be able to turn people away and be about who's asking, not a logger or a rate limiter)
+      const looksLogin = (t: string) => /next\s*\(\s*new\s+Error/.test(t) && /token|cookie|auth|jwt|session|user/i.test(t)
+      if (n.expression.name.text === 'use' && servers.has(recv) && cb) {
+        const local = ts.isIdentifier(cb) ? sf.statements.map(st => ts.isFunctionDeclaration(st) && st.name?.text === cb.text ? st.getText(sf) : ts.isVariableStatement(st) ? st.declarationList.declarations.find(d => ts.isIdentifier(d.name) && d.name.text === cb.text)?.getText(sf) : undefined).find(Boolean) : undefined
+        if (ts.isIdentifier(cb) ? local === undefined || looksLogin(local) : fnLike(cb) && looksLogin(cb.getText(sf))) f.socketGuardish = true
+      }
+      // (the guard's own test is about who's asking: `if (!token)`, not `if (!room)`)
+      if (n.expression.name.text === 'use' && servers.has(recv) && cb && fnLike(cb) && /^socket$/.test((cb as ts.ArrowFunction).parameters[0]?.name.getText(sf) ?? '')) {
+        const m = cb.getText(sf).match(/if\s*\(\s*!\s*([\w.?]+)\s*\)\s*(?:\{\s*)?return\s+next\s*\(\s*new\s+Error/)
+        if (m && /token|cookie|auth|jwt|session|user/i.test(m[1])) f.socketAuth = true
+      }
     }
     // TanStack Start server action: const book = createServerFn({ method: 'POST' }).middleware([auth]).validator(...).handler(async () => ...)
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && /^createServerFn\b/.test(n.initializer.getText(sf))) {
@@ -2625,6 +2663,24 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // (old rows are already freed if main freed them, if only recent pending rows count, or if the change expires them)
   else if (holds && grew && byStripe(CA) && !byTime(CA) && !byStripe(CB) && !byTime(CB) && [...CB.values()].some(makesPending) && !cleansUp(CA))
     problems.push({ kind: 'Check', text: "Old unpaid checkouts already in your database now take up spots, and nothing will free them: their payment pages expired long ago, so Stripe won't say so again. Before this goes live, mark the old unpaid (\"pending\") orders as expired. (This is a guess.)" })
+  // Socket.IO: events the live connection now takes, what each one does, and whether connecting needs a login (that file's own
+  // io.use guard). A guard that's gone is a problem.
+  // ponytail: per event name; who may send each one (room members, moderators) isn't read; plain WebSockets (ws) aren't read
+  const evsBefore = new Set([...A.files.values()].flatMap(f => [...f.socketEvents?.keys() ?? []]))
+  for (const p of real) { const b = B.files.get(p)
+    const evs = [...b?.socketEvents ?? []].filter(([ev]) => !evsBefore.has(ev))
+    if (!b || !evs.length) continue
+    const facts = (ev: string, g: FileFacts) => { const r = b.socketRefs?.get(ev); return r ? b.locals.get(r) ?? g : g }
+    const one = ([ev, g0]: [string, FileFacts]) => { const g = facts(ev, g0), ts_ = list([...g.written].map(things))
+      // (one kind of write: its verb; more than one: "changes", since plain doesn't keep which table gets which)
+      const v = !g.written.size ? '' : g.ops.size > 1 ? `changes ${ts_}` : g.ops.has('create') ? `saves new ${ts_}` : g.ops.has('delete') ? `deletes ${ts_}` : g.ops.has('update') ? `updates ${ts_}` : `saves ${ts_}`
+      return `"${ev}"${v ? ` (${v})` : ''}` }
+    changes.push({ group: 'Server', isNew: true, text: `Your server now takes ${list(evs.map(one))} over its live connection.${b.socketAuth ? ' Connecting needs a login ✓' : ''}`, detail: p }) }
+  // (gone for real: no guard plain reads anywhere, and no io.use left at all: a moved, renamed or rewritten one isn't gone)
+  const anyUse = [...B.files.values()].some(f => f.socketAuth || f.socketGuardish)
+  for (const p of real) { const a = A.files.get(p), b = B.files.get(p)
+    if (a?.socketAuth && b?.socketEvents?.size && !b.socketAuth && !anyUse)
+      problems.push({ kind: 'Check', text: `Connecting to your server's live connection no longer needs a login (in ${p}): anyone can send ${list([...b.socketEvents.keys()].map(e => `"${e}"`))}. Make sure that's what you want.` }) }
   // Uploads: a new way for people to send files. Counted where files come in from a request (multer, express.raw with a file
   // type, formData().get(...) as File in server code, readMultipartFormData, Fastify's req.file(), request.files / FILES,
   // UploadFile, MultiPartParser, ImageField / FileField, Active Storage, $request->file / ->store, FormFile, IFormFile,

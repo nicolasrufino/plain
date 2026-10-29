@@ -640,8 +640,7 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
 
    Known miss: a new upload with no size limit, added beside a size-checked one in the same file, gets no size warning.
    When files live in the database, add that a full disk stops the whole app.
-2. **Socket.IO events and their access** (all Porch cards). "Live chat needs a login ✓", "only people in
-   that room ✓", and "pictures appear live for everyone in the room".
+2. ✅ **Socket.IO events and their access** (all Porch cards). Fixed later. The server's live events and what each one does are now listed, and "Connecting needs a login ✓" is shown when the server's own `io.use` turns away connections without a token. Porch now reads: "Your server now takes "join room", "leave room", "send message" (saves new messages) and "typing" over its live connection. Connecting needs a login ✓". A login check that's really gone is raised. Review 29 took five rounds (9, 3, 1, 2, then clean). It took out browser listeners, bots and other clients, other servers' guards, loggers and rate limiters. Still open: "only people in that room ✓", which needs reading each event's own membership check.
 3. **AI cost and limit changes** (Quill p1 🔴, p5 🔴):
    - a date window removed from a usage count: "The limit no longer resets. Existing users who already
      used 20 lose the AI as soon as this ships";

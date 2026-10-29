@@ -2858,6 +2858,117 @@ show('H3 public Next route: admin branch (if (user.isAdmin)) before the file rea
   assert.ok(got.size === 3, 'review 28 r4: three cases')
   console.log('ok (review 28, round 4)')
 }
+// Socket.IO (round 10): the live connection's events and what they do; login only from an io.use that turns away connections
+// without a token
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"express":"4.19.0","socket.io":"4.8.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Message {\n  id Int @id\n  body String\n}\n' }
+  const sock = (use: string) => `import { Server } from 'socket.io'\nimport { prisma } from './db.js'\nexport function setup(io: Server) {\n${use}\n  io.on('connection', (socket) => {\n    socket.on('send message', async (body) => { await prisma.message.create({ data: { body } }) })\n    socket.on('typing', () => socket.broadcast.emit('typing'))\n    socket.on('disconnect', () => {})\n  })\n}\n`
+  const guard = "  io.use((socket, next) => {\n    const token = socket.handshake.auth.token\n    if (!token) return next(new Error('Authentication required'))\n    next()\n  })"
+  const c = card(base, { ...base, 'src/socket.ts': sock(guard) })
+  assert.ok(c.includes('Your server now takes "send message" (saves new messages) and "typing" over its live connection. Connecting needs a login ✓'), `socket events\n${c}`)
+  assert.ok(!c.includes('"disconnect"'), 'socket: built-in events left out')
+  const open = card(base, { ...base, 'src/socket.ts': sock("  io.use((socket, next) => { socket.data.user = socket.handshake.auth.user; next() })") })
+  assert.ok(open.includes('over its live connection') && !open.includes('Connecting needs a login'), `socket: an io.use that turns nobody away\n${open}`)
+  // (review 29) the guard is that server's own and about who's asking; events only from the server's connection handler
+  const ev = (files: Record<string, string>, before: Record<string, string> = {}) => card({ ...base, ...before }, { ...base, ...files })
+  const noTick = [
+    { 'src/socket.ts': sock(''), 'src/old/unused.ts': `import { Server } from 'socket.io'\nconst other = new Server(4001)\nother.use((socket, next) => {\n  const token = socket.handshake.auth.token\n  if (!token) return next(new Error('no'))\n  next()\n})\n` },
+    { 'src/socket.ts': sock("  io.use((socket, next) => {\n    const room = socket.handshake.query.room\n    if (!room) return next(new Error('room required'))\n    socket.data.user = null\n    next()\n  })") },
+    { 'src/socket.ts': sock(''), 'src/server.ts': "import express from 'express'\nconst server = express()\nserver.use((req, res, next) => {\n  const token = req.cookies.token\n  if (!token) return next(new Error('unauthorized'))\n  next()\n})\n" },
+    { 'src/socket.ts': sock(''), 'test/socket.test.ts': sock(guard) },
+  ]
+  for (const f of noTick) assert.ok(!ev(f).includes('Connecting needs a login'), `socket: no ✓ from another server, an unrelated check, Express or a test\n${ev(f)}`)
+  const client = { 'src/Chat.tsx': "import { io } from 'socket.io-client'\nconst socket = io()\nexport default function Chat() {\n  socket.on('new message', (m) => console.log(m))\n  return <main><h1>Chat</h1></main>\n}\n", 'src/bot.ts': "import { Client } from 'discord.js'\nconst client = new Client({})\nclient.on('messageCreate', async (m) => { await prisma.message.create({ data: { body: m.content } }) })\n" }
+  assert.ok(!ev(client).includes('over its live connection'), 'socket: browser listeners and a discord bot aren\'t the server\'s events')
+  const gone = ev({ 'src/socket.ts': sock('') }, { 'src/socket.ts': sock(guard) })
+  assert.ok(gone.includes("Connecting to your server's live connection no longer needs a login"), `socket: guard removed\n${gone}`)
+  assert.ok(!ev({ 'src/sockets/index.ts': sock(guard) }, { 'src/socket.ts': sock(guard) }).includes('over its live connection'), 'socket: a moved file isn\'t new')
+  console.log('ok (socket.io)')
+}
+// Review 29, round 2: a guard that moved, became a named function, renamed its parameter or changed shape isn't gone; mixed
+// writes say "changes"; node:http's Server isn't socket.io's
+{
+  const base = { 'package.json': '{"dependencies":{"express":"4.19.0","socket.io":"4.8.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Message {\n  id Int @id\n  body String\n}\n' }
+  const got = new Map<string, string>()
+  {
+const run = (name: string, after: Record<string, string>, before: Record<string, string> = {}) => {
+  const out = report(new Map(Object.entries({ ...base, ...before })), new Map(Object.entries({ ...base, ...after })), { ref: 'main' }).replace(/\s+/g, ' ')
+  const m = out.match(/(Your server now takes.*?live connection\.(?: Connecting needs a login ✓)?|Connecting to your server's live connection no longer needs a login.*?want\.)/g)
+  got.set(name, m ? m.join('\n') : '')
+}
+const ev = `  io.on('connection', (socket) => {\n    socket.on('send message', async (body) => { await prisma.message.create({ data: { body } }) })\n  })\n`
+const guardIn = `  io.use((socket, next) => { const token = socket.handshake.auth.token; if (!token) return next(new Error('no')); next() })\n`
+const file = (inner: string) => `import { Server } from 'socket.io'\nimport { prisma } from './db.js'\nexport function setup(io: Server) {\n${inner}}\n`
+const old = { 'src/socket.ts': file(guardIn + ev) }
+// R1 guard moved to index.ts (still guarding the same io), events unchanged
+run('R1 guard moved to another file', { 'src/socket.ts': file(ev), 'src/index.ts': `import { Server } from 'socket.io'\nimport { setup } from './socket.js'\nconst io = new Server(3000)\nio.use((socket, next) => { const token = socket.handshake.auth.token; if (!token) return next(new Error('no')); next() })\nsetup(io)\n` }, old)
+// R2 guard refactored into a named function in the same file
+run('R2 guard refactored to io.use(requireLogin)', { 'src/socket.ts': file(`  io.use(requireLogin)\n` + ev) + `function requireLogin(socket, next) { const token = socket.handshake.auth.token; if (!token) return next(new Error('no')); next() }\n` }, old)
+// R3 guard param renamed
+run('R3 guard param renamed socket -> s', { 'src/socket.ts': file(guardIn.replace('(socket, next)', '(s, next)').replace('socket.handshake', 's.handshake') + ev) }, old)
+// R4 guard rewritten with braces + throw-free form if (!token) { next(new Error()); return }
+run('R4 guard rewritten: if (!token) { next(new Error(...)); return }', { 'src/socket.ts': file(`  io.use((socket, next) => { const token = socket.handshake.auth.token; if (!token) { next(new Error('no')); return } next() })\n` + ev) }, old)
+// R5 mixed ops: create message + update room
+run('R5 create message + update room', { 'prisma/schema.prisma': 'model Message {\n  id Int @id\n  body String\n}\nmodel Room {\n  id Int @id\n  last DateTime\n}\n', 'src/socket.ts': file(`  io.on('connection', (socket) => {\n    socket.on('send message', async (body) => { await prisma.message.create({ data: { body } }); await prisma.room.update({ where: { id: 1 }, data: { last: new Date() } }) })\n  })\n`) })
+// R6 http server named server via new Server (node:http) in a socket.io file
+run('R6 node:http Server named server', { 'src/index.ts': `import { Server } from 'node:http'\nimport { Server as IO } from 'socket.io'\nconst server = new Server()\nconst io = new IO(server)\nserver.on('connection', (socket) => { socket.on('timeout', () => socket.destroy()) })\n` })
+
+  }
+  const k = (re: RegExp) => [...got.keys()].find(n => re.test(n))!
+  for (const n of [k(/^R1/), k(/^R2/), k(/^R3/), k(/^R4/)]) assert.ok(!/no longer needs a login/.test(got.get(n)!), `review 29 ${n}: the guard is still there\n${got.get(n)}`)
+  assert.ok(/\(changes messages and rooms\)/.test(got.get(k(/^R5/))!), `review 29 R5\n${got.get(k(/^R5/))}`)
+  assert.ok(got.get(k(/^R6/)) === '', `review 29 R6: node:http's Server\n${got.get(k(/^R6/))}`)
+  console.log('ok (review 29)')
+}
+// Review 29, round 3: a guard that's really gone (Express's server.use elsewhere, a logger io.use left, commented out) is raised
+{
+  const base = { 'package.json': '{"dependencies":{"express":"4.19.0","socket.io":"4.8.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Message {\n  id Int @id\n  body String\n}\n' }
+  const got = new Map<string, string>()
+  {
+const run = (name: string, after: Record<string, string>, before: Record<string, string> = {}) => {
+  const out = report(new Map(Object.entries({ ...base, ...before })), new Map(Object.entries({ ...base, ...after })), { ref: 'main' }).replace(/\s+/g, ' ')
+  const m = out.match(/(Your server now takes.*?live connection\.(?: Connecting needs a login ✓)?|Connecting to your server's live connection no longer needs a login.*?want\.)/g)
+  got.set(name, m ? m.join('\n') : '')
+}
+const ev = `  io.on('connection', (socket) => {\n    socket.on('send message', async (body) => { await prisma.message.create({ data: { body } }) })\n  })\n`
+const guard = `  io.use((socket, next) => { const token = socket.handshake.auth.token; if (!token) return next(new Error('no')); next() })\n`
+const file = (inner: string) => `import { Server } from 'socket.io'\nimport { prisma } from './db.js'\nexport function setup(io: Server) {\n${inner}}\n`
+const old = { 'src/socket.ts': file(guard + ev) }
+run('G0 control: guard deleted outright', { 'src/socket.ts': file(ev) }, old)
+run('G1 guard deleted; Express server.use in index.ts that imports ./socket', { 'src/socket.ts': file(ev), 'src/index.ts': `import express from 'express'\nimport { setupSocket } from './socket.js'\nconst server = express()\nserver.use(express.json())\n` }, old)
+run('G2 guard deleted; non-login io.use(logger) left', { 'src/socket.ts': file(`  io.use((socket, next) => { console.log(socket.id); next() })\n` + ev) }, old)
+run('G3 guard commented out', { 'src/socket.ts': file(guard.replace(/^  /, '  // ') + ev) }, old)
+
+  }
+  for (const [n, g] of got) assert.ok(/no longer needs a login/.test(g), `review 29 r3 ${n}: the guard is really gone\n${g}`)
+  assert.ok(got.size === 4, 'review 29 r3: four cases')
+  console.log('ok (review 29, round 3)')
+}
+// Review 29, round 4: a kept logger or rate limiter io.use isn't a login guard
+{
+  const base = { 'package.json': '{"dependencies":{"express":"4.19.0","socket.io":"4.8.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Message {\n  id Int @id\n  body String\n}\n' }
+  const got = new Map<string, string>()
+  {
+const run = (name: string, after: Record<string, string>, before: Record<string, string> = {}) => {
+  const out = report(new Map(Object.entries({ ...base, ...before })), new Map(Object.entries({ ...base, ...after })), { ref: 'main' }).replace(/\s+/g, ' ')
+  const m = out.match(/(Your server now takes.*?live connection\.(?: Connecting needs a login ✓)?|Connecting to your server's live connection no longer needs a login.*?want\.)/g)
+  got.set(name, m ? m.join('\n') : '')
+}
+const ev = `  io.on('connection', (socket) => {\n    socket.on('send message', async (body) => { await prisma.message.create({ data: { body } }) })\n  })\n`
+const guard = `  io.use((socket, next) => { const token = socket.handshake.auth.token; if (!token) return next(new Error('no')); next() })\n`
+const file = (inner: string) => `import { Server } from 'socket.io'\nimport { prisma } from './db.js'\nexport function setup(io: Server) {\n${inner}}\n`
+const old = { 'src/socket.ts': file(guard + ev) }
+run('G0 control: guard deleted outright', { 'src/socket.ts': file(ev) }, old)
+run('G1 guard deleted; Express server.use in index.ts that imports ./socket', { 'src/socket.ts': file(ev), 'src/index.ts': `import express from 'express'\nimport { setupSocket } from './socket.js'\nconst server = express()\nserver.use(express.json())\n` }, old)
+run('H1 guard deleted; named non-login io.use(logSocket) kept', { 'src/socket.ts': file(`  io.use(logSocket)\n` + ev) + `function logSocket(socket, next) { console.log(socket.id); next() }\n` }, old)
+run('H2 guard deleted; rate limiter with next(new Error) kept', { 'src/socket.ts': file(`  io.use((socket, next) => { if (tooMany(socket.handshake.address)) return next(new Error('slow down')); next() })\n` + ev) }, old)
+run('H3 guard deleted; unrelated io.use in test file', { 'src/socket.ts': file(ev), 'test/socket.test.ts': `import { Server } from 'socket.io'\nconst io = new Server()\nio.use(fakeAuth)\n` }, old)
+
+  }
+  for (const [n, g] of got) assert.ok(/no longer needs a login/.test(g), `review 29 r4 ${n}: the login guard is gone\n${g}`)
+  console.log('ok (review 29, round 4)')
+}
 // "Tests couldn't be executed": the agent didn't run them
 assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. Tests couldn’t be executed because the environment has no Go toolchain installed.' }).includes("didn't run or test"), 'untested: passive')
 // (round 10) "Full runtime testing wasn’t possible", "tests weren’t available", "Full builds could not run"; not "a refund wasn't possible"
