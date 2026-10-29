@@ -757,7 +757,17 @@ cards were made with plain as pushed at that time (commit 6b3f57c).
 - plain never mentions Porch's live-chat changes on p4–p6 (the events existed on main, and only new events are
   listed).
 
-**Rules this suggests** (not built yet):
+**After the fixes** (the same five cards, regenerated with plain as of commit 55a54b2):
+- All 6 wrong statements are gone. Huddle p6 no longer says the migration deletes data or that a unique rule on
+  the id can fail. Porch p5 says "deletes room read receipts" and "a maximum of 5 messages per 10 seconds". Porch p6
+  says "looks up one room" and no longer calls rooms.ts unrelated. Quill p6 no longer invents "failed reservations".
+- The 🔴 is caught: Quill p6 now reads "Long AI answers may now always fail: the AI service now gets 15 seconds to
+  write a whole answer, nothing streams it, and an answer can be up to 6,000 tokens…".
+- Porch p6's main 🟡 is caught: "The "send message" and "typing" events no longer check room membership each time:
+  they trust the room the person joined…".
+- Porch p4's admin routes read "is for admins only ✓"; changed live-chat events now get a line.
+
+**Rules this suggested** (all built later; each was reviewed until a round came back clean):
 1. ✅ Done later (review 39, three rounds): only dropping a table, column, schema, partition, or a type/domain/extension
    with CASCADE, `TRUNCATE` and `DELETE … FROM` count as deleting data (not constraints, indexes, defaults or checks; not
    function bodies, but `DO` blocks yes). The unique-rule warning is skipped when the rule includes the model's one
