@@ -7233,3 +7233,16 @@ export async function POST(req: Request) {
 for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
 }
 console.log('ok (review 59)')
+
+// Parsed trees live in WebAssembly memory that JavaScript never frees: every tree must be deleted, or a big repo (or many
+// reports in one process) fills the 4 GB and the parser aborts.
+{
+  const { Tree } = await import('web-tree-sitter')
+  const del = Tree.prototype.delete; let n = 0
+  Tree.prototype.delete = function () { n++; return del.call(this) }
+  report(new Map(), new Map([['app/views.py', 'def a():\n    pass\n'], ['app/Http/A.php', '<?php\nclass A {}\n'], ['main.go', 'package main\n'],
+    ['src/A.java', 'class A {}\n'], ['A.cs', 'class A {}\n'], ['app/a.rb', 'class A\nend\n']]), { ref: 'x' })
+  Tree.prototype.delete = del
+  assert.ok(n >= 6, `only ${n} of 6 parsed trees were freed`)
+}
+console.log('ok (trees freed)')

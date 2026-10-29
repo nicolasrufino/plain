@@ -266,6 +266,7 @@ export function goFacts(path: string, text: string, empty: (printed?: string) =>
   const creds = /AllowCredentials:\s*true/.test(code)
   if (creds && (/AllowOriginFunc:\s*func\([^)]*\)\s*bool\s*\{\s*return\s+true/.test(code) || /AllowedOrigins:\s*\[\]string\{[^}]*"https?:\/\/\*"/.test(code) || /AllowOrigins:\s*\[\]string\{[^}]*"https?:\/\/\*"/.test(code) && /AllowWildcard:\s*true/.test(code))
     || /Access-Control-Allow-Origin",\s*(r\.Header\.Get\("Origin"\)|origin)\)/.test(code) && /Access-Control-Allow-Credentials",\s*"true"/.test(code) || /UnsafeWildcardOriginWithAllowCredentials:\s*true/.test(code)) go.risks.add('corsCreds')
+  tree.delete()   // trees live in WebAssembly memory, which JavaScript never frees: a big repo filled it and the parser aborted
   return f
 
   // Facts from one function: database writes and reads, Stripe, email, env, calls into other functions, "no" messages.

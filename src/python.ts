@@ -260,6 +260,7 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
     if (fn?.type === 'function_definition') { f.fns.set(fn.childForFieldName('name')!.text, fn.text); f.locals.set(fn.childForFieldName('name')!.text, collect(fn, empty(fn.text))) }
     if (fn && /^(function|class)_definition$/.test(fn.type)) f.exports.add(fn.childForFieldName('name')!.text)
   }
+  tree.delete()   // trees live in WebAssembly memory, which JavaScript never frees: a big repo filled it and the parser aborted
   return f
 
 

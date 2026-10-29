@@ -290,6 +290,7 @@ export function rbFacts(path: string, text: string, empty: (printed?: string) =>
     if (/consider_all_requests_local\s*=\s*true/.test(code) && /production\.rb$/.test(path)) f.rb.risks.add('debug')
   }
   if (/http_basic_authenticate_with[^\n]*password:\s*["'][^"']+["']/.test(code)) f.rb.risks.add('basicPassword')
+  tree.delete()   // trees live in WebAssembly memory, which JavaScript never frees: a big repo filled it and the parser aborted
   return f
 
   // the type of each variable: @order = Order.find(...) / Order.new(...) / Order.create(...); current_user.orders.build -> @rel:orders

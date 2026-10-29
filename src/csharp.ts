@@ -173,6 +173,7 @@ export function csFacts(path: string, text: string, empty: (printed?: string) =>
       if (inExt) { const e = f.cs.ext.get(inExt.name) ?? { routes: [], calls: [] }; e.calls.push(c); f.cs.ext.set(inExt.name, e) } else f.cs.extCalls.push(c)
     }
   }
+  tree.delete()   // trees live in WebAssembly memory, which JavaScript never frees: a big repo filled it and the parser aborted
   return f
 
   // Facts from one subtree: Entity Framework, Stripe, email, config, "no" messages, login checks in code.

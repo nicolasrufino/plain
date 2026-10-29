@@ -173,6 +173,7 @@ export function javaFacts(path: string, text: string, empty: (printed?: string) 
       }
     }
   }
+  tree.delete()   // trees live in WebAssembly memory, which JavaScript never frees: a big repo filled it and the parser aborted
   return f
 
   // Facts from one subtree: Spring Data repositories, calls into other classes and the class's own helpers, Stripe, email, config, "no" messages.

@@ -422,6 +422,7 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
   for (const m of code.matchAll(/(?:\b(\w+)::|(\$\w+)->|->)(create|update|fill|forceFill|forceCreate|firstOrCreate|updateOrCreate)\s*\(\s*(?:\$request|request\(\))->(?:all|input|post)\(\s*\)/g))
     php.risks.add(/^force/.test(m[3]) ? 'force' : `all:${m[1] && /^[A-Z]/.test(m[1]) ? m[1] : short(vars.get(m[2] ?? '')?.replace(/^new:/, '') ?? '?')}`)
   if (/\b(DB::(select|statement|insert|update|delete|unprepared)|->(whereRaw|havingRaw|orderByRaw|selectRaw)|DB::raw)\s*\(\s*("[^"]*\$\w|'[^']*'\s*\.\s*\$|"[^"]*"\s*\.\s*\$)/.test(code)) php.risks.add('sql')
+  tree.delete()   // trees live in WebAssembly memory, which JavaScript never frees: a big repo filled it and the parser aborted
   return f
 
   // parameters holding the visitor's request: Illuminate\Http\Request, or a form request (a *Request class outside the models)
