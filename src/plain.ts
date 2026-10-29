@@ -5,6 +5,7 @@
 //   plain --hook                                  Claude Code Stop hook: reads the last prompt
 //
 // ponytail: Next.js (app/ and pages/), Express-style servers, React Router, Prisma, Supabase, Stripe. Each framework is one more fact extractor.
+import { adminCond, adminPos, FROM_REQUEST } from './admin.ts'
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
@@ -61,7 +62,7 @@ const printer = ts.createPrinter({ removeComments: true })
 
 export type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
-  tables: Set<string>; ops: Set<string>; writes: boolean; sbAuth: boolean; env: Set<string>; auth: boolean; money: boolean   // sbAuth: supabase.auth.getUser(), a real check only on a server
+  tables: Set<string>; ops: Set<string>; writes: boolean; sbAuth: boolean; env: Set<string>; auth: boolean; admin?: boolean; money: boolean   // admin: the login check turns away everyone but admins. sbAuth: supabase.auth.getUser(), a real check only on a server
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
   texts: Set<string>; refuses: Set<string>; envReq: Set<string>; exports: Set<string>   // words on screen ("[price]" for a formatted price); "no" messages (4xx); env vars without a fallback
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
@@ -70,8 +71,8 @@ export type FileFacts = {
   authIfs: { g: string; at: number; fn: number }[]; skipIfs: { c: string; at: number; fn: number }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
-  handlers: { server: string; method: string; path: string; guard: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean; unknown?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
-  mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
+  handlers: { server: string; method: string; path: string; guard: boolean; admin?: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean; unknown?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
+  mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean; mw?: string[] }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
   pages: { path: string; comp: string; guard: boolean | 'unknown' }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
   wrappers: Map<string, string>                                               // fetch helpers and their address prefix: api() -> '/api'
@@ -218,7 +219,7 @@ export function fileFacts(path: string, text: string): FileFacts {
 const CLIENT_MAKER = /^(await\s+)?(createClient|createServerClient|createBrowserClient|\w*[Ss]upabase\w*)\s*(<[^>]*>)?\(/
 const clientsOf = new WeakMap<ts.SourceFile, Set<string>>()   // one set per file: a client made at the top is used inside handlers
 function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
-  const servers = new Set<string>(), guarded = new Set<string>()
+  const servers = new Set<string>(), guarded = new Set<string>(), guardMw = new Map<string, string[]>()   // guardMw: router.use(requireAuth, requireAdmin)'s names
   let sbClients = clientsOf.get(sf)
   if (!sbClients) {
     clientsOf.set(sf, sbClients = new Set())
@@ -227,7 +228,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   }
   const isGuard = (a: ts.Node) => !fnLike(a) && GUARD.test(a.getText(sf)) && !NOT_GUARD.test(a.getText(sf))
   const addHandler = (server: string, method: string, path: string, mw: readonly ts.Expression[], h: ts.Expression) =>
-    f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard), mw: mw.map(m => m.getText(sf)),
+    f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard), mw: [...guardMw.get(server) ?? [], ...mw.map(m => m.getText(sf))],
       handler: ts.isIdentifier(h) ? h.text : undefined, facts: fnLike(h) ? collect(sf, h, empty(printer.printNode(ts.EmitHint.Unspecified, h, sf))) : empty(h.getText(sf)) })
   const labelFor = new Map<string, string>(), boxes: { id?: string; type: string; v?: string; aria: boolean }[] = []
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
@@ -357,8 +358,8 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
           const t = args.at(-1)!, spec = ts.isCallExpression(t) && t.expression.getText(sf) === 'require' ? str(t.arguments[0]) : undefined
           // app.use('/api/x', thing): a router, or a login check for everything under /api/x. appFacts decides by looking at the file.
           if (arg?.startsWith('/') && (ts.isIdentifier(t) || spec)) f.mounts.push({ server: obj, path: arg, target: spec ?? t.getText(sf),
-            guard: guarded.has(obj) || args.slice(1, -1).some(isGuard), guardLike: args.length === 2 && !spec && isGuard(t) })
-          else if (!arg && args.some(isGuard)) guarded.add(obj)
+            guard: guarded.has(obj) || args.slice(1, -1).some(isGuard), guardLike: args.length === 2 && !spec && isGuard(t), mw: [...guardMw.get(obj) ?? [], ...args.slice(1, -1).filter(isGuard).map(a => a.getText(sf))] })
+          else if (!arg && args.some(isGuard)) { guarded.add(obj); guardMw.set(obj, [...guardMw.get(obj) ?? [], ...args.filter(isGuard).map(a => a.getText(sf))]) }
         } else if (servers.has(obj) && HTTP.test(last) && arg?.startsWith('/') && args.length > 1) {
           addHandler(obj, last, arg, args.slice(1, -1), args.at(-1)!)
           return   // the handler's facts belong to the route, not to the whole file
@@ -1002,7 +1003,7 @@ export function appFacts(snap: Snap) {
     const classes = new Map(phpFiles.flatMap(([p, x]) => [...x.classes].map(([k, v]) => [k, { p, ...v }] as const)))
     const methods = new Map(phpFiles.flatMap(([, x]) => [...x.methods]))
     const params = new Map(phpFiles.flatMap(([, x]) => [...x.params]))
-    const appMw = new Map(phpFiles.flatMap(([, x]) => [...x.middleware]))
+    const appMw = new Map(phpFiles.flatMap(([, x]) => [...x.middleware])), adminMws = new Set(phpFiles.flatMap(([, x]) => [...x.adminMw]))
     const formRequests = new Map(phpFiles.flatMap(([, x]) => [...x.formRequests]))
     const notifications = new Map(phpFiles.flatMap(([, x]) => [...x.notifications]))
     const config = new Map(phpFiles.flatMap(([, x]) => [...x.config]))
@@ -1037,6 +1038,10 @@ export function appFacts(snap: Snap) {
       if (LOGIN.test(c)) return 'login'
       return NOT_LOGIN.test(c) ? 'none' : 'unknown'
     }
+    // "only admins": the app's middleware whose check turns away non-admins, or Spatie's role:admin (every role named an admin one)
+    const adminKind = (m: string) => { const n = m.split(':')[0], [c, arg] = resolved(m).split(':')
+      if ((aliases.has(n) || !DEFAULTS.has(n)) && adminMws.has(c)) return true
+      return c === 'RoleMiddleware' && !appMw.has(c) && !!arg && arg.split(',')[0].split('|').every(r => /^(super[-_]?)?admin(istrator)?$/i.test(r.trim())) }
     const groupMw = (name: string) => [...app?.groups.get(name) ?? []]
     // route files: from bootstrap/app.php (11+) or a provider's group(base_path(...)) (10), else Laravel's defaults
     type Ctx = { prefix: string; mw: string[]; without: string[] }
@@ -1144,10 +1149,10 @@ export function appFacts(snap: Snap) {
       const fr = ps.map(t => { const v = formRequests.get(t); return v?.startsWith('owner:') ? (nullable.has(v.slice(6)) ? 'unknown' : 'login') : v }).filter(Boolean)
       const kinds = [...mws.map(kind), check === 'login' ? 'login' : check === 'policy' || fr.includes('login') ? (guestPolicies ? 'unknown' : 'policy')
         : check === 'unknown' || fr.includes('unknown') ? 'unknown' : 'none']
-      const guard = kinds.some(x => x === 'login' || x === 'policy')
+      const guard = kinds.some(x => x === 'login' || x === 'policy'), admin = guard && mws.some(adminKind)
       const m = method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : method
       const at = r.cls ? classes.get(chain.find(c => methods.has(`${c}.${fn}`)) ?? r.cls)?.p ?? p : p
-      files.get(at)!.handlers.push({ server: '', method: m, path: slashes(ctx.prefix + r.path), guard, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
+      files.get(at)!.handlers.push({ server: '', method: m, path: slashes(ctx.prefix + r.path), guard, admin, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
     }
     // the files' own facts: config files' env() calls count only through the config() calls that read them
     for (const [p] of phpFiles) { const f = files.get(p)!; if (/(^|\/)(config|bootstrap|database)\//.test(p)) { f.env.clear(); f.envReq.clear() } finish(f) }
@@ -1255,8 +1260,10 @@ export function appFacts(snap: Snap) {
       finish(facts)
       const kinds = [...cbs.map(cb => kind(cb, chain)), h?.check ?? 'none', r.guard ?? 'none', cls ? 'none' : 'unknown']
       const guard = kinds.includes('login')
+      // "only admins": a before_action (always run) or the action's own check whose deciding line turns away non-admins
+      const admin = guard && (cbs.some(cb => cb !== 'unknown' && !cb.cond && !!(methodOf(chain, cb.name) as { haltsAdmin?: boolean } | undefined)?.haltsAdmin) || !!(h as { checkAdmin?: boolean } | undefined)?.checkAdmin)
       const m = r.method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : r.method
-      files.get(cls ? classes.get(cls)!.p : p)!.handlers.push({ server: '', method: m, path: key.slice(key.indexOf(' ') + 1), guard, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
+      files.get(cls ? classes.get(cls)!.p : p)!.handlers.push({ server: '', method: m, path: key.slice(key.indexOf(' ') + 1), guard, admin, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
     }
     // the tables, as the migrations build them (in file-name order)
     const tableClass = new Map([...classes].filter(([, c]) => c.model && c.table).map(([k, c]) => [c.table!, k.split('::').pop()!]))
@@ -1355,6 +1362,9 @@ export function appFacts(snap: Snap) {
       if (k) return funcs.get(k)!.f.mw ?? 'none'
       return /auth|login|session|token|jwt|guard|protect|require|admin|user|clerk|supabase/i.test(name) ? 'unknown' : 'none'
     }
+    // that login check is "only admins" (our own middleware whose deciding check turns away non-admins)
+    const adminOf = (ref: GoRef, ctx: Ctx) => { if (ref.lit) return !!funcs.get(`${ctx.p}::${ref.lit}`)?.f.mwAdmin
+      const k = resolve(ref.wrap?.[0] ?? ref.call ?? ref.fn ?? '', ctx); return !!(k && funcs.get(k)!.f.mwAdmin) }
     // facts of a handler and what it calls (a few levels down)
     const follow = (g: FileFacts, into: FileFacts, seen: Set<string>, self: string, depth = 0) => {
       for (const u of g.used) if (u.startsWith('gcall:') && !seen.has(u) && depth < 5) {
@@ -1404,7 +1414,8 @@ export function appFacts(snap: Snap) {
       const guard = kinds.includes('login')
       const path = (fullPrefix(r.router) + r.path).replace(/\/+/g, '/').replace(/(.)\/$/, '$1') || '/'
       const at = hf ? (hk!.includes('::@lit') ? fileOfLit(hk!) : hf.p) : r.ctx.p
-      files.get(at)?.handlers.push({ server: '', method: r.method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : r.method, path: goPath(path), guard, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
+      const admin = guard && (mws.some(m => adminOf(m.ref, m.ctx)) || !!hf?.f.checkAdmin)
+      files.get(at)?.handlers.push({ server: '', method: r.method === 'ANY' ? (facts.writes ? 'POST' : 'GET') : r.method, path: goPath(path), guard, admin, mw: [], facts, unknown: !guard && kinds.includes('unknown') })
     }
     for (const [p, x] of goFiles) finishFile(files.get(p)!, x)
     // Go before 1.22 reads "POST /orders/{id}" as a literal path: those routes never match
@@ -1438,17 +1449,18 @@ export function appFacts(snap: Snap) {
       else if (pg.guard === 'unknown') (files.get(q) as FileFacts & { guardUnknown?: boolean }).guardUnknown = true }
   }
   // Express-style servers: each address becomes its own unit "file#/api/x", with the facts of its handlers.
-  const mounts = new Map<string, { path: string; guard: boolean; from: string }>()
+  const mounts = new Map<string, { path: string; guard: boolean; from: string; mw?: string[] }>()
   const guards: { from: string; path: string }[] = []
   for (const [p, f] of files) if (!p.endsWith('.py')) for (const m of f.mounts) {
     const q = m.target.startsWith('.') ? resolve(p, m.target) : target(p, m.target), file = q && files.get(q)
     if (file && (file.handlers.length || file.mounts.length)) mounts.set(q!, { ...m, from: p })   // it declares routes: a router
     else if (m.guardLike) guards.push({ from: p, path: m.path })                                  // otherwise it's a login check
   }
-  const prefix = (p: string, seen = new Set<string>()): { path: string; guard: boolean } => {
-    const m = mounts.get(p); if (!m || seen.has(p)) return { path: '', guard: false }
+  // (mws: the guards' names on the way down, with the file each is written in: app.use('/api/admin', requireAuth, requireAdmin, admin))
+  const prefix = (p: string, seen = new Set<string>()): { path: string; guard: boolean; mws: { p: string; n: string }[] } => {
+    const m = mounts.get(p); if (!m || seen.has(p)) return { path: '', guard: false, mws: [] }
     const up = prefix(m.from, seen.add(p))
-    return { path: up.path.replace(/\/$/, '') + m.path, guard: up.guard || m.guard }
+    return { path: up.path.replace(/\/$/, '') + m.path, guard: up.guard || m.guard, mws: [...up.mws, ...(m.mw ?? []).map(n => ({ p: m.from, n }))] }
   }
   const guardedPaths = guards.map(g => prefix(g.from).path.replace(/\/$/, '') + g.path)
   // Python: routers are named things inside files, so mounts are keyed by file and router
@@ -1567,6 +1579,30 @@ export function appFacts(snap: Snap) {
   }
   for (const [p, d] of djFiles) if (d.urls.length && !djIncluded.has(p)) djWalk(p, '', false, new Set())
 
+  // a function whose code turns away non-admins: a top-level `if` (not inside another if, loop or try: `if (req.method === 'DELETE')`)
+  // whose whole condition does (adminCond), and whose own branch rejects (403, forbidden, a redirect) and stops (return, throw)
+  const DENY_NEAR = /\b40[13]\b|[Ff]orbidden|[Uu]nauthori[sz]ed|redirect|\bthrow\b|\babort\b|[Aa]ccess[Dd]enied|PermissionDenied/
+  const CONTROL = /\b(?:if|else|for|while|switch|catch|try|do|finally)\b[^{};]*$/
+  const adminText = (t: string) => [...t.matchAll(/\bif\s*\(/g)].some(m => {
+    const k = m.index!, open = k + m[0].length - 1
+    let d = 0, j = open; for (; j < t.length; j++) { if (t[j] === '(') d++; else if (t[j] === ')' && --d === 0) break }
+    const cond = t.slice(open + 1, j), pos = adminPos(cond)
+    if (!pos && !adminCond(cond)) return false
+    // (the flag's variable set from the request earlier: `const u = req.body`, `const h = req.headers`)
+    const v = cond.match(/^[\s!(]*([\w$]+)/)?.[1], src = v ? t.slice(0, k).match(new RegExp(String.raw`\b(?:const|let|var)\s+${v.replace('$', '\\$')}\s*=\s*([^;\n]+)`))?.[1] : undefined
+    if (src && (FROM_REQUEST.test(src) || /^\s*(?:req|request)\.(?:query|headers|body|params|cookies)\b/.test(src))) return false
+    const stack: { ctrl: boolean; at: number }[] = []
+    for (let x = 0; x < k; x++) { if (t[x] === '{') stack.push({ ctrl: CONTROL.test(t.slice(Math.max(0, x - 200), x).split(/[;}]/).pop()!), at: x }); else if (t[x] === '}') stack.pop() }
+    if (stack.some(s => s.ctrl)) return false
+    // (nothing before it in the same function lets requests through: `if (req.method === 'GET') return next()`, a bare next())
+    if (/\breturn\b|\bnext\s*\(\s*\)/.test(t.slice((stack.at(-1)?.at ?? -1) + 1, k))) return false
+    const rest = t.slice(j + 1).replace(/^\s*/, '')
+    let branch = rest.split(/;|\n/)[0]
+    if (rest[0] === '{') { let e = 0, q = 0; for (; q < rest.length; q++) { if (rest[q] === '{') e++; else if (rest[q] === '}' && --e === 0) break } branch = rest.slice(0, q + 1) }
+    // (the other way round: admins go on, and the next statement turns everyone else away)
+    if (pos) { const after = rest.slice(branch.length).replace(/^[\s;]*/, '').split(/;|\n/)[0]
+      return /^return\s+next\s*\(\s*\)|^\{?\s*return\s+next\s*\(\s*\)/.test(branch.replace(/^\{\s*/, '')) && DENY_NEAR.test(after) && /^(return|throw)\b/.test(after) && !/\bnext\s*\(|\?/.test(after) }   // (not `return req.method === 'GET' ? next() : res.status(403)`)
+    return DENY_NEAR.test(branch) && /\breturn\b|\bthrow\b|\bnext\(\s*(?:new\b|create\w*\(|err)/.test(branch) })
   for (const [p, f] of [...files]) {
     const pre = f.handlers.length ? prefix(p) : null
     for (const h of f.handlers) {
@@ -1589,11 +1625,26 @@ export function appFacts(snap: Snap) {
       // Logged in if every handler that changes something checks (or, with none, every handler does).
       // A named middleware counts unless this repo defines it and it can't stop anyone; reading the user counts only if the code acts on it.
       const mwGuard = h.guard && !(h.mw.length && h.mw.every(m => middleware.get(m) === false))
+      // "only admins" for named middleware (Express-style): this repo's function, whose code turns away non-admins; a name alone
+      // (requireAdmin from a package, or one plain can't find) keeps "requires login"
+      // (imported under another name, `{ requireStaff as requireAdmin }`: plain would read the wrong function, so no claim)
+      const readable = (at: string, m: string) => { const n = m.match(/^[\w$.]+/)?.[0] ?? '', q = files.get(at)?.locals.has(n) ? at : target(at, n)
+        if (q !== at && new RegExp(String.raw`\b\w+\s+as\s+${n}\b|[{,]\s*\w+\s*:\s*${n}\s*[,}]`).test(files.get(at)?.printed ?? '')) return undefined
+        return q ? files.get(q)?.locals.get(n)?.printed : undefined }
+      const adminMw = (at: string, m: string) => adminText(readable(at, m) ?? '')
+      if (!h.admin && (mwGuard && h.mw.some(m => adminMw(p, m)) || pre!.guard && pre!.mws.some(x => adminMw(x.p, x.n)))) h.admin = true
+      // (a guard still named for it that plain can't read, requireRole('admin') from a package: it may still be there; one plain
+      // reads and finds empty, a gutted requireAdmin, isn't)
+      // (or a factory given the role, requireRole('admin'): its test is on a parameter plain doesn't follow)
+      if ([...h.mw.map(n => ({ p, n })), ...pre!.mws].some(x => /admin|role|staff|superuser|permission/i.test(x.n) && readable(x.p, x.n) === undefined || /\(\s*['"](?:super[-_]?)?(?:admin|staff|superuser)['"]/i.test(x.n))) (unit as FileFacts & { adminish?: boolean }).adminish = true
       // (a GET that updates or deletes changes things too: its login decides, like a POST's)
       const writes = h.method !== 'GET' || getWrites, guard = pre!.guard || mwGuard || !!py?.guard || (hf.auth || hf.sbAuth) && STOPS.test(hf.printed) || guardedPaths.some(g => url === g || url.startsWith(g.replace(/\/$/, '') + '/'))
-      const u = unit as FileFacts & { w?: boolean[]; r?: boolean[]; wu?: string[]; ru?: string[] }
+      const u = unit as FileFacts & { w?: boolean[]; r?: boolean[]; wu?: string[]; ru?: string[]; wa?: boolean[]; ra?: boolean[] }
       ;(writes ? (u.w ??= []) : (u.r ??= [])).push(guard)
       unit.auth = (u.w?.length ? u.w : u.r!).every(Boolean)
+      // "only admins": every handler that decides checks for an admin (and the reads, said apart when they don't)
+      ;(writes ? (u.wa ??= []) : (u.ra ??= [])).push(guard && !!h.admin)
+      unit.admin = unit.auth && (u.w?.length ? u.wa! : u.ra!).every(Boolean)
       // Spring: plain can't tell whether this address is open, when the handlers that decide it are unknown and none is plainly open
       ;(writes ? (u.wu ??= []) : (u.ru ??= [])).push(guard ? 'login' : h.unknown ? 'unknown' : 'open')
       const deciding = u.w?.length ? u.wu! : u.ru!
@@ -1620,7 +1671,7 @@ export function appFacts(snap: Snap) {
   // Reading the session in the browser redirects nobody; on a server (edge function, Next.js) it's a real check.
   for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k)) files.get(k)!.auth = true
   // Whether a page or address checks login is part of what it is: losing the check counts as a change.
-  for (const k of routes.keys()) files.get(k)!.printed += `\n[login: ${files.get(k)!.auth}]`
+  for (const k of routes.keys()) files.get(k)!.printed += `\n[login: ${files.get(k)!.auth}${files.get(k)!.admin ? ', admins only' : ''}]`
   const schemaPath = [...snap.keys()].find(p => p.endsWith('schema.prisma') && !p.includes('node_modules/'))
   const db = readDb([...snap].filter(([p]) => isMigration(p)))
   const all = models(schemaPath && snap.get(schemaPath))
@@ -1781,13 +1832,13 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const newPage = (name: string, f: FileFacts, clauses: string[]) => {
     const title = f.headings.find(h => h.startsWith('h1:'))?.slice(3)
     const sections = f.headings.filter(h => !h.startsWith('h1:')).map(h => h.slice(3).replace(/[.!]$/, ''))
-    const rest = merge(clauses.filter(c => c !== 'requires login ✓'))
+    const rest = merge(clauses.filter(c => c !== 'requires login ✓' && c !== 'is for admins only ✓'))
     return [
       `${cap(name)} is new${title ? `, titled "${title}"` : ''}.`,
       sections.length ? `It has sections for ${list(sections)}.` : '',
       rest.length ? `It ${list(rest)}.` : '',
       viewOnly(f) ? 'It only shows information: nothing on it lets you change anything.' : '',
-      f.auth ? 'You have to log in to open it ✓' : '',
+      f.auth ? (f.admin ? 'Only admins can open it ✓' : 'You have to log in to open it ✓') : '',
     ].filter(Boolean).join(' ')
   }
   // Server code that an admin page calls is admin-only, whatever its name.
@@ -1821,7 +1872,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const said = newOnly(a?.texts, b.texts).filter(t => t !== '[price]' && ![...b.ui].some(u => u.includes(t)) && !b.headings.some(h => h.endsWith(t))
         && !gone.includes(t.toLowerCase().replace(/[^a-z]/g, '')))   // "Save" -> "Save!" isn't new copy
       if (a && !clauses.length && said.length) clauses.push(`now says ${list(said.slice(0, 2).map(t => `"${t.length > 90 ? t.slice(0, 87) + '…' : t}"`))}`)
-      if (!a && b.auth) clauses.push('requires login ✓')
+      if (!a && b.auth) clauses.push(b.admin ? 'is for admins only ✓' : 'requires login ✓')
     } else {
       const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
       if (!a) {
@@ -1838,7 +1889,10 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         // nothing may still be covered by middleware, so only the changes' login is claimed)
         const ownGet = !p.includes('#') && b.fns.has('GET') && METHODS.slice(1).some(m => b.fns.has(m)) && b.locals.has('GET') && !handlerChecks(b.locals.get('GET'))
         const u = b as FileFacts & { w?: boolean[]; ru?: string[] }, reads = u.w?.length ? u.ru ?? [] : ownGet ? ['unknown'] : []
-        if (b.auth && !isPublic(r.url)) clauses.push(reads.includes('open') ? 'needs login to change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'needs login to change anything ✓' : 'requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
+        const ra = (u as { ra?: boolean[] }).ra, readsAdmin = !ra?.length || ra.every(Boolean)
+        if (b.auth && !isPublic(r.url)) clauses.push(b.admin ? (reads.includes('open') ? 'lets only admins change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'lets only admins change anything ✓'
+            : readsAdmin ? 'is for admins only ✓' : 'lets only admins change anything ✓ (anyone logged in can view it)')
+          : reads.includes('open') ? 'needs login to change anything ✓ (anyone can view it)' : reads.includes('unknown') ? 'needs login to change anything ✓' : 'requires login ✓')   // a login or webhook address that rejects bad passwords isn't "login required"
         else if (!b.written.size && !METHODS.slice(1).some(m => b.fns.has(m)) && !isPublic(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown) clauses.push('works without logging in')   // (not when plain can't tell)   // read-only; changing ones get a warning instead
       } else {
         // what it now does to them: an address that gains update and delete doesn't "save" anything new
@@ -1853,10 +1907,13 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       for (const o of newOnly(a?.outside, b.outside).filter(o => !o.startsWith('Stripe: checkout.sessions'))) clauses.push(outsidePhrase(o))
     }
     const name = placeName(p)
+    // who can use it, when that changed: login, or admins on top of it
+    const lead = !a ? '' : a.auth && !b.auth ? `${cap(name)} no longer requires login.` : !a.auth && b.auth ? `${cap(name)} now ${b.admin ? 'only lets admins in' : 'requires login'} ✓`
+      : a.auth && b.auth && a.admin && !b.admin ? `${cap(name)} may no longer be limited to admins.` : a.auth && b.auth && !a.admin && b.admin ? `${cap(name)} is now limited to admins ✓` : ''
     const text = !a
       ? (r.kind === 'page' ? newPage(name, b, clauses) : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
-      : (a.auth && !b.auth ? `${cap(name)} no longer requires login.${clauses.length ? ' It also' : ''}` : !a.auth && b.auth ? `${cap(name)} now requires login ✓${clauses.length ? ' It also' : ''}` : '')
-        + (clauses.length ? `${a.auth !== b.auth ? ' now ' : `${cap(name)} now `}${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : a.auth !== b.auth ? '' : `${cap(name)} changed in a way plain can't describe yet.${b.money ? '' : ' Ask the agent what it does differently.'}`)
+      : (lead ? `${lead}${clauses.length ? ' It also' : ''}` : '')
+        + (clauses.length ? `${lead ? ' now ' : `${cap(name)} now `}${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : lead ? '' : `${cap(name)} changed in a way plain can't describe yet.${b.money ? '' : ' Ask the agent what it does differently.'}`)
     changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰 Make a test payment before you ship.' : ''), detail: r.url, name: r.kind === 'page' ? pageName(r.url) + (!a && b.headings.find(h => h.startsWith('h1:')) ? ` ("${b.headings.find(h => h.startsWith('h1:'))!.slice(3)}")` : '') : named(r.url).join(' ') || 'main', money: b.money, vague: !!a && !clauses.length && a.auth === b.auth && !b.money })
 
     // SvelteKit: the layout asks for login, but this page's own server load doesn't wait for it (no `await parent()`), so its data can be
@@ -1865,6 +1922,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       problems.push({ kind: 'Unsafe', text: `${cap(name)}'s data can be read without logging in. Its layout asks for login, but the page loads its own data without waiting for that check. Check locals.user in the page's load (or call \`await parent()\` first), or check in hooks.server.ts.` })
     // New, lost its login check, or started changing data without one
     const changesData = (f?: FileFacts) => !!f && (f.written.size > 0 || METHODS.slice(1).some(m => f.fns.has(m)))
+    // an admin check dropped, login kept: anyone with an account gets in now
+    if (a?.auth && b.auth && a.admin && !b.admin && !(b as FileFacts & { adminish?: boolean }).adminish && !isPublic(r.url))
+      problems.push({ kind: 'Check', text: `plain can't see an admin check on ${placeName(p)} any more. If it's really gone, anyone with an account can use it now. Make sure only admins still can.` })
     if (!b.auth && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown && (!a || a.auth || !changesData(a) && changesData(b)) && !isPublic(r.url)) {
       const writes = changesData(b), before_ = problems.length
       if (r.kind === 'page' && /admin|dashboard|account/.test(r.url) && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown)

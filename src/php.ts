@@ -8,6 +8,7 @@
 //    Spatie's), an app middleware whose handle() turns guests away; in the handler: Gate::authorize, abort_unless(auth()->check()),
 //    a FormRequest whose authorize() checks something. Other app middleware: plain can't tell.
 // ponytail: Blade views, Inertia pages, Livewire/Volt components and package routes (Fortify, Cashier's /stripe/*) aren't read.
+import { adminCond } from './admin.ts'
 import type { FileFacts } from './plain.ts'
 import { parserFor } from './treesitter.ts'
 const parser = await parserFor('tree-sitter-php_only.wasm')   // 1 MB; null when web-tree-sitter isn't installed: PHP files are skipped
@@ -25,6 +26,7 @@ export type PhpFacts = FileFacts & { php: {
   methods: Map<string, FileFacts & { check?: Check }>          // Class.method -> facts
   classes: Map<string, { base?: string; illuminate: boolean; traits: string[]; interfaces: string[]; staticMw?: Mw[]; attrMw: Mw[]; methodMw: Map<string, Mw[]>; without: Mw[]; methodWithout: Map<string, Mw[]>; ctorMw: Mw[]; model: boolean; unguarded: boolean; table?: string }>
   middleware: Map<string, 'login' | 'policy' | 'unknown' | 'none'>   // app middleware class -> whether its handle() turns guests away
+  adminMw: Set<string>   // ...and its deciding check turns away everyone but admins (`if (! $request->user()?->is_admin) abort(403)`)
   formRequests: Map<string, 'login' | 'unknown' | 'none' | `owner:${string}`>   // FormRequest class -> whether its authorize() turns guests away
   notifications: Map<string, boolean>                          // Notification class -> it emails (via() includes 'mail')
   params: Map<string, string[]>                                // Class.method -> its parameters' types
@@ -96,7 +98,7 @@ const escapes = (n: N, next: string, nested = false): boolean => !nested && n.ty
   || n.namedChildren.some(c => !!c && escapes(c, next, nested || /^(anonymous_function|arrow_function|function_definition|method_declaration|class_declaration)$/.test(n.type)))
 // the walk: `inputs` are variables holding the visitor's request (Request $req, StoreOrderRequest $r), read like $request;
 // `$user = $request->user()` makes $user the user
-export function userCheck(body?: N | null, inputs: string[] = [], next = '$next'): 'login' | 'policy' | 'unknown' | `owner:${string}` | undefined {
+export function userCheck(body?: N | null, inputs: string[] = [], next = '$next', out: { admin?: boolean } = {}): 'login' | 'policy' | 'unknown' | `owner:${string}` | undefined {
   if (!body) return undefined
   let escaped = false
   const users: string[] = []
@@ -113,7 +115,7 @@ export function userCheck(body?: N | null, inputs: string[] = [], next = '$next'
     // an owner check ($order->user_id !== auth()->id()) holds for guests only while that column can't be empty: plain.ts checks
     const owner = LOGIN_STMT.exec(t)?.[0].match(new RegExp(String.raw`(${FIELD})\s*[!=]==\s*${ID}|${ID}\s*[!=]==\s*(${FIELD})`))
     if (!escaped && owner) return `owner:${(owner[1] ?? owner[2]).split('->').at(-1)}`
-    if (!escaped && LOGIN_STMT.test(t)) return 'login'
+    if (!escaped && LOGIN_STMT.test(t)) { out.admin = adminCond(LOGIN_STMT.exec(t)![0]); return 'login' }   // (the deciding part, not an elseif after it)
     if (!escaped && POLICY_STMT.test(t)) return 'policy'
     if (st.type === 'return_statement') break
     if (escapes(st, next)) escaped = true   // some requests leave (or go on) before what follows
@@ -150,7 +152,7 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
   let code = text
   for (const c of all(root, 'comment').sort((a, b) => b.startIndex - a.startIndex)) code = code.slice(0, c.startIndex) + code.slice(c.endIndex)
   const f: PhpFacts = Object.assign(collect(root, empty(code.replace(/\s+/g, ' ')), new Map()), { php: { routes: [], includes: [], csrf: [], methods: new Map(), classes: new Map(),
-    middleware: new Map(), formRequests: new Map(), notifications: new Map(), params: new Map(), schema: [], config: new Map(), risks: new Set<string>() } as PhpFacts['php'] })
+    middleware: new Map(), adminMw: new Set(), formRequests: new Map(), notifications: new Map(), params: new Map(), schema: [], config: new Map(), risks: new Set<string>() } as PhpFacts['php'] })
   f.todos = [...text.matchAll(/(?:\/\/|#)\s*((TODO|FIXME|HACK)\b[^\n]*)/g)].map(m => m[1])
   const php = f.php
 
@@ -323,7 +325,8 @@ export function phpFacts(path: string, text: string, empty: (printed?: string) =
       // middleware: handle(Request $request, Closure $next) that turns guests away
       if (mname === 'handle' && /\bClosure\b/.test(m.childForFieldName('parameters')?.text ?? '')) {
         const ps = all(m.childForFieldName('parameters')!, 'simple_parameter'), next = ps.find(p => /Closure/.test(p.childForFieldName('type')?.text ?? ''))?.childForFieldName('name')?.text ?? '$next'
-        const c = userCheck(mBody, requestParams(m), next)
+        const o: { admin?: boolean } = {}, c = userCheck(mBody, requestParams(m), next, o)
+        if (c === 'login' && o.admin) php.adminMw.add(bare)
         php.middleware.set(bare, c === 'login' || c === 'policy' ? c : c?.startsWith('owner:') ? 'unknown' : c || ABOUT_USER.test(uncomment(mBody?.text ?? '')) ? 'unknown' : 'none')
       }
       // a FormRequest's authorize(): a check only when it looks at the user (`return true;`, or a rule about the order, checks nobody)

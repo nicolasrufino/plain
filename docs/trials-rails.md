@@ -345,7 +345,7 @@ The independent reviews of the Rails reader found more before it shipped (in the
 ## Still open
 
 1. ✅ **Old data under new rules** (the 🔴): a `pending` status counted as taken, with nothing that frees it. Fixed later; see [trials-go.md](trials-go.md#fixed-after-the-trials).
-2. **"Only admins ✓"** for `require_admin`, and "only your own" for `Current.user.rentals.find`.
+2. **"Only admins ✓"** for `require_admin` ✅ (fixed later), and "only your own" for `Current.user.rentals.find`.
 3. **💰 for refunds**, zero-amount paths that skip Stripe, and a webhook that answers 4xx to a paid checkout.
 4. **`rate_limit`** as a limit on spam.
 5. **ERB views** aren't read yet.

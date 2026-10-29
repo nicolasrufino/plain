@@ -9,6 +9,7 @@
 //    Devise's `authenticate :user do` around routes, an app before_action whose code turns guests away (`redirect_to login_path unless
 //    current_user`); in an action, only such a check that returns. Pundit / CanCanCan don't mean login: plain can't tell.
 // ponytail: ERB views, Devise's and Pay's own routes, mounted engines and route constraints beyond Devise's aren't read.
+import { adminCond } from './admin.ts'
 import type { FileFacts } from './plain.ts'
 import type { SchemaOp } from './php.ts'
 import { parserFor } from './treesitter.ts'
@@ -70,7 +71,8 @@ export const LAMBDA_LOGIN = (body: string) => { const b = uncomment(body).replac
 const VENDOR = /^(Stripe|Pay|Rails|ActiveRecord|ActionController|ActiveSupport|ENV|Time|Date|DateTime|JSON|URI|Net|File|IO|Integer|Float|String|Array|Hash|Kernel|Struct|BigDecimal|SecureRandom|Digest|Base64|Devise|Pundit|CanCan|Faraday|HTTParty|Aws|Google|OpenAI|Anthropic)\b/
 const uncomment = (t: string) => t.replace(/(^|\s)#[^{\n][^\n]*/g, '$1')
 // as a before_action: halting (redirect / head / render) stops the action. In an action: only a check that returns does.
-function userCheck(body: N | null | undefined, callback: boolean): RbCheck | 'none' {
+// (out.admin: the line that turns guests away turns away non-admins too: `redirect_to root_path unless Current.user&.admin?`)
+function userCheck(body: N | null | undefined, callback: boolean, out: { admin?: boolean } = {}): RbCheck | 'none' {
   if (!body) return 'none'
   let first = true, guestsOut = false
   for (const st of body.namedChildren) {
@@ -80,8 +82,9 @@ function userCheck(body: N | null | undefined, callback: boolean): RbCheck | 'no
     if (ALWAYS_STMT.test(t) && !/\s(if|unless)\s|\?\s|&&/.test(t.split('\n')[0]) && !/\}\s*(if|unless)\s|\bend\s+(if|unless)\s/.test(t)) return 'login'
     // in an action the check must come first (after a write it's too late) and return; in a before_action halting stops the action
     const ok = callback || first
-    if (ok && LOGIN_LINE.test(t) && (callback || /^return\b|\band\s+return\b/.test(t))) return 'login'
-    if (ok && LOGIN_BLOCK.test(t) && (callback || /^\S[^\n]*\n\s*return\b|\band\s+return\b/.test(t))) return 'login'
+    if (ok && LOGIN_LINE.test(t) && (callback || /^return\b|\band\s+return\b/.test(t))) { out.admin = adminCond(t); return 'login' }
+    // (the halt inside the block may carry its own condition: `redirect_to root_path if request.delete?` turns away non-admins only sometimes)
+    if (ok && LOGIN_BLOCK.test(t) && (callback || /^\S[^\n]*\n\s*return\b|\band\s+return\b/.test(t))) { const [c, h = ''] = t.split('\n').filter(l => l.trim()); out.admin = adminCond(c) && !/\s(if|unless)\s/.test(h); return 'login' }
     // `return if current_user` then a redirect: whoever isn't logged in is turned away
     if (callback && new RegExp(String.raw`^return\s+(?:\S+\s+)?if\s+${USER}${PROP}\s*$`).test(t)) { guestsOut = true; continue }
     if (guestsOut && new RegExp(`^(return\\s+)?${HALT}`).test(t) && !/\s(if|unless)\s/.test(t)) return 'login'   // (a halt with its own condition doesn't always run)
@@ -227,7 +230,9 @@ export function rbFacts(path: string, text: string, empty: (printed?: string) =>
       for (const st of mb?.namedChildren ?? []) { if (!st || st.type === 'comment') continue
         if (st.type === 'identifier' || st.type === 'call' && !st.childForFieldName('receiver') && !st.childForFieldName('block')) tops.push(st.type === 'identifier' ? st.text : st.childForFieldName('method')!.text)
         else if (/\breturn\b|\bnext\b/.test(st.text) || /^(if|unless|case|if_modifier|unless_modifier|while|until|rescue_modifier)$/.test(st.type)) break }
-      rb.methods.set(`${name}.${mname}`, Object.assign(g, { check: userCheck(mb, false) === 'login' ? 'login' as const : userCheck(mb, false) === 'unknown' ? 'unknown' as const : undefined, halts: userCheck(mb, true), tops }))
+      const ca: { admin?: boolean } = {}, ha: { admin?: boolean } = {}, check = userCheck(mb, false, ca), halts = userCheck(mb, true, ha)
+      rb.methods.set(`${name}.${mname}`, Object.assign(g, { check: check === 'login' ? 'login' as const : check === 'unknown' ? 'unknown' as const : undefined, halts, tops,
+        checkAdmin: check === 'login' && !!ca.admin, haltsAdmin: halts === 'login' && !!ha.admin }))
     }
   }
 

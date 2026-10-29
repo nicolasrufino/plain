@@ -9,6 +9,7 @@
 //    session / cookie / token / user that answers 401 / 403 / a login redirect and stops: `return`, gin's Abort, echo's returned error),
 //    nothing before it letting requests through; library middleware by name (jwtauth.Authenticator; Verifier alone rejects nobody).
 // ponytail: fiber, gorilla/mux and templates aren't read.
+import { adminCond } from './admin.ts'
 import type { FileFacts } from './plain.ts'
 import { parserFor } from './treesitter.ts'
 const parser = await parserFor('tree-sitter-go.wasm')   // 0.2 MB; null when web-tree-sitter isn't installed: Go files are skipped
@@ -29,7 +30,7 @@ export type GoOp =
   | { op: 'subfn'; on: string; prefix: string; fn: string }                               // chi r.Route(p, adminRoutes) / r.Group(h.protected)
   | { op: 'return'; v: string; wrap?: string[] }
 export type GoFunc = FileFacts & { routeOps: GoOp[]; pkgVars: Map<string, string>; takesHandler: boolean; inUse: boolean;   // pkgVars: h := handlers.New(...) -> h is from that import path
-  params: string[]; check?: 'login' | 'unknown'; mw?: 'login' | 'unknown' | 'none'; traps: string[] }
+  params: string[]; check?: 'login' | 'unknown'; mw?: 'login' | 'unknown' | 'none'; checkAdmin?: boolean; mwAdmin?: boolean; traps: string[] }   // *Admin: that login check is "only admins"
 export type GoFacts = FileFacts & { go: {
   pkg: string; dir: string
   imports: Map<string, string>                    // alias -> import path
@@ -64,7 +65,7 @@ const FROM_LOGIN = /\.Cookie\(\s*(?!"?\w*(?:csrf|xsrf))(?:"[^"]*(?:session|auth|
 // a body's own check: a top-level `if` that's true when there's no user (and nothing else: no &&), whose branch denies as one of its
 // own statements and stops, with nothing before it letting requests through. Traps: a deny that doesn't stop (no return; gin without
 // Abort). `next` / `ctx`: what this code calls to go on (next.ServeHTTP, h.ServeHTTP, c.Next()).
-function check(body: N | null | undefined, gin: boolean, next: string[] = ['next'], ctx: string[] = ['c'], middleware = true): { kind?: 'login' | 'unknown'; traps: string[] } {
+function check(body: N | null | undefined, gin: boolean, next: string[] = ['next'], ctx: string[] = ['c'], middleware = true): { kind?: 'login' | 'unknown'; admin?: boolean; traps: string[] } {
   const traps: string[] = []
   if (!body) return { traps }
   const NEXT = new RegExp(String.raw`\b(?:${next.join('|')})\.ServeHTTP\(|\b(?:${next.join('|')})\(\s*\w+\s*(?:,\s*\w+\s*)?\)|\b(?:${ctx.join('|')})\.Next\(\)`)
@@ -81,12 +82,17 @@ function check(body: N | null | undefined, gin: boolean, next: string[] = ['next
         const NOT_WHO = /csrf|xsrf|captcha|turnstile|origin|referer|signature|webhook|reset|invite|confirm|unsubscribe|magic/i   // (checks about the request, not who's asking)
         const srcs = vars.flatMap(v => [st.childForFieldName('initializer')?.text ?? '', ...stmts.slice(0, i).map(p => p.text)].filter(p => new RegExp(`\\b${v}\\b[^=\\n]*:?=`).test(p)))
         const from = srcs.some(p => FROM_LOGIN.test(p)) && !srcs.some(p => NOT_WHO.test(p))
-        const about = NO_ONE.test(condOnly) && (WHO.test(condOnly) || from) && !NOT_WHO.test(cond.replace(/\.\w*Confirmed\b/g, ''))   // (user.EmailConfirmed is about who's asking)
+        // (`if !u.IsAdmin`: a guest has no user either, and is turned away too: "only admins"; the flag must be the user's, not one
+        // the request carries: `role := r.Header.Get("X-Role")`, a decoded JSON body)
+        const av = condOnly.match(/!\s*\(?\s*(\w+)\./)?.[1] ?? condOnly.match(/(\w+)\.Role\b/)?.[1]
+        const asrc = av ? [st.childForFieldName('initializer')?.text ?? '', ...stmts.slice(0, i).map(p => p.text)].filter(p => new RegExp(`\\b${av}\\b[^=\\n]*:?=`).test(p)).join('\n') : ''
+        const admin = adminCond(condOnly) && (WHO.test(condOnly) || WHO.test(asrc)) && !/\br\.(?:Body|Header|URL|Form|PostForm|FormValue)|json\.(?:NewDecoder|Unmarshal)|\.(?:ShouldBind\w*|Bind\w*|Query|Param|GetHeader|DefaultQuery)\(/.test(asrc)
+        const about = (NO_ONE.test(condOnly) && (WHO.test(condOnly) || from) || admin) && !NOT_WHO.test(cond.replace(/\.\w*Confirmed\b/g, ''))   // (user.EmailConfirmed is about who's asking)
         const last = stmts.slice(i + 1).every(x => x.type === 'return_statement')   // (an else covers it only when nothing runs after the if)
         const stops = own.some(x => x.type === 'return_statement') || NEXT.test(alt) && !NEXT.test(then?.text ?? '') || gin && /\.Abort/.test(then?.text ?? '') || !middleware && !!alt && last
-        if (gin && !/\.Abort/.test(then?.text ?? '')) { if (middleware) traps.push('ginNoAbort'); return { kind: middleware ? 'unknown' : (own.some(x => x.type === 'return_statement') || !!alt && last) && about && !escaped ? 'login' : 'unknown', traps } }
+        if (gin && !/\.Abort/.test(then?.text ?? '')) { if (middleware) traps.push('ginNoAbort'); return { kind: middleware ? 'unknown' : (own.some(x => x.type === 'return_statement') || !!alt && last) && about && !escaped ? 'login' : 'unknown', admin, traps } }
         if (!stops) { traps.push('noReturn'); return { kind: 'unknown', traps } }
-        return { kind: about && !/&&/.test(condOnly) && !escaped ? 'login' : 'unknown', traps }
+        return { kind: about && !/&&/.test(condOnly) && !escaped ? 'login' : 'unknown', admin, traps }
       }
       if (NEXT.test(then?.text ?? '') || /\breturn\b/.test(then?.text ?? '')) escaped = true   // some requests go on (or leave) before what follows
       continue
@@ -145,7 +151,7 @@ export function goFacts(path: string, text: string, empty: (printed?: string) =>
     for (const d of body ? all(body, 'short_var_declaration') : []) { const v = d.childForFieldName('left')?.namedChildren[0]?.text, rhs = d.childForFieldName('right')?.namedChildren[0]
       const callee_ = rhs?.type === 'call_expression' ? callee(rhs) : rhs?.type === 'unary_expression' ? rhs.text.match(/^&(\w+)\./)?.[1] + '.' : rhs?.text.match(/^(\w+)\.\w+\{/)?.[1] + '.'
       const alias = callee_?.split('.')[0]; if (v && alias && imports.has(alias)) pkgVars.set(v, imports.get(alias)!) }
-    go.funcs.set(key, Object.assign(g, { takesHandler: names(fn, /(?:http|echo|gin)\.Handler(?:Func)?\b/).length > 0, inUse: asMw, pkgVars, routeOps: body ? ops(body) : [], params, check: own.kind, mw: mw.kind ?? 'none', traps: actsAsMw ? mw.traps : own.traps }))
+    go.funcs.set(key, Object.assign(g, { takesHandler: names(fn, /(?:http|echo|gin)\.Handler(?:Func)?\b/).length > 0, inUse: asMw, pkgVars, routeOps: body ? ops(body) : [], params, check: own.kind, mw: mw.kind ?? 'none', checkAdmin: own.kind === 'login' && own.admin, mwAdmin: mw.kind === 'login' && mw.admin, traps: actsAsMw ? mw.traps : own.traps }))
   }
 
   // route operations in a block, in order

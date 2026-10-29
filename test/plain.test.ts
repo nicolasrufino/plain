@@ -1379,7 +1379,13 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   const admin = (body: string) => ({ ...web("Route::middleware('admin')->group(function () { Route::post('/orders', [OrderController::class, 'store']); Route::get('/menu', [OrderController::class, 'index']); });\n"),
     'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->alias(['admin' => \\App\\Http\\Middleware\\EnsureAdmin::class]); }"),
     'app/Http/Middleware/EnsureAdmin.php': `<?php\nclass EnsureAdmin { public function handle(Request $request, Closure $next) { ${body} return $next($request); } }\n` })
-  has(lv(admin('if (! $request->user()?->is_admin) abort(403);')), 'saves new orders and requires login ✓', 'lists orders and requires login ✓')
+  has(lv(admin('if (! $request->user()?->is_admin) abort(403);')), 'saves new orders and is for admins only ✓', 'lists orders and is for admins only ✓')
+  // "only admins": the deciding check's sense (abort_if keeps admins out), and Spatie's role: with only admin roles
+  not(lv(admin('abort_if($request->user()?->is_admin, 403);')), 'admins only')
+  const role = (r: string) => lv({ ...web(`Route::middleware('auth')->group(function () { Route::middleware('${r}')->group(function () { Route::post('/orders', [OrderController::class, 'store']); }); });\n`),
+    'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->alias(['role' => \\Spatie\\Permission\\Middleware\\RoleMiddleware::class]); }") })
+  has(role('role:admin'), 'saves new orders and is for admins only ✓')
+  has(role('role:admin|editor'), 'saves new orders and requires login ✓')
   c = lv(admin('Log::info("hi");'))
   has(c, 'the orders part of your server without logging in')
   c = lv({ ...web("Route::middleware('team')->group(function () { Route::post('/orders', [OrderController::class, 'store']); Route::get('/menu', [OrderController::class, 'index']); });\n") })
@@ -1454,7 +1460,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
       'app/Http/Middleware/EnsureAdmin.php': `<?php\nclass EnsureAdmin { public function handle(Request $request, Closure $next) { ${body} } }\n` })
     for (const body of ["if ($request->user() && ! $request->user()->is_admin) { abort(403); } return $next($request);", "if (! Auth::check()) { return $next($request); } return redirect('/dashboard');"])
       { const c = admin(body); not(c, 'requires login ✓', 'without logging in') }
-    has(admin("if (auth()->user()?->role !== 'admin') { abort(403); } return $next($request);"), 'requires login ✓')
+    has(admin("if (auth()->user()?->role !== 'admin') { abort(403); } return $next($request);"), 'is for admins only ✓')
     // 10-style constructor options; Laravel 13's class-level #[WithoutMiddleware]; a require runs where it sits
     has(lv({ ...post, 'app/Http/Controllers/Controller.php': base10, 'app/Http/Controllers/OrderController.php': ctlWith("public function __construct() { $this->middleware('auth', ['except' => ['store']]); }") }), open)
     has(lv13({ ...web("Route::middleware('auth')->group(function () { Route::post('/orders', [OrderController::class, 'store']); });\n"),
@@ -1661,7 +1667,9 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   has(c, 'needs login to change anything ✓ (anyone can view it)')
   // an app before_action that turns guests away; an in-action check counts only when it returns
   c = rs({ ...res, 'app/controllers/orders_controller.rb': orders('\n  def require_admin\n    redirect_to root_path, alert: "Admins only" unless current_user&.admin?\n  end\n', '  before_action :require_admin') })
-  has(c, 'requires login ✓')
+  has(c, 'is for admins only ✓')
+  c = rs({ ...res, ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('\n  def no_admins\n    head :forbidden if current_user&.admin?\n  end\n', '  before_action :no_admins') })
+  has(c, 'requires login ✓'); not(c, 'admins only')
   const d = (body: string) => rs({ ...routes('  delete "orders/:id", to: "orders#destroy"'), 'app/controllers/orders_controller.rb': orders('').replace('    Order.find(params[:id]).destroy', `${body}\n    Order.find(params[:id]).destroy`) })
   has(d('    return head :unauthorized unless current_user'), 'deletes orders and requires login ✓')
   not(d('    head :unauthorized unless current_user'), 'requires login ✓')
@@ -2250,6 +2258,162 @@ run("js .filter(b => b.status === 'pending' || b.status === 'paid').length (miss
 
 }
 console.log('ok (review 25)')
+}
+// "Only admins ✓" (trials rounds 7–9: admin checks read as plain login). The stack's login check must decide it, and its deciding
+// line must turn away non-admins; a name alone (requireAdmin from a package, or not found) keeps "requires login".
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const ADMIN = 'is for admins only ✓'
+  const auth = (admin: string) => `export function requireAuth(req, res, next) {\n  if (!req.user) return res.status(401).json({ error: 'log in' })\n  next()\n}\nexport function requireAdmin(req, res, next) {\n  ${admin}\n  next()\n}\n`
+  const ex = (mount: string, admin: string, extra: Record<string, string> = {}) => ({
+    'server/package.json': '{"dependencies":{"express":"4.19.0","@prisma/client":"6.0.0"}}',
+    'server/prisma/schema.prisma': 'model Walker {\n  id Int @id\n  name String\n}\n',
+    'server/src/index.ts': `import express from 'express'\nimport admin from './routes/admin.js'\nimport { requireAuth, requireAdmin } from './middleware/auth.js'\nconst app = express()\n${mount}\napp.listen(3001)\n`,
+    'server/src/middleware/auth.ts': auth(admin),
+    'server/src/routes/admin.ts': "import { Router } from 'express'\nimport { prisma } from '../db.js'\nconst router = Router()\nrouter.post('/walkers', async (req, res) => res.json(await prisma.walker.create({ data: req.body })))\nexport default router\n", ...extra })
+  const mount = "app.use('/api/admin', requireAuth, requireAdmin, admin)", role = "if (req.user?.role !== 'admin') return res.status(403).json({ error: 'admins only' })"
+  const ok = (c: string, has: string, why: string) => assert.ok(c.includes(has), `admin: ${why}\n${c}`), no = (c: string, x: string, why: string) => assert.ok(!c.includes(x), `admin: ${why}\n${c}`)
+  ok(card({}, ex(mount, role)), ADMIN, 'Express guards on the mount')
+  ok(card({}, ex("app.use('/api/admin', admin)", role, { 'server/src/routes/admin.ts': "import { Router } from 'express'\nimport { prisma } from '../db.js'\nimport { requireAuth, requireAdmin } from '../middleware/auth.js'\nconst router = Router()\nrouter.use(requireAuth, requireAdmin)\nrouter.post('/walkers', async (req, res) => res.json(await prisma.walker.create({ data: req.body })))\nexport default router\n" })), ADMIN, 'router.use(requireAuth, requireAdmin)')
+  no(card({}, ex(mount, "if (req.user && req.user.role !== 'admin') return res.status(403).end()")), 'admins only', 'guests pass: `user && ...`')
+  no(card({}, ex(mount, "if (req.user?.isAdmin) return res.status(403).end()")), 'admins only', 'the other sense keeps admins out')
+  const pkg = ex(mount, role); delete (pkg as Record<string, string>)['server/src/middleware/auth.ts']
+  ok(card({}, pkg), 'requires login ✓', "a requireAdmin plain can't read: login only"); no(card({}, pkg), 'admins only', 'a name alone')
+  // changes: the admin check dropped (login kept) is a problem; added is a ✓
+  const dropped = card(ex(mount, role), ex("app.use('/api/admin', requireAuth, admin)", role))
+  ok(dropped, "plain can't see an admin check on the admin walkers part of your server any more", 'dropped')
+  ok(card(ex("app.use('/api/admin', requireAuth, admin)", role), ex(mount, role)), 'is now limited to admins ✓', 'added')
+  // (review 26, round 2) something before the check lets requests through; the check gutted but the name kept; the positive form
+  no(card({}, ex(mount, "if (req.method === 'GET') return next()\n  " + role)), 'admins only', 'an earlier return next()')
+  no(card({}, ex(mount, "next()\n  " + role)), 'admins only', 'a bare next() first')
+  ok(card(ex(mount, role), ex(mount, '// TODO: re-enable\n  // ' + role)), "plain can't see an admin check", 'a gutted requireAdmin')
+  ok(card({}, ex(mount, "if (req.user?.role === 'admin') return next()\n  return res.status(403).json({ error: 'admins only' })")), ADMIN, 'the positive form')
+  no(card({}, ex(mount, "if (req.user?.role === 'admin' || req.user?.role === 'editor') return next()\n  return res.status(403).end()")), 'admins only', 'positive form letting editors in')
+  no(card({}, ex(mount, "if (req.user?.role === 'admin') return next()\n  next()")), 'admins only', 'positive form that lets everyone on')
+  // (review 26, round 3) a rejection that lets GET through; a flag the request sends, through a variable; a local requireRole('admin')
+  no(card({}, ex(mount, "if (req.user?.isAdmin) return next()\n  return req.method === 'GET' ? next() : res.status(403).end()")), 'admins only', 'positive form, ternary after')
+  no(card({}, ex(mount, "const who = req.query\n  if (who.isAdmin) return next()\n  return res.status(403).end()")), 'admins only', 'positive form, flag from the query')
+  no(card({}, ex(mount, "const u = req.body\n  if (!u.isAdmin) return res.status(403).end()")), 'admins only', 'flag from the body')
+  const toRole = ex("app.use('/api/admin', requireAuth, requireRole('admin'), admin)", role)
+  toRole['server/src/index.ts'] = toRole['server/src/index.ts'].replace('requireAuth, requireAdmin }', 'requireAuth, requireRole }')
+  toRole['server/src/middleware/auth.ts'] += "export const requireRole = (role) => (req, res, next) => {\n  if (req.user?.role !== role) return res.status(403).end()\n  next()\n}\n"
+  no(card(ex(mount, role), toRole), "can't see an admin check", "switched to a local requireRole('admin')")
+  // Go: chi middleware whose deciding `if` turns away non-admins (guests too: no user, no admin)
+  const go = (check: string) => ({ 'go.mod': 'module example.com/shop\n\ngo 1.23\n\nrequire github.com/go-chi/chi/v5 v5.2.0\n',
+    'migrations/000001_boxes.up.sql': 'create table boxes (id serial primary key, name text);\n',
+    'main.go': `package main\n\nimport (\n\t"net/http"\n\t"github.com/go-chi/chi/v5"\n)\n\nfunc main() {\n\tr := chi.NewRouter()\n\tr.Route("/admin", func(r chi.Router) {\n\t\tr.Use(requireAdmin)\n\t\tr.Post("/boxes", createBox)\n\t})\n\thttp.ListenAndServe(":8080", r)\n}\n\nfunc requireAdmin(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tuser := currentUser(r)\n\t\tif ${check} {\n\t\t\thttp.Error(w, "forbidden", http.StatusForbidden)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n\nfunc createBox(w http.ResponseWriter, r *http.Request) {\n\tdb.ExecContext(r.Context(), "INSERT INTO boxes (name) VALUES ($1)", "x")\n}\n` })
+  ok(card({}, go('user == nil || !user.IsAdmin')), ADMIN, 'Go: nil or not admin')
+  ok(card({}, go('!user.IsAdmin')), ADMIN, 'Go: not admin alone (a guest has no user, and is turned away too)')
+  ok(card({}, go('user == nil')), 'requires login ✓', 'Go: login only'); no(card({}, go('user == nil')), 'admins only', 'Go: login only')
+  no(card({}, go('user != nil && !user.IsAdmin')), 'admins only', 'Go: guests pass')
+  console.log('ok (only admins)')
+}
+// Review 26: "only admins ✓" must not reach ordinary users: mixed conditions, flags from the request, checks in a branch, else-ifs, an app's own RoleMiddleware, a halt with its own condition, renamed imports
+{
+const h = (() => {
+const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+const show = (name: string, c: string) => { const m = c.match(/[^.]*(admin|login|logging in)[^.]*\.?/gi) ?? []; console.log(`--- ${name}\n  ` + m.join('\n  ')) }
+// Express
+const ex = (mount: string, mwfile: string, routes?: string, extra: Record<string, string> = {}) => ({
+  'server/package.json': '{"dependencies":{"express":"4.19.0","@prisma/client":"6.0.0"}}',
+  'server/prisma/schema.prisma': 'model Walker {\n  id Int @id\n  name String\n}\n',
+  'server/src/index.ts': `import express from 'express'\nimport admin from './routes/admin.js'\nimport { requireAuth, requireAdmin } from './middleware/auth.js'\nconst app = express()\n${mount}\napp.listen(3001)\n`,
+  'server/src/middleware/auth.ts': mwfile,
+  'server/src/routes/admin.ts': routes ?? "import { Router } from 'express'\nimport { prisma } from '../db.js'\nconst router = Router()\nrouter.post('/walkers', async (req, res) => res.json(await prisma.walker.create({ data: req.body })))\nexport default router\n", ...extra })
+const auth = (admin: string) => `function requireAuth(req, res, next) {\n  if (!req.user) return res.status(401).json({ error: 'log in' })\n  next()\n}\nfunction requireAdmin(req, res, next) {\n  ${admin}\n  next()\n}\n`
+const MOUNT = "app.use('/api/admin', requireAuth, requireAdmin, admin)"
+// Go
+const go = (check: string, mw = 'requireAdmin', rest = '') => ({ 'go.mod': 'module example.com/shop\n\ngo 1.23\n\nrequire github.com/go-chi/chi/v5 v5.2.0\n',
+  'migrations/000001_boxes.up.sql': 'create table boxes (id serial primary key, name text);\n',
+  'main.go': `package main\n\nimport (\n\t"net/http"\n\t"github.com/go-chi/chi/v5"\n)\n\nfunc main() {\n\tr := chi.NewRouter()\n\tr.Route("/admin", func(r chi.Router) {\n\t\tr.Use(${mw})\n\t\tr.Post("/boxes", createBox)\n\t})\n\thttp.ListenAndServe(":8080", r)\n}\n\nfunc requireAdmin(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tuser := currentUser(r)\n\t\tif ${check} {\n\t\t\thttp.Error(w, "forbidden", http.StatusForbidden)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n\nfunc createBox(w http.ResponseWriter, r *http.Request) {\n\tdb.ExecContext(r.Context(), "INSERT INTO boxes (name) VALUES ($1)", "x")\n}\n${rest}` })
+
+return { MOUNT, auth, card, ex, go, show }
+})()
+const rb = (() => {
+const { card, show } = h
+const R: Record<string, string> = {
+  'Gemfile': 'source "https://rubygems.org"\ngem "rails", "~> 8.1.0"\ngem "devise"\ngem "stripe"\n',
+  'config/application.rb': 'module Shop\n  class Application < Rails::Application\n    config.load_defaults 8.1\n  end\nend\n',
+  'config/routes.rb': 'Rails.application.routes.draw do\n  devise_for :users\n  root "orders#index"\nend\n',
+  'app/controllers/application_controller.rb': 'class ApplicationController < ActionController::Base\nend\n',
+  'app/models/order.rb': 'class Order < ApplicationRecord\n  belongs_to :user\nend\n',
+  'app/models/user.rb': 'class User < ApplicationRecord\n  has_many :orders\nend\n',
+  'db/migrate/20260101000000_create_orders.rb': 'class CreateOrders < ActiveRecord::Migration[8.1]\n  def change\n    create_table :orders do |t|\n      t.references :user, null: false, foreign_key: true\n      t.string :status\n      t.timestamps\n    end\n  end\nend\n',
+}
+const orders = (body: string, head = '') => `class OrdersController < ApplicationController\n${head}\n  def index\n    @orders = Order.all\n  end\n\n  def create\n    current_user.orders.create!(order_params)\n    redirect_to orders_path\n  end\n\n  def destroy\n    Order.find(params[:id]).destroy\n    head :no_content\n  end\n${body}\n  private\n\n  def order_params\n    params.expect(order: [:status])\n  end\nend\n`
+const routes = (r: string) => ({ 'config/routes.rb': `Rails.application.routes.draw do\n  devise_for :users\n${r}\nend\n` })
+const rs = (extra: Record<string, string>) => card(R, { ...R, 'app/controllers/orders_controller.rb': orders(''), ...extra })
+const appCtl = (body: string) => ({ 'app/controllers/application_controller.rb': `class ApplicationController < ActionController::Base\n${body}\nend\n` })
+const res = routes('  resources :orders, only: [:index, :create]\n  delete "orders/:id", to: "orders#destroy"')
+const ra = (def: string, head: string, auth = true) => rs({ ...res, ...(auth ? appCtl('  before_action :authenticate_user!') : {}), 'app/controllers/orders_controller.rb': orders(`\n  def require_admin\n${def}\n  end\n`, head) })
+const S = (n: string, c: string) => show(n, c.replace(/plain · .*?WHAT CHANGED /, ''))
+
+return { R, appCtl, orders, res, routes, rs }
+})()
+const lvh = (() => {
+const ctl = (name: string, body: string, head = '') => `<?php\nnamespace App\\Http\\Controllers;\nuse App\\Models\\Order;\n${head}class ${name} extends Controller {\n${body}\n}\n`
+const L: Record<string, string> = {
+  'composer.json': '{"require":{"laravel/framework":"^12.0"}}', 'artisan': '',
+  '.env.example': 'APP_KEY=\nSTRIPE_SECRET=\n',
+  'bootstrap/app.php': "<?php\nreturn Application::configure(basePath: dirname(__DIR__))\n  ->withRouting(web: __DIR__.'/../routes/web.php', health: '/up')\n  ->withMiddleware(function (Middleware $middleware): void { })->create();\n",
+  'routes/web.php': "<?php\nuse Illuminate\\Support\\Facades\\Route;\nRoute::get('/', fn () => view('welcome'));\n",
+  'app/Http/Controllers/Controller.php': '<?php\nnamespace App\\Http\\Controllers;\nabstract class Controller {}\n',
+  'app/Models/Order.php': '<?php\nnamespace App\\Models;\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Order extends Model { protected $fillable = ["status"]; }\n',
+  'database/migrations/2026_01_01_000000_create_orders_table.php': "<?php\nreturn new class extends Migration { public function up(): void { Schema::create('orders', function (Blueprint $table) { $table->id(); $table->foreignId('user_id')->constrained(); $table->string('status'); $table->timestamps(); }); } };\n",
+}
+const web = (routes: string) => ({ 'routes/web.php': L['routes/web.php'] + routes })
+const orders = ctl('OrderController', "  public function index() { return Order::all(); }\n  public function store(Request $request) { return Order::create($request->validated()); }\n  public function cancel(Order $order) { $order->update(['status' => 'cancelled']); }")
+const lv = (extra: Record<string, string>) => card(L, { ...L, 'app/Http/Controllers/OrderController.php': orders, ...extra })
+const grp = "Route::middleware('admin')->group(function () { Route::post('/orders', [OrderController::class, 'store']); Route::get('/menu', [OrderController::class, 'index']); });\n"
+const admin = (body: string, routes = grp) => ({ ...web(routes),
+  'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->alias(['admin' => \\App\\Http\\Middleware\\EnsureAdmin::class]); }"),
+  'app/Http/Middleware/EnsureAdmin.php': `<?php\nclass EnsureAdmin { public function handle(Request $request, Closure $next) { ${body} return $next($request); } }\n` })
+
+return { L, admin, lv, web }
+})()
+const { card, ex, auth, MOUNT, go } = h
+const { rs, res, appCtl, orders } = rb
+const { lv, admin, web, L } = lvh
+// Each case: a route ordinary users (or guests) can reach, that the change calls "admins only" (or a false "no longer limited").
+const ADMIN = 'is for admins only ✓'
+let n = 0
+const bad = (name: string, c: string, x = ADMIN) => assert.ok(!c.includes(x), `review 26 ${name}\n${c}`)
+const R = (b: string) => card({}, ex(MOUNT, auth(b)))
+// F1 Express: `&&` after the admin test (adminText only looks before it)
+bad('E1 express !admin && !owner', R("if (!req.user.isAdmin && req.user.id !== req.params.userId) return res.status(403).json({ error: 'forbidden' })"))
+bad('E2 express role list (admin && editor)', R("if (req.user.role !== 'admin' && req.user.role !== 'editor') return res.status(403).end()"))
+bad('E3 express !(admin || owner)', R("if (!(req.user.isAdmin || req.user.id === req.params.id)) return res.status(403).end()"))
+// F2 Express: a deny word anywhere within 160 chars, not the if's own branch
+bad('E4 express only logs', R("if (!req.user.isAdmin) {\n    console.warn('Forbidden: non-admin user hit admin route', req.user.id)\n  }"))
+bad('E5 express admin check only for DELETE', R("if (req.method === 'DELETE') { if (!req.user.isAdmin) return res.status(403).end() }"))
+// F3 request-controlled "admin"
+bad('E6 express ?isAdmin query', R("if (!req.query.isAdmin) return res.status(403).end()"))
+bad('E7 express header', R("if (!req.headers.admin) return res.status(403).end()"))
+// F4 Go: admin alone makes it a login check, even when the value isn't the user
+const gh = (decl: string, cond: string) => { const g = go(cond); g['main.go'] = g['main.go'].replace('user := currentUser(r)', decl); return g }
+bad('G1 go header role (guests pass)', card({}, gh('role := r.Header.Get("X-Role")', 'role != "admin"')))
+bad('G2 go JSON body IsAdmin', card({}, gh('var body struct{ IsAdmin bool }\n\t\tjson.NewDecoder(r.Body).Decode(&body)', '!body.IsAdmin')))
+bad('G3 go !(admin || owner)', card({}, go('!(user.IsAdmin || user.ID == r.PathValue("id"))')))
+// F5 Laravel: NOT_ADMIN tested on the whole if statement (else / elseif branches), and OR's tail may hold &&
+bad('L1 laravel elseif only logs', lv(admin("if (! $request->user()) {\n abort(401);\n } elseif (! $request->user()->is_admin) {\n Log::warning('non-admin');\n }")))
+bad('L2 laravel || !admin && isMethod(post)', lv(admin("if (! $request->user() || ! $request->user()->is_admin && $request->isMethod('post')) { abort(403); }")))
+// F6 Laravel: role:admin counted as Spatie even when 'role' is the app's own RoleMiddleware
+bad('L3 laravel app RoleMiddleware that only logs', lv({ ...web("Route::middleware('auth')->group(function () { Route::middleware('role:admin')->group(function () { Route::post('/orders', [OrderController::class, 'store']); }); });\n"),
+  'bootstrap/app.php': L['bootstrap/app.php'].replace('{ }', "{ $middleware->alias(['role' => \\App\\Http\\Middleware\\RoleMiddleware::class]); }"),
+  'app/Http/Middleware/RoleMiddleware.php': "<?php\nclass RoleMiddleware { public function handle(Request $request, Closure $next, string $role) { if ($request->user()?->role !== $role) { Log::warning('role mismatch'); } return $next($request); } }\n" }))
+// F7 Rails: LOGIN_BLOCK whose halt line has its own `if`
+bad('R1 rails unless admin? / redirect if request.delete?', rs({ ...res, ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('\n  def require_admin\n    unless current_user&.admin?\n      redirect_to root_path if request.delete?\n    end\n  end\n', '  before_action :require_admin') }))
+// F8 Express alias: binds keep the module, not the exported name
+const a = ex('', auth("if (!req.user.isAdmin) return res.status(403).end()") + "function requireStaff(req, res, next) {\n  if (!req.user) return res.status(401).end()\n  next()\n}\n")
+a['server/src/index.ts'] = "import express from 'express'\nimport admin from './routes/admin.js'\nimport { requireAuth, requireStaff as requireAdmin } from './middleware/auth.js'\nconst app = express()\napp.use('/api/admin', requireAuth, requireAdmin, admin)\napp.listen(3001)\n"
+bad('E8 express `requireStaff as requireAdmin`', card({}, a))
+// F9 false "no longer limited to admins" (admin check still there, plain just can't read it)
+const role = "if (req.user?.role !== 'admin') return res.status(403).json({ error: 'admins only' })", base = ex(MOUNT, auth(role)), NL = 'anyone with an account can use it now'
+bad('C1 rewrite to positive form', card(base, ex(MOUNT, auth("if (req.user?.role === 'admin') return next()\n  return res.status(403).json({ error: 'admins only' })"))), NL)
+const pkg = ex("app.use('/api/admin', requireAuth, requireRole('admin'), admin)", auth(role)); pkg['server/src/index.ts'] = pkg['server/src/index.ts'].replace("import { requireAuth, requireAdmin } from './middleware/auth.js'", "import { requireAuth } from './middleware/auth.js'\nimport { requireRole } from '@acme/auth'")
+bad('C2 switch to a package requireRole(admin)', card(base, pkg), NL)
+console.log('ok (review 26)')
+
 }
 // "Tests couldn't be executed": the agent didn't run them
 assert.ok(report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: 'Done. Tests couldn’t be executed because the environment has no Go toolchain installed.' }).includes("didn't run or test"), 'untested: passive')

@@ -365,7 +365,10 @@ The independent review of the Go reader found more before it shipped (in the sam
 
 1. ✅ **Holds nothing releases** (the 🔴 in rounds 7, 8 and 9): a `pending` order or a counted slot taken at
    checkout, with nothing that frees it when the checkout is abandoned. Fixed later; see [below](#fixed-after-the-trials).
-2. **"Only admins ✓"** for an admin check, in every stack.
+2. ✅ **"Only admins ✓"** for an admin check: done for Go, Rails, Laravel and Express middleware written in the app (p4 in rounds 7–9 now says "is for admins only ✓"). Next.js, Nuxt, SvelteKit, TanStack, Python, C# and Java still say "requires login ✓". An independent review (round 26) took 4 rounds (17, 2, 3, then clean). It made the claim strict:
+- **The whole check counts, not just the line that mentions admins.** Owners or editors getting through, a flag the visitor sends,
+  an earlier `return next()`, or a check inside another `if` mean no claim.
+- **A dropped check is raised as "plain can't see an admin check any more",** since a rewritten check may simply be unreadable.
 
 ## Fixed after the trials
 

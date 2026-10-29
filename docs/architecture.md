@@ -43,6 +43,7 @@ Most of it is in [src/plain.ts](../src/plain.ts). Per language or format:
 | Mounts | `app.use('/api/admin', requireAuth, adminRouter)`, `app.use('/api/x', require('./x'))` |
 | Pages | Next.js `app/**/page.tsx` and `pages/*`; React Router `<Route path element>` and `{ path, element }` |
 | Login checks | calls like `auth()`, guard middleware (`requireAuth`, `verifyToken`), wrappers like `<RequireAuth>` |
+| Admin-only | a login check whose deciding line turns away non-admins (`!u.IsAdmin`, `unless current_user&.admin?`, `role !== 'admin'`, Spatie's `role:admin`). This is read in Go, Rails, Laravel, and Express middleware written in the app. Elsewhere, an admin check still reads as "requires login". |
 | Database | `prisma.<table>.<call>`, `db.<table>.<call>` and `supabase.from('<table>').<call>`: which tables are read, which are written and how |
 | Talks to the server | `fetch('/api/x', { method })`, `axios.post('/x')`, and your own helpers like `api('/x')` |
 | On screen | headings, buttons, boxes (named by their label), forms, links |
@@ -70,6 +71,8 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 
 `analyze(before, after)` finds what's new, removed and changed. Then it checks for problems:
 
+- **An admin check dropped.** An address that was admins-only now lets anyone with an account in
+  (login kept). This is a thing to decide.
 - **Missing login checks.** An address that changes data has no login check. It's flagged as
   ⚠ if the address or table sounds sensitive (admin, orders, payments, ...), and as a "thing to
   decide" otherwise. Addresses that must be public (login, register, webhooks, ...) are never
