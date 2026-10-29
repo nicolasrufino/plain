@@ -1,0 +1,47 @@
+{
+ "id": "Soju06_codex-lb__fed54730",
+ "summary": "Request metrics middleware now buckets path labels to a fixed set (/v1/..., /api/..., /health, /health/..., /backend-api/..., /internal/..., /other) using the root-path-stripped route path, and maps non-standard HTTP methods to OTHER, preventing unbounded Prometheus label growth.",
+ "statements": [
+  {
+   "text": "✓ No problems spotted",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Only Prometheus label normalization in app/core/metrics/middleware.py:25-35,54-55; no request handling or access change."
+  },
+  {
+   "text": "+ The agent added openspec/changes/bound-request-metric-label-cardinality/proposal.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added .../specs/proxy-runtime-observability/spec.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added .../tasks.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "• The agent also changed app/core/metrics/middleware.py.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True but unexplained; card also omits tests/unit/test_metrics.py from its 5-file count."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Fixes a memory-growth/OOM risk: anyone (no login needed) hitting random URLs used to create a new, never-freed Prometheus metric series per distinct path or HTTP method; now unknown paths collapse to '/other' and unknown methods to 'OTHER'.",
+   "severity": "medium"
+  },
+  {
+   "what": "Metric label values change: /backend-api/... and /internal/... replace the raw paths, and '/', SPA pages, etc. now report as '/other'. Grafana dashboards or alerts keyed on the old path labels will go blank.",
+   "severity": "medium"
+  }
+ ],
+ "silent": true
+}

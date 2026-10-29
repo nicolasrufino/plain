@@ -1,0 +1,21 @@
+plain · 8 files changed since 0a285109~1
+You asked: "chore: update server port variable to uppercase for clarity and consistency"
+
+  ⚠ 1 problem  ·  1 step before you ship
+
+LOOK AT THIS FIRST
+  ⚠ Anyone can use the user preferences part of your server without logging in.
+
+WHAT CHANGED
+  Server
+    + New server code that lists users and updates users.
+      /api/user/preferences
+    • The agent changed the program enroll, program progress, programs session progres
+      complete, programs session progress start and revenuecat sync status parts of your
+      server in ways plain can't describe yet. Ask the agent what they do differently.
+  Database
+    • Users now also store the onboarding preferences.
+
+BEFORE YOU SHIP
+  1. Update your database: run `npx prisma migrate dev` (on your live site: `npx prisma
+     migrate deploy`). The database's structure changed, but no migration was created.

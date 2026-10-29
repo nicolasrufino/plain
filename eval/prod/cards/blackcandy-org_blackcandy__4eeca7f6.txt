@@ -1,0 +1,13 @@
+plain · 6 files changed since 4eeca7f6~1
+You asked: "feat: show favorite playlist first on playlists page (#506)"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Server
+    • The playlists part of your server changed in a way plain can't describe yet. Ask the
+      agent what it does differently.
+      /playlists
+  Other files
+    • The agent changed Gemfile.lock.
+    • The agent changed test/fixtures/playlists.yml.

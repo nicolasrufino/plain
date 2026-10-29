@@ -1,0 +1,16 @@
+plain · 5 files changed since a345ecd7~1
+You asked: "chore: lint and link to turso"
+
+  1 thing to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed composables/session.ts, which doesn't look related to what you
+    asked for. (This is a guess.)
+
+WHAT CHANGED
+  Server
+    • The todos stats part of your server changed in a way plain can't describe yet. Ask the
+      agent what it does differently.
+      /api/todos/stats
+
+(Hidden: 1 file with only formatting changes, or lockfiles.)

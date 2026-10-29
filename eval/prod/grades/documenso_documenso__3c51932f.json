@@ -1,0 +1,10 @@
+{ "id": "documenso_documenso__3c51932f",
+  "summary": "Adds TanStack Query placeholderData (keep previous data) to 11 list queries (documents, templates, inbox, org teams, webhook call logs, and admin claims/jobs/email transports/org stats/organisations/user teams), so tables keep showing the previous page instead of blanking to a loading skeleton while the next page, search or filter loads.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "wrong", "why": "Every changed file is user-facing UI: the Documents, Templates and Inbox lists plus several settings/admin tables now behave differently while paging/searching (old rows stay on screen instead of a loading state)." }
+  ],
+  "misses": [
+    { "what": "Paging, searching or filtering the Documents, Templates, Inbox, org Teams, webhook logs and admin tables now keeps the previous rows visible until new results arrive, instead of flashing an empty/loading table.", "severity": "medium" },
+    { "what": "While the new page loads, isLoading stays false so there is no loading indicator; users can briefly see (and click) results from the previous page/search/folder.", "severity": "low" }
+  ],
+  "silent": true }

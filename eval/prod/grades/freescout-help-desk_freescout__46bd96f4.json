@@ -1,0 +1,11 @@
+{ "id": "freescout-help-desk_freescout__46bd96f4",
+  "summary": "Adds an indexed notifications.conversation_id column (migration backfills it from the JSON data in 500-row batches; an observer fills it for new notifications) and makes opening a conversation mark that user's notifications read by exact conversation_id instead of a slow LIKE on the JSON data, which also stops e.g. conversation 12 marking conversation 123's notifications read.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "right", "why": "Route still behind $this->middleware('auth') + authorize('viewCached') (ConversationsController.php:38,48); query is scoped to the logged-in user's notifications; no data loss." },
+    { "text": "1. Apply 2026_08_28_010101_add_conversation_id_column_to_notifications_table to your live database before the new code goes live (`php artisan migrate --force`), or the parts that use it will fail.", "kind": "step", "verdict": "right", "why": "Without the column, opening any conversation (where conversation_id query) and creating any notification (observer sets conversation_id) would hit SQL errors." }
+  ],
+  "misses": [
+    { "what": "Card never says what changed: opening a conversation now marks its notifications as read using a new indexed column (faster), and no longer wrongly marks notifications of conversations whose number starts with the same digits (e.g. #12 vs #123).", "severity": "medium" },
+    { "what": "The migration backfills every existing notification row one by one after a full LIKE scan; on large help desks the update/migration can take a long time, during which the new code fails if it is already live.", "severity": "medium" }
+  ],
+  "silent": false }

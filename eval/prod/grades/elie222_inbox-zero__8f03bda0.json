@@ -1,0 +1,11 @@
+{ "id": "elie222_inbox-zero__8f03bda0",
+  "summary": "Adds server-side PostHog analytics events 'Rule changed' (create/edit/enable/disable via editor, chat, API, MCP), 'Rule deleted' and 'All rules toggled', keyed to the user's account email and carrying only ids/enums; no change to how rules behave (the commit message's pattern-reset changes were dropped in later squashed commits).",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "right", "why": "Tracking runs in after() and is wrapped in try/catch (rule-events.server.ts), so it can't break rule saving; properties are ids/enums only; no-ops when NEXT_PUBLIC_POSTHOG_KEY isn't set (utils/posthog.ts:142)." },
+    { "text": "Type checking is turned off in 1 spot in apps/web/utils/rule/rule.test.ts (`any`).", "kind": "warning", "verdict": "right", "why": "New test uses `as any` on a mocked prisma return; test-only, harmless." }
+  ],
+  "misses": [
+    { "what": "New analytics: every rule create/edit/enable/disable, rule delete and the all-rules switch now sends an event to PostHog tied to the user's email address (ids and settings only, no rule text or senders).", "severity": "low" },
+    { "what": "'Rule deleted' is recorded before the delete runs, so it's logged even if the delete fails.", "severity": "low" }
+  ],
+  "silent": true }

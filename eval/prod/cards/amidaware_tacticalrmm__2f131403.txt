@@ -1,0 +1,13 @@
+plain · 3 files changed since 2f131403~1
+You asked: "fix: reject oversized file listing page numbers"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Server
+    • The agent files part of your server changed in a way plain can't describe yet. Ask the
+      agent what it does differently.
+      /agents/[agent_id]/files
+  Other files
+    • The agent also changed api/tacticalrmm/agents/tests/test_file_browser.py and
+      api/tacticalrmm/tacticalrmm/constants.py.

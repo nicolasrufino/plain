@@ -1,0 +1,9 @@
+plain · 2 files changed since 9cc3a334~1
+You asked: "fix: pagination issues"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Server
+    • There's now a default pagination limit of 50.
+      src/server/api/schema/pagination.ts

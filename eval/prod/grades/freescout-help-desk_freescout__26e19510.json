@@ -1,0 +1,35 @@
+{
+  "id": "freescout-help-desk_freescout__26e19510",
+  "summary": "UI tweak to the conversation split-view side list: each conversation now shows its subject plus a truncated preview, and the list loads 15 conversations at a time instead of 50 (new Conversation::CONV_LIST_SIZE); purely presentational, existing mailbox/folder permission checks in ConversationsController ajax 'conv_list' unchanged.",
+  "statements": [
+    {
+      "text": "✓ No problems spotted",
+      "kind": "reassurance",
+      "verdict": "right",
+      "why": "Only list size, markup and CSS changed; ajax conv_list still checks mailbox->userHasAccess and can('view', $folder) (ConversationsController.php:2468-2479). No data, auth or money impact."
+    },
+    {
+      "text": "• The agent changed public/css/style.css.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Adds .conv-list-text / .conv-list-preview styles (one-line truncated preview) for the split-view list; true but unexplained."
+    },
+    {
+      "text": "• The agent changed resources/views/conversations/partials/conv_list.blade.php.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True, but says nothing about what users see; card names 2 of the 4 changed files (omits Conversation.php and ConversationsController.php, which set the 15-per-batch size)."
+    }
+  ],
+  "misses": [
+    {
+      "what": "The conversation list beside an open conversation (split view) now shows each conversation's subject and a one-line preview, instead of only the preview.",
+      "severity": "low"
+    },
+    {
+      "what": "That side list now loads 15 conversations per batch instead of 50 (more loaded on scroll), including in real-time refreshes.",
+      "severity": "low"
+    }
+  ],
+  "silent": true
+}

@@ -1,0 +1,57 @@
+{
+  "id": "OpnForm_OpnForm__ab2971a2",
+  "summary": "GET /open/forms/{form}/submissions/export/status/{jobId} (behind auth.multi) now (a) is reachable with personal API tokens (added to sanctum-routes whitelist) but only if the token has forms-read, and (b) returns 404 unless the export job belongs to the requested form, closing a hole where any user who could view one form could read another form's export status, including its download file_url, given the job UUID. API docs/openapi corrected to the real path and fields.",
+  "statements": [
+    {
+      "text": "✓ No problems spotted",
+      "kind": "reassurance",
+      "verdict": "right",
+      "why": "Route is inside auth.multi group (api/routes/api.php:100,264); controller keeps authorize('view',$form) and adds forms-read token check and form_id match (FormSubmissionController.php:124-133). Change tightens security."
+    },
+    {
+      "text": "• The open form submissions export statu part of your server changed in a way plain can't describe yet. Ask the agent what it does differently. /open/forms/[form]/submissions/export/status/[jobId]",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Correct endpoint, no explanation (and truncated 'statu')."
+    },
+    {
+      "text": "• The agent changed docs/api-reference/changelog.mdx.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Adds a changelog entry for the export-status path/fields fix and the token permission check; not explained."
+    },
+    {
+      "text": "• The agent changed docs/api-reference/openapi.yaml.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Fixes documented path (/export/status/{job_id}) and response fields."
+    },
+    {
+      "text": "• The agent changed docs/api-reference/submissions/export-status.mdx.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Corrects the documented status path and response fields; not explained."
+    },
+    {
+      "text": "• The agent changed docs/api-reference/submissions/export-submissions-csv.mdx.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Changes the example job_id to a UUID; trivial doc fix."
+    }
+  ],
+  "misses": [
+    {
+      "what": "Security fix not mentioned: previously a logged-in user with access to any form could poll another form's export job (getting its progress and the export file download link) by putting that job id under their own form; now such requests get 404.",
+      "severity": "high"
+    },
+    {
+      "what": "Personal API tokens can now check export status (previously blocked with 404), but only tokens with the forms-read permission; others get 403.",
+      "severity": "medium"
+    },
+    {
+      "what": "Public API docs were pointing to a wrong URL for export status (returned 404) and listed wrong fields; now fixed, with a changelog entry. The card lists the doc files but doesn't say this.",
+      "severity": "low"
+    }
+  ],
+  "silent": true
+}

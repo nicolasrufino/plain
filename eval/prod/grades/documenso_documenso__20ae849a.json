@@ -1,0 +1,10 @@
+{ "id": "documenso_documenso__20ae849a",
+  "summary": "Replaces the hand-rolled debounced search-box -> URL syncing (useEffect + setSearchParams, which could loop re-rendering) with nuqs useQueryState on 9 admin and org/team settings list pages (claims, email transports, organisation stats, organisations, org members, org teams, team groups, team members, webhook detail); and makes the team.find API actually pass query/page/perPage through so the org Settings > Teams search and pagination work.",
+  "statements": [
+    { "text": "The agent also changed packages/trpc/server/team-router/find-teams.ts, which doesn't look related to what you asked for. (This is a guess.)", "kind": "warning", "verdict": "wrong", "why": "It is the server half of the same fix: the org Teams page (o.$orgUrl.settings.teams.tsx, rewritten in this commit) sends query/page/perPage via OrganisationTeamsTable -> trpc.team.find, and the route previously dropped them, so search and paging on that page did nothing. Now passed to findTeams (still scoped to the user's own teams)." }
+  ],
+  "misses": [
+    { "what": "Search boxes on 9 admin and organisation/team settings pages no longer risk an endless re-render loop (page freezing/flicker); search text now syncs to the URL with a 500ms debounce.", "severity": "medium" },
+    { "what": "Organisation Settings > Teams: search now filters teams and pagination works; before, the server ignored them and always returned the first 10 teams, so orgs with more than 10 teams couldn't see the rest.", "severity": "medium" }
+  ],
+  "silent": true }

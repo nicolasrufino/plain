@@ -1,0 +1,10 @@
+plain · 10 files changed since a580a1cf~1
+You asked: "Enhance PDF generation with computed variable support (#1233)"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Server
+    • The agent changed the open form PDF template submission download and open form PDF
+      template preview parts of your server in ways plain can't describe yet. Ask the agent
+      what they do differently.

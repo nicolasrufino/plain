@@ -1,0 +1,11 @@
+{ "id": "amidaware_tacticalrmm__2f131403",
+  "summary": "File-browser listing endpoint GET /agents/<agent_id>/files/ now rejects page numbers above FILE_BROWSER_MAX_PAGE (default 10,000, overridable in settings) with a 400, preventing oversized values from overflowing the agent's pagination math.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "right", "why": "Pure input-validation tightening (agents/views.py:1866); endpoint stays behind IsAuthenticated + agent permissions; no new exposure." },
+    { "text": "• The agent files part of your server changed in a way plain can't describe yet. /agents/[agent_id]/files", "kind": "description", "verdict": "right", "why": "Correct endpoint, but gives no explanation." },
+    { "text": "• The agent also changed api/tacticalrmm/agents/tests/test_file_browser.py and api/tacticalrmm/tacticalrmm/constants.py.", "kind": "description", "verdict": "right", "why": "Test + new FILE_BROWSER_MAX_PAGE constant." }
+  ],
+  "misses": [
+    { "what": "Remote file browser now refuses page numbers above 10,000 (configurable FILE_BROWSER_MAX_PAGE) with an error instead of passing them to the agent, closing a way to send overflow values to agents.", "severity": "low" }
+  ],
+  "silent": true }

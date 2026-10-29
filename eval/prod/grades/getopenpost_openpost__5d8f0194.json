@@ -1,0 +1,9 @@
+{ "id": "getopenpost_openpost__5d8f0194",
+  "summary": "LinkedIn adapter now looks up each company Page's logo through LinkedIn's Images API (extra GET /rest/images/urn:li:image:<id>) when the organization record only has an asset URN, so connected LinkedIn company Pages show their logo as the account avatar; failures/unsafe URLs fall back to no avatar.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "wrong", "why": "apps/server/internal/platform/linkedin.go:437-502 changes production behaviour: LinkedIn company Page avatars are now resolved via a new Images API call in both Page selection and metadata refresh. Only the test files are non-app." }
+  ],
+  "misses": [
+    { "what": "LinkedIn company Pages now show their logo as the account picture (when choosing Pages to connect and on refresh); the server makes one extra LinkedIn API call per Page without a direct logo URL, silently skipping it if LinkedIn refuses.", "severity": "low" }
+  ],
+  "silent": false }

@@ -1,0 +1,22 @@
+plain · 21 files changed since 5b6bc016~1
+You asked: "feat(audit): enhance visitor tracking with user agent and IP address"
+
+  1 thing to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed __Template() in
+    frontend/src/routes/(no-layout)/login/verify/+page.svelte, which doesn't look related to
+    what you asked for. (This is a guess.)
+
+WHAT CHANGED
+  Server
+    • The public estimate accept part of your server changed in a way plain can't describe
+      yet. Ask the agent what it does differently.
+      /api/public/estimate/[token]/accept
+  Other files
+    • The agent changed backend/uv.lock.
+    • The agent also changed backend/common/audit_log.py, backend/common/request_meta.py,
+      backend/common/tests/test_audit_log.py, backend/common/tests/test_request_meta.py and
+      backend/invoices/tests/test_invoices_api.py.
+
+(Hidden: 2 files with only formatting changes, or lockfiles.)

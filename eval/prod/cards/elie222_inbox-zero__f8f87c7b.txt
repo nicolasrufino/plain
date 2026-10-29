@@ -1,0 +1,4 @@
+plain · 7 files changed since f8f87c7b~1
+You asked: "fix(bulk-unsubscribe): only suggest senders that have an unsubscribe link (#4..."
+
+Nothing about the app changed.

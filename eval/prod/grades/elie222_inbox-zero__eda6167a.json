@@ -1,0 +1,10 @@
+{ "id": "elie222_inbox-zero__eda6167a",
+  "summary": "Adds a 'Test connection' item to the menu of each active MCP integration on the Integrations page, backed by a new testMcpConnectionAction server action (login + account-ownership checked by actionClient, connection looked up by id AND emailAccountId) that re-syncs the server's tools and reports the tool count, or an 'authorization expired' / 'could not reach the server' message.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "wrong", "why": "New user-facing 'Test connection' menu item in integrations/IntegrationRow.tsx and a new server action testMcpConnectionAction in utils/actions/mcp.ts that contacts the MCP server and rewrites the stored tool list." }
+  ],
+  "misses": [
+    { "what": "Users can now click 'Test connection' on a connected MCP integration (built-in or custom) and get a success toast with the tool count or a clear auth/unreachable error.", "severity": "medium" },
+    { "what": "Testing isn't read-only: it reuses the tool sync, so it refreshes OAuth tokens, replaces the stored tool list (tools the server no longer offers disappear; on/off choices kept for the rest), and a failed token refresh can deactivate the connection.", "severity": "low" }
+  ],
+  "silent": true }

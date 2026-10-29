@@ -1,0 +1,15 @@
+plain · 7 files changed since ab2971a2~1
+You asked: "Fix export status API docs and secure token polling (#1314)"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Server
+    • The open form submissions export statu part of your server changed in a way plain
+      can't describe yet. Ask the agent what it does differently.
+      /open/forms/[form]/submissions/export/status/[jobId]
+  Other files
+    • The agent changed docs/api-reference/changelog.mdx.
+    • The agent changed docs/api-reference/openapi.yaml.
+    • The agent changed docs/api-reference/submissions/export-status.mdx.
+    • The agent changed docs/api-reference/submissions/export-submissions-csv.mdx.

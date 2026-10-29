@@ -1,0 +1,10 @@
+{ "id": "logtide-dev_logtide__c993470c",
+  "summary": "Usage settings page: 'Unlimited' per-signal quota rows are now hidden only when the combined telemetry.max_bytes_monthly quota is capped (hosted plan), instead of whenever any quota is capped; the 'Bytes ingested' card is renamed 'Log bytes ingested'.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "wrong", "why": "packages/frontend/src/lib/utils/usage-capabilities.ts:18-20 changes which rows the Usage page shows, and usage/+page.svelte:303 renames a visible card title. Visible (minor) UI change." }
+  ],
+  "misses": [
+    { "what": "Self-hosters who cap a single quota (e.g. spans) now see all their other quotas listed as 'Unlimited' on Settings > Usage again; only hosted plans with a combined telemetry cap hide them.", "severity": "low" },
+    { "what": "The Usage page card 'Bytes ingested' is now labelled 'Log bytes ingested'.", "severity": "low" }
+  ],
+  "silent": false }

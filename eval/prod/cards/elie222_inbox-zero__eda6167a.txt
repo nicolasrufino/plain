@@ -1,0 +1,4 @@
+plain · 6 files changed since eda6167a~1
+You asked: "integrations: Add a test connection action for MCP integrations (#4216)"
+
+Nothing about the app changed.

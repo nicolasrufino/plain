@@ -1,0 +1,8 @@
+plain · 10 files changed since 20ae849a~1
+You asked: "fix: use nuqs prevent infinite re-render loop (#2868)"
+
+  1 thing to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed packages/trpc/server/team-router/find-teams.ts, which doesn't
+    look related to what you asked for. (This is a guess.)

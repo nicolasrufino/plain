@@ -1,0 +1,69 @@
+{
+  "id": "OpnForm_OpnForm__412dd90a",
+  "summary": "Drops the laravel/vapor-core package: the public POST /vapor/signed-storage-url upload-signing controller now builds the S3 presigned PUT itself (same key tmp/<uuid>, ACL, content-type and headers as Vapor's code) with the expiry setting moved to filesystems.signed_storage_url_expires_after (5 min); also bumps symfony/mime and the @intlify i18n build tooling for security fixes. api/vapor.yml (production Vapor config) is left in place but can no longer deploy without vapor-core.",
+  "statements": [
+    {
+      "text": "2 things to decide",
+      "kind": "warning",
+      "verdict": "misleading",
+      "why": "Both 'decisions' are false scope alarms; there is nothing to decide about these files."
+    },
+    {
+      "text": "? The agent also changed api/app/Http/Controllers/Content/SignedStorageUrlController.php, which doesn't look related to what you asked for. (This is a guess.)",
+      "kind": "warning",
+      "verdict": "wrong",
+      "why": "This controller is the only code that used Vapor Core (it extended Laravel\\Vapor\\...\\SignedStorageUrlController); rewriting it is the core of 'Remove Vapor Core from storage upload signing'."
+    },
+    {
+      "text": "? The agent also changed api/config/filesystems.php, which doesn't look related to what you asked for. (This is a guess.)",
+      "kind": "warning",
+      "verdict": "wrong",
+      "why": "It adds signed_storage_url_expires_after, replacing config('vapor.signed_storage_url_expires_after') that went away with Vapor Core; directly related."
+    },
+    {
+      "text": "• The vapor signed storage URL part of your server changed in a way plain can't describe yet. Ask the agent what it does differently. /vapor/signed-storage-url",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Correct endpoint (api/routes/api.php:561), but no explanation; behaviour is intended to be identical."
+    },
+    {
+      "text": "• The agent changed api/composer.json.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Removes laravel/vapor-core; not explained."
+    },
+    {
+      "text": "• The agent changed api/composer.lock.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Removes laravel/vapor-core and its deps (hollodotme/fast-cgi-client, riverline/multipart-parser) and bumps symfony/mime 7.4.19 -> 7.4.22; not explained."
+    },
+    {
+      "text": "• The agent changed docs/deployment/docker.mdx.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True, but the card doesn't relay what the new section says: uploads no longer use vapor-core and api/vapor.yml deployments need it restored."
+    },
+    {
+      "text": "(Hidden: 1 file with only formatting changes, or lockfiles.)",
+      "kind": "description",
+      "verdict": "right",
+      "why": "client/package-lock.json is a lockfile; it does carry the @intlify i18n security bumps, which the card never mentions (see misses)."
+    }
+  ],
+  "misses": [
+    {
+      "what": "If you deploy with Laravel Vapor (api/vapor.yml with api-production is still in the repo), deployments will no longer work until laravel/vapor-core is restored; the commit's own docs (docker.mdx, now listed by the card) say so, but the card doesn't. Docker/self-hosted installs are unaffected.",
+      "severity": "high"
+    },
+    {
+      "what": "Card doesn't explain the actual change: file uploads to S3 storage are now signed by the app itself instead of the Vapor package, meant to behave the same; upload links still expire after 5 minutes (now set in filesystems.php).",
+      "severity": "medium"
+    },
+    {
+      "what": "Security updates to dependencies: symfony/mime 7.4.19 -> 7.4.22 and the @intlify i18n compiler tooling (vue-i18n-extensions 8 -> 9, which requires Node 22+ for builds).",
+      "severity": "low"
+    }
+  ],
+  "silent": false
+}

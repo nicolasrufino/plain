@@ -1,0 +1,11 @@
+{ "id": "elie222_inbox-zero__f8f87c7b",
+  "summary": "Bulk Unsubscribe's suggested senders (and the 'inbox health' email sent via Resend) now only include low-read senders that have a usable http(s) or mailto unsubscribe link; the sender-stats SQL now prefers such a link when a sender's emails have several.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "wrong", "why": "Changes what users see: bulk-unsubscribe/suggestions.ts isUnsubscribeSuggestion now returns false without a usable link, the inbox-health email (api/resend/inbox-health) counts only those senders, and utils/sender-stats.ts changes which unsubscribe link is shown per sender." }
+  ],
+  "misses": [
+    { "what": "The 'Suggested' list on Bulk Unsubscribe no longer shows senders without a working unsubscribe link (senders the user already selected stay visible), so users may see fewer suggestions.", "severity": "medium" },
+    { "what": "The inbox-health email only counts senders with an unsubscribe link, so suggestion counts and 'emails avoided per year' drop, and some users who used to get it (5+ suggestions) won't anymore.", "severity": "medium" },
+    { "what": "Sender stats now pick an http(s)/mailto unsubscribe link over junk values, so more Unsubscribe buttons point at a working link.", "severity": "low" }
+  ],
+  "silent": true }

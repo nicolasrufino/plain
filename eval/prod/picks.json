@@ -1,0 +1,562 @@
+[
+ {
+  "repo": "mfts/papermark",
+  "stack": "next",
+  "sha": "a100d70e7a6c9529479cc488e6541a2305dbee3a",
+  "subject": "fix: strip trailing spaces from link passcodes",
+  "lines": 101,
+  "files": 6
+ },
+ {
+  "repo": "mfts/papermark",
+  "stack": "next",
+  "sha": "0a62004a2a8f305adf3f903e59c22688f10ddf0d",
+  "subject": "feat(ee): add redactions",
+  "lines": 334,
+  "files": 13
+ },
+ {
+  "repo": "mfts/papermark",
+  "stack": "next",
+  "sha": "0d6ba0df591037287f00a874b5d495bd08b85fde",
+  "subject": "feat(embed): support custom-domain embeds so downloads work first-party",
+  "lines": 310,
+  "files": 8
+ },
+ {
+  "repo": "Snouzy/workout-cool",
+  "stack": "next",
+  "sha": "0a285109459aaabe89b9d6364def178980561272",
+  "subject": "chore: update server port variable to uppercase for clarity and consistency",
+  "lines": 375,
+  "files": 8
+ },
+ {
+  "repo": "Snouzy/workout-cool",
+  "stack": "next",
+  "sha": "43185fca74a68376cfa7fc780109df7693ba6cda",
+  "subject": "feat: add exercise selection during workout creation (step 3)",
+  "lines": 428,
+  "files": 11
+ },
+ {
+  "repo": "Snouzy/workout-cool",
+  "stack": "next",
+  "sha": "688e497fa20d0abf0a052d43eef9d1b830d292c2",
+  "subject": "feat(locales): add Portuguese language support and donation banner in release notes for multiple languages fix(release-notes): update release notes dialog to render HTML content safely for new notes",
+  "lines": 63,
+  "files": 8
+ },
+ {
+  "repo": "pdovhomilja/nextcrm-app",
+  "stack": "next",
+  "sha": "8cd319dbde767cb3a563f03f8be35d67ac9aec55",
+  "subject": "fix(deps): upgrade better-auth to 1.7 (#419)",
+  "lines": 214,
+  "files": 5
+ },
+ {
+  "repo": "pdovhomilja/nextcrm-app",
+  "stack": "next",
+  "sha": "7bec7fcfb4599bf0458b27c17d5c0606fae6acb2",
+  "subject": "feat(orders): order date",
+  "lines": 42,
+  "files": 7
+ },
+ {
+  "repo": "pdovhomilja/nextcrm-app",
+  "stack": "next",
+  "sha": "3c68474d28e29f02500209c6bbf343ce67d5c3ce",
+  "subject": "feat(pricing): price list schema",
+  "lines": 201,
+  "files": 3
+ },
+ {
+  "repo": "gokulkrishh/expense.fyi",
+  "stack": "next",
+  "sha": "e148078c955a0f87aba44edd1e9d5e644bf48e8f",
+  "subject": "Fix subscriptions from & to + upgrade pkgs",
+  "lines": 253,
+  "files": 12
+ },
+ {
+  "repo": "gokulkrishh/expense.fyi",
+  "stack": "next",
+  "sha": "80d3b85b01a27f65cb14d3b1c5de4e80618011ff",
+  "subject": "Fix subscription estimated paid amount in overview+upgrade libs (#17)",
+  "lines": 157,
+  "files": 9
+ },
+ {
+  "repo": "captableinc/captable",
+  "stack": "next",
+  "sha": "2e3fdfba71b8f6a8a78ecc9c428676c79a292c13",
+  "subject": "feat: improve audit log template (#495)",
+  "lines": 155,
+  "files": 4
+ },
+ {
+  "repo": "captableinc/captable",
+  "stack": "next",
+  "sha": "9cc3a33448495a0f2ccd317b92f902e8a3b5b755",
+  "subject": "fix: pagination issues",
+  "lines": 19,
+  "files": 2
+ },
+ {
+  "repo": "captableinc/captable",
+  "stack": "next",
+  "sha": "74f6d85a3adc67e60f9692e4d434a813461dca85",
+  "subject": "feat: model for bank account",
+  "lines": 84,
+  "files": 4
+ },
+ {
+  "repo": "moinulmoin/chadnext",
+  "stack": "next",
+  "sha": "ffaf659e69c95d744cef23cea6ba5520ba33d285",
+  "subject": "refactor: :recycle: streamline Stripe webhook handling and improve billing form loading state management",
+  "lines": 102,
+  "files": 4
+ },
+ {
+  "repo": "moinulmoin/chadnext",
+  "stack": "next",
+  "sha": "8d6a714fea69eeb205a7503d8887bfedc21c9ce9",
+  "subject": "fix: :bug: fix imageupload on no image account",
+  "lines": 153,
+  "files": 17
+ },
+ {
+  "repo": "moinulmoin/chadnext",
+  "stack": "next",
+  "sha": "2f8c01333f5c1a78105fa68832eb50966344602a",
+  "subject": "fix: email was not being sent for new users",
+  "lines": 27,
+  "files": 4
+ },
+ {
+  "repo": "documenso/documenso",
+  "stack": "next",
+  "sha": "3c51932f0396f1a8e9b31b1b4a5c4f999e794b93",
+  "subject": "fix: keep previous table data during pagination (#3073)",
+  "lines": 162,
+  "files": 11
+ },
+ {
+  "repo": "documenso/documenso",
+  "stack": "next",
+  "sha": "20ae849a1aa2c5f56f4a23a267d7a50ede4b432a",
+  "subject": "fix: use nuqs prevent infinite re-render loop (#2868)",
+  "lines": 350,
+  "files": 10
+ },
+ {
+  "repo": "documenso/documenso",
+  "stack": "next",
+  "sha": "914e325486561fe8bf23d8a949629681e2324da1",
+  "subject": "docs(trpc): add openapi descriptions to envelope cancel, delete and update routes (#3134)",
+  "lines": 28,
+  "files": 3
+ },
+ {
+  "repo": "elie222/inbox-zero",
+  "stack": "next",
+  "sha": "8f03bda003bd3e09069033b30fe956bebbdfde14",
+  "subject": "rules: Add PostHog events for rule changes (#4374)",
+  "lines": 137,
+  "files": 4
+ },
+ {
+  "repo": "elie222/inbox-zero",
+  "stack": "next",
+  "sha": "f8f87c7bd0046886c46c4657b788ca88088b2373",
+  "subject": "fix(bulk-unsubscribe): only suggest senders that have an unsubscribe link (#4267)",
+  "lines": 211,
+  "files": 7
+ },
+ {
+  "repo": "elie222/inbox-zero",
+  "stack": "next",
+  "sha": "eda6167aa7b826980f9222875dea0751cb1fcb07",
+  "subject": "integrations: Add a test connection action for MCP integrations (#4216)",
+  "lines": 207,
+  "files": 6
+ },
+ {
+  "repo": "misa-j/social-network",
+  "stack": "express",
+  "sha": "a3ae8bb82d05aed1fc65b75bff1e96f3c5a1e4ec",
+  "subject": "Prepare for AWS deployment",
+  "lines": 18,
+  "files": 4
+ },
+ {
+  "repo": "jigar-sable/instagram-mern",
+  "stack": "express",
+  "sha": "45036c1fe2bc72b9e4cfdc72514814c4bb235309",
+  "subject": "delete profile endpoint",
+  "lines": 10,
+  "files": 2
+ },
+ {
+  "repo": "Django-CRM/Django-CRM",
+  "stack": "django",
+  "sha": "61507b41885207ea9312c501af477bdd78b12167",
+  "subject": "Show related records on custom record pages, and name the real estate match and seat alerts in notifications (1.40.0)",
+  "lines": 524,
+  "files": 23
+ },
+ {
+  "repo": "Django-CRM/Django-CRM",
+  "stack": "django",
+  "sha": "10af001387548f7dd1e3ff7bbd6fa56f9fbe9464",
+  "subject": "feat(import): handle archived tags as row errors in CSV imports",
+  "lines": 246,
+  "files": 10
+ },
+ {
+  "repo": "Django-CRM/Django-CRM",
+  "stack": "django",
+  "sha": "5b6bc01687c9e9d1cc35fbf29463742d0dee7a1f",
+  "subject": "feat(audit): enhance visitor tracking with user agent and IP address",
+  "lines": 511,
+  "files": 23
+ },
+ {
+  "repo": "amidaware/tacticalrmm",
+  "stack": "django",
+  "sha": "b6db076ee32c6a4fab8f7f4ef76e1000668a39f7",
+  "subject": "fix 500 error on nats timeout",
+  "lines": 233,
+  "files": 4
+ },
+ {
+  "repo": "amidaware/tacticalrmm",
+  "stack": "django",
+  "sha": "e56ebd3e48e99de59f34d4bd7600c127a6f02cf2",
+  "subject": "update reqs",
+  "lines": 22,
+  "files": 3
+ },
+ {
+  "repo": "amidaware/tacticalrmm",
+  "stack": "django",
+  "sha": "2f13140329fac3de46fae37e3f778adc57f3ab4b",
+  "subject": "fix: reject oversized file listing page numbers",
+  "lines": 20,
+  "files": 3
+ },
+ {
+  "repo": "caoqianming/django-vue-admin",
+  "stack": "django",
+  "sha": "0055de9998226131e96a26021fe1aebecf4e86d4",
+  "subject": "refactor(files): check ownership directly before deletion",
+  "lines": 21,
+  "files": 2
+ },
+ {
+  "repo": "caoqianming/django-vue-admin",
+  "stack": "django",
+  "sha": "a0fa9437ec66374982ad8923f49cc52f2393c63f",
+  "subject": "同步一下数据库",
+  "lines": 18,
+  "files": 2
+ },
+ {
+  "repo": "caoqianming/django-vue-admin",
+  "stack": "django",
+  "sha": "baaf93e1a2a57f5212bdff78a2dd48a0442e55c8",
+  "subject": "准备细化权限控制",
+  "lines": 31,
+  "files": 5
+ },
+ {
+  "repo": "fastapi-practices/fastapi-best-architecture",
+  "stack": "fastapi",
+  "sha": "8dc1b3f292223cc79d51eb8f997bf94601eeeb14",
+  "subject": "Rename relation id list request fields to *_ids (#1286)",
+  "lines": 111,
+  "files": 11
+ },
+ {
+  "repo": "fastapi-practices/fastapi-best-architecture",
+  "stack": "fastapi",
+  "sha": "8d9a79dee4a364175a4979e93005d040ad664be0",
+  "subject": "Reuse Redis key strings in local variables (#1259)",
+  "lines": 63,
+  "files": 8
+ },
+ {
+  "repo": "fastapi-practices/fastapi-best-architecture",
+  "stack": "fastapi",
+  "sha": "2e86d79150c0abf0191dc8c189734214c4934a17",
+  "subject": "Optimize some global variable definitions (#1178)",
+  "lines": 263,
+  "files": 17
+ },
+ {
+  "repo": "benavlabs/FastAPI-boilerplate",
+  "stack": "fastapi",
+  "sha": "23851c9ab73e5d7954b22f0302524c90961df3d4",
+  "subject": "draw every module of the composition root in both guides, and say what writes them",
+  "lines": 115,
+  "files": 14
+ },
+ {
+  "repo": "benavlabs/FastAPI-boilerplate",
+  "stack": "fastapi",
+  "sha": "d1411725aaf06b2e0378983f5715261e0ccc0c14",
+  "subject": "require the update permission of a scoped credential editing its owner's own profile",
+  "lines": 148,
+  "files": 9
+ },
+ {
+  "repo": "benavlabs/FastAPI-boilerplate",
+  "stack": "fastapi",
+  "sha": "493e02fc1eec3452543add35d9382332fc8a49da",
+  "subject": "record an address a usage row cannot hold as none instead of failing the request",
+  "lines": 200,
+  "files": 5
+ },
+ {
+  "repo": "Soju06/codex-lb",
+  "stack": "fastapi",
+  "sha": "0a6d185a19a4246a7aefe1df7982651343041463",
+  "subject": "fix(scim): enforce body limits while reading the stream (#2541)",
+  "lines": 165,
+  "files": 9
+ },
+ {
+  "repo": "Soju06/codex-lb",
+  "stack": "fastapi",
+  "sha": "7010af095f250b510ea025705d1bfb7910ced0f9",
+  "subject": "refactor(config): route every environment read through Settings (#2187)",
+  "lines": 425,
+  "files": 23
+ },
+ {
+  "repo": "Soju06/codex-lb",
+  "stack": "fastapi",
+  "sha": "fed54730baed25bd6cbc6d0d800713859a9927e9",
+  "subject": "fix(metrics): bound request metric path and method label cardinality (#1967)",
+  "lines": 207,
+  "files": 5
+ },
+ {
+  "repo": "lobsters/lobsters",
+  "stack": "rails",
+  "sha": "e646f63ac7091dd5ea4bc5edfd2757d3dd392595",
+  "subject": "restore transactional + notifications email; not yet mailing list mode",
+  "lines": 43,
+  "files": 5
+ },
+ {
+  "repo": "lobsters/lobsters",
+  "stack": "rails",
+  "sha": "1afa63121a22ce4473ffea2fc3dcc632407956c5",
+  "subject": "add PWA support, fix #1287",
+  "lines": 32,
+  "files": 5
+ },
+ {
+  "repo": "lobsters/lobsters",
+  "stack": "rails",
+  "sha": "afd505e45084f7c9fd504ae8968886eee102c961",
+  "subject": "Related fix to story.rb to remove an unneeded include",
+  "lines": 36,
+  "files": 2
+ },
+ {
+  "repo": "octobox/octobox",
+  "stack": "rails",
+  "sha": "9c3f4937007a5be95f8ed75b607583fc4447548d",
+  "subject": "Default Notification.archive to true when value casts to nil",
+  "lines": 10,
+  "files": 2
+ },
+ {
+  "repo": "octobox/octobox",
+  "stack": "rails",
+  "sha": "2eac19a098571ed6430cb5f30b58b2fd0931adb5",
+  "subject": "Add arrow key navigation shortcuts",
+  "lines": 138,
+  "files": 4
+ },
+ {
+  "repo": "octobox/octobox",
+  "stack": "rails",
+  "sha": "271c40d48973e6d80eeb59150248370d3195a096",
+  "subject": "Keep draft navigation within filtered results",
+  "lines": 13,
+  "files": 3
+ },
+ {
+  "repo": "blackcandy-org/blackcandy",
+  "stack": "rails",
+  "sha": "4eeca7f6f585d9609e794c799ffd9fefc8ac00bb",
+  "subject": "feat: show favorite playlist first on playlists page (#506)",
+  "lines": 33,
+  "files": 6
+ },
+ {
+  "repo": "blackcandy-org/blackcandy",
+  "stack": "rails",
+  "sha": "965aabae007b0b87ded9223f1007d630e232af37",
+  "subject": "feat: add API search functionality for albums, artists, playlists, and songs",
+  "lines": 115,
+  "files": 11
+ },
+ {
+  "repo": "blackcandy-org/blackcandy",
+  "stack": "rails",
+  "sha": "8276f99da52ce78228818b46070c8fc09de52cfb",
+  "subject": "feat: add minimum app version support",
+  "lines": 28,
+  "files": 5
+ },
+ {
+  "repo": "freescout-help-desk/freescout",
+  "stack": "laravel",
+  "sha": "26e1951039cb393a24423a0146faac69266916d4",
+  "subject": "Conversation split view",
+  "lines": 31,
+  "files": 4
+ },
+ {
+  "repo": "freescout-help-desk/freescout",
+  "stack": "laravel",
+  "sha": "9921987a8813d63e0f08b56f0818c3b24af9d2f5",
+  "subject": "Remove target=_blank from non-external links - closes #5086",
+  "lines": 33,
+  "files": 10
+ },
+ {
+  "repo": "freescout-help-desk/freescout",
+  "stack": "laravel",
+  "sha": "46bd96f44234ab4971fd1c197a1482ab6846600c",
+  "subject": "Mark notifications as read by convesrsation_id field in notifications table - closes #5600",
+  "lines": 83,
+  "files": 3
+ },
+ {
+  "repo": "OpnForm/OpnForm",
+  "stack": "laravel",
+  "sha": "412dd90af518e5249740e9ce5b070e329ef9911d",
+  "subject": "Remove Vapor Core and update vulnerable dependencies (#1365)",
+  "lines": 409,
+  "files": 7
+ },
+ {
+  "repo": "OpnForm/OpnForm",
+  "stack": "laravel",
+  "sha": "ab2971a2e59a27ec80bb17e111b073b321bf2b6a",
+  "subject": "Fix export status API docs and secure token polling (#1314)",
+  "lines": 149,
+  "files": 7
+ },
+ {
+  "repo": "OpnForm/OpnForm",
+  "stack": "laravel",
+  "sha": "a580a1cf1d4b9c5ead142209d1c2b758cdae5397",
+  "subject": "Enhance PDF generation with computed variable support (#1233)",
+  "lines": 580,
+  "files": 10
+ },
+ {
+  "repo": "LinkStackOrg/LinkStack",
+  "stack": "laravel",
+  "sha": "8ccdee471c2875377c3f61309c97f29d63158ad5",
+  "subject": " JulianPrieber committed 1 hour ago Create global validation endpoint",
+  "lines": 420,
+  "files": 11
+ },
+ {
+  "repo": "LinkStackOrg/LinkStack",
+  "stack": "laravel",
+  "sha": "cc406d18b5e21ae0999d0b7338d4cb2946a0eb2e",
+  "subject": "Fix Updater",
+  "lines": 130,
+  "files": 2
+ },
+ {
+  "repo": "LinkStackOrg/LinkStack",
+  "stack": "laravel",
+  "sha": "28b073df2f9540427c4427634320f9501e6a2eaf",
+  "subject": "Now counting clicks using JS",
+  "lines": 50,
+  "files": 2
+ },
+ {
+  "repo": "getopenpost/openpost",
+  "stack": "sveltekit",
+  "sha": "5d8f01943eac491f3740ca06f3ab973b8a90073d",
+  "subject": "fix(linkedin): resolve organization logo assets through Images API",
+  "lines": 110,
+  "files": 3
+ },
+ {
+  "repo": "getopenpost/openpost",
+  "stack": "sveltekit",
+  "sha": "7f0d634cb0f3b3e2e4d7ff1ccd9bb0554808e3e4",
+  "subject": "test(web): recover duplicate browser fixture carries",
+  "lines": 156,
+  "files": 6
+ },
+ {
+  "repo": "getopenpost/openpost",
+  "stack": "sveltekit",
+  "sha": "db117bdaf282a42d61cf188ad409ac642e5e4ca6",
+  "subject": "test(server): consolidate eleven checks into existing keepers (#476)",
+  "lines": 430,
+  "files": 15
+ },
+ {
+  "repo": "logtide-dev/logtide",
+  "stack": "sveltekit",
+  "sha": "c993470c4c26d5e22bd9a75e18549a96fbbf8e65",
+  "subject": "hide null quotas only under a telemetry cap",
+  "lines": 73,
+  "files": 3
+ },
+ {
+  "repo": "logtide-dev/logtide",
+  "stack": "sveltekit",
+  "sha": "933b3558b50ed4559ac4cdf2ecddf9f267adb013",
+  "subject": "require terms acceptance when configured",
+  "lines": 176,
+  "files": 6
+ },
+ {
+  "repo": "logtide-dev/logtide",
+  "stack": "sveltekit",
+  "sha": "dd625776e51c30a640e4c77b71a84431504d698d",
+  "subject": "add metrics datapoint quota",
+  "lines": 198,
+  "files": 7
+ },
+ {
+  "repo": "atinux/atidone",
+  "stack": "nuxt",
+  "sha": "63bfc018480aafa0986c083a6d9b40675771d9a0",
+  "subject": "fix typecheck",
+  "lines": 58,
+  "files": 6
+ },
+ {
+  "repo": "atinux/atidone",
+  "stack": "nuxt",
+  "sha": "a345ecd7fed1ed293c3538b1e45fd0ca1716b550",
+  "subject": "chore: lint and link to turso",
+  "lines": 52,
+  "files": 6
+ },
+ {
+  "repo": "Smaug6739/Alexandrie",
+  "stack": "nuxt",
+  "sha": "f4976beb9b1828534be508e16e05edf9594c5399",
+  "subject": "fix(oidc): widen users.avatar and skip non-URL picture claims (#796)",
+  "lines": 22,
+  "files": 3
+ }
+]

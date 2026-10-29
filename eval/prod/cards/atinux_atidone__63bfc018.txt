@@ -1,0 +1,19 @@
+plain · 6 files changed since 63bfc018~1
+You asked: "fix typecheck"
+
+  2 things to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed __Template() in app/app.vue, which doesn't look related to what
+    you asked for. (This is a guess.)
+  ? The agent also changed shared/types/db.d.ts, which doesn't look related to what you
+    asked for. (This is a guess.)
+
+WHAT CHANGED
+  Pages
+    • The agent changed the optimistic todos page and the todos page in ways plain can't
+      describe yet. Ask the agent what they do differently.
+  Server
+    • The todo part of your server changed in a way plain can't describe yet. Ask the agent
+      what it does differently.
+      /api/todos/[id]

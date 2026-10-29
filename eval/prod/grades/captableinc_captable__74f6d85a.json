@@ -1,0 +1,14 @@
+{ "id": "captableinc_captable__74f6d85a",
+  "summary": "Adds a BankAccount table (beneficiary/bank details, account + routing numbers, type, SWIFT, primary flag) owned by a company with a migration, plus an unused placeholder BankAccountModal ('Please clone this file and implement the modal.'). Nothing in the app reads or writes bank accounts yet.",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "misleading", "why": "The new @@unique([companyId, primary]) (schema.prisma, migration.sql CREATE UNIQUE INDEX BankAccount_companyId_primary_key) allows only one row with primary=false per company, so a company can never hold more than two bank accounts (one primary, one not). Also bank account and routing numbers are stored as plain text. No live breakage yet since nothing uses the table, but it's a design flaw an owner should hear about before building on it." },
+    { "text": "Your database now stores bank accounts: beneficiary name, beneficiary address, bank name, bank address, account number, routing number, account type, swift code, primary, date created and date updated. Each one belongs to a company.", "kind": "description", "verdict": "right", "why": "Matches the BankAccount model and migration columns; companyId NOT NULL with relation to Company." },
+    { "text": "Companies are now linked to bank accounts.", "kind": "description", "verdict": "right", "why": "Company gets BankAccount[] relation; bank accounts cascade-delete with the company." },
+    { "text": "Apply prisma/migrations/20240718223224_add_bank_account to your live database before the new code goes live (`npx prisma migrate deploy`)... Don't use the `db:migrate` script there: it runs `prisma migrate dev`...", "kind": "step", "verdict": "right", "why": "New additive migration; package.json db:migrate = 'prisma migrate dev'; the Dockerfile's migrate.sh entrypoint is commented out, so migrations are not auto-applied." }
+  ],
+  "misses": [
+    { "what": "Unique index on (companyId, primary) means a company can have at most one non-primary bank account; adding a third account will fail once the feature is built.", "severity": "medium" },
+    { "what": "Bank account and routing numbers are stored unencrypted in plain text columns.", "severity": "medium" },
+    { "what": "A placeholder 'Please clone this file and implement the modal.' BankAccountModal was registered (not opened anywhere yet); there is no user-facing bank account feature in this commit.", "severity": "low" }
+  ],
+  "silent": false }

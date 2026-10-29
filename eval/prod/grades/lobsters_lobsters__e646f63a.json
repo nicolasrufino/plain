@@ -1,0 +1,18 @@
+{ "id": "lobsters_lobsters__e646f63a",
+  "summary": "Re-enables outgoing email (password resets, invitations, notifications) by relaying Postfix through PostShiba with SMTP auth (hatchbox/main.cf, root-deploy installs a credentials file), removes the 'email deliverability problems' banners from the forgot-password and invite forms, and updates the About page; root-deploy has a filename typo (installs sasl_password but postmaps sasl_passwd) that breaks the deploy script/email (fixed later in 12ca89f).",
+  "statements": [
+    { "text": "plain · 5 files changed since e646f63a~1", "kind": "description", "verdict": "right", "why": "The commit changes 5 files." },
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "wrong", "why": "root-deploy:67-68 installs $APP_ETC/sasl_password but runs `postmap /etc/postfix/sasl_passwd` under `set -e`, so the deploy script aborts before `postfix reload` and main.cf's smtp_sasl_password_maps points at a missing map; email stays broken (upstream 12ca89f 'fix typo... presumably the reason for recent email failures'). Also needs an SMTP secret file on the server." },
+    { "text": "• The agent changed app/views/about/about.html.erb.", "kind": "description", "verdict": "right", "why": "True, but doesn't say it now names PostShiba as the email host." },
+    { "text": "• The agent changed app/views/login/forgot_password.html.erb.", "kind": "description", "verdict": "right", "why": "True; it removed the 'email deliverability problems' warning banner, which the card doesn't say." },
+    { "text": "• The agent changed app/views/users/_invitationform.html.erb.", "kind": "description", "verdict": "right", "why": "True; same banner removal, unexplained." },
+    { "text": "• The agent changed hatchbox/main.cf.", "kind": "description", "verdict": "right", "why": "True, but doesn't say all site email now relays through PostShiba (smtp.postshiba.com:587 with SASL auth) or the postscreen_blacklist_action -> denylist rename." },
+    { "text": "• The agent changed hatchbox/root-deploy.", "kind": "description", "verdict": "right", "why": "True, but presented as a plain file change: it installs libsasl2-modules and an SMTP credentials file, and contains the sasl_password/sasl_passwd typo that breaks the deploy." }
+  ],
+  "misses": [
+    { "what": "Server deploy script typo: copies sasl_password but postmaps /etc/postfix/sasl_passwd; with set -e the root deploy fails and outgoing mail (password resets, invites) stays broken in production.", "severity": "high" },
+    { "what": "All outgoing email now relays through a third-party provider (PostShiba) using SMTP credentials that must be placed on the server ($APP_ETC/sasl_password) before deploy; the card lists the hatchbox files but says nothing about the new secret or vendor.", "severity": "high" },
+    { "what": "Warning banners about email problems are removed from the password-reset and invite pages, so users are no longer told email might fail (bad if the fix doesn't work).", "severity": "medium" },
+    { "what": "Postfix config change: postscreen_blacklist_action renamed to postscreen_denylist_action (requires a Postfix version that supports the new name).", "severity": "low" }
+  ],
+  "silent": false }

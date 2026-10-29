@@ -1,0 +1,16 @@
+{ "id": "blackcandy-org_blackcandy__965aabae",
+  "summary": "Adds JSON API responses for search: GET /search returns albums/artists/playlists/songs (10 each) with a Link header pointing to the per-category endpoints when more exist, and /search/albums|artists|playlists|songs now return JSON lists. Login (session or API token) still required, but playlist search is not scoped to the user, so any user can list other users' playlists via the API.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "wrong", "why": "The new JSON search lists every user's playlists (id, name, owner user_id): Playlist.search is unscoped (search_controller.rb:11, search/playlists_controller.rb:5, playlists/_playlist.json.jbuilder), while every other playlist query uses Current.user; a blank query returns all of them. Pre-existing in the web search page, but this commit exposes it through the API." },
+    { "text": "+ The agent added app/views/search/albums/index.json.jbuilder.", "kind": "description", "verdict": "right", "why": "True, but doesn't say /search/albums now answers API (JSON) requests." },
+    { "text": "+ The agent added app/views/search/artists/index.json.jbuilder.", "kind": "description", "verdict": "right", "why": "True; same, unexplained." },
+    { "text": "+ The agent added app/views/search/index.json.jbuilder.", "kind": "description", "verdict": "right", "why": "True; GET /search now returns albums/artists/playlists/songs as JSON. Card omits the search_controller.rb change that adds a Link header." },
+    { "text": "+ The agent added app/views/search/playlists/index.json.jbuilder.", "kind": "description", "verdict": "right", "why": "True; this is the endpoint that returns other users' playlists, not flagged." },
+    { "text": "+ The agent added app/views/search/songs/index.json.jbuilder.", "kind": "description", "verdict": "right", "why": "True; unexplained." }
+  ],
+  "misses": [
+    { "what": "New search API returns playlists from every user, not just the caller: Playlist.search is unscoped (search_controller.rb:11, search/playlists_controller.rb:5), and the JSON includes id, name and owner user_id; the test even has visitor1 finding admin's playlist. Every other playlist query in the app is scoped to Current.user. (Web search already had this, but now it's in the API.)", "severity": "high" },
+    { "what": "Mobile/API clients can now search albums, artists, playlists and songs (GET /search and /search/<type> as JSON, login or API token required).", "severity": "medium" },
+    { "what": "The per-category search endpoints are unpaginated, and a blank query returns everything (SearchableConcern returns all records), so /search/songs.json with no query dumps the whole library in one response.", "severity": "low" }
+  ],
+  "silent": true }

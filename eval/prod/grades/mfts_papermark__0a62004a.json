@@ -1,0 +1,97 @@
+{
+  "id": "mfts_papermark__0a62004a",
+  "summary": "Scaffolds a beta 'redaction' feature (PDF only, behind the off-by-default 'redaction' flag): two new DB tables (DocumentRedactionJob, DocumentRedaction), a /documents/[id]/redactions/[jobId] page, a 'Redaction jobs' menu item and launcher on the document page, two Trigger.dev queues, an optional expiresIn passthrough on the presigned-URL proxy (still capped at 1h downstream), and trigger.dev 4.5.3->4.5.5. The redaction UI components it imports (ee/features/redaction/*) are not in the repo at this commit.",
+  "statements": [
+    {
+      "text": "No problems spotted",
+      "kind": "reassurance",
+      "verdict": "wrong",
+      "why": "pages/documents/[id]/index.tsx, pages/documents/[id]/redactions/[jobId].tsx and components/documents/document-header.tsx import @/ee/features/redaction/components/{redaction-launcher,redaction-workspace,redaction-jobs-dialog,redaction-config-dialog}, none of which exist at 0a62004a (ee/features has no redaction folder). The Next.js build fails with module-not-found, so this commit cannot ship as is."
+    },
+    {
+      "text": "Each document redaction page is new, titled \"Q1 2024 Financial Performance Report\" ... (long list of sections, upload boxes, Base/Plus/Premium buttons, data sent/deleted, links)",
+      "kind": "description",
+      "verdict": "wrong",
+      "why": "The new page (pages/documents/[id]/redactions/[jobId].tsx, 41 lines) only shows a spinner then <RedactionWorkspace> inside AppLayout. The title, sections, upload boxes, plan buttons, permission-group deletes and links are invented/pulled from unrelated components."
+    },
+    {
+      "text": "Each document page now shows the redaction launcher. /documents/[id]",
+      "kind": "description",
+      "verdict": "misleading",
+      "why": "Intended, but RedactionLauncher is imported from a file that is not in the repo, so the document page would not build; and the feature is gated off for all teams by default (featureFlags 'redaction': false)."
+    },
+    {
+      "text": "The file s3 get presigned get URL proxy part of your server changed in a way plain can't describe yet.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True but uninformative: the proxy now forwards a caller-chosen expiresIn for download links; still login + team-membership checked, and the downstream endpoint caps it at 1 hour (get-presigned-get-url.ts Math.min(..., ONE_HOUR))."
+    },
+    {
+      "text": "Users now also store the created redaction jobs.",
+      "kind": "description",
+      "verdict": "misleading",
+      "why": "The real database change is two new tables (redaction jobs and individual redaction boxes) linked to documents, versions, teams and creator; this phrasing makes it sound like a minor user-field change."
+    },
+    {
+      "text": "The agent added prisma/schema/redaction.prisma; changed document.prisma; changed team.prisma.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Matches the diff."
+    },
+    {
+      "text": "Apply prisma/migrations/20260424000000_add_redactions_model to your live database before the new code goes live",
+      "kind": "step",
+      "verdict": "right",
+      "why": "New migration creates the two tables and foreign keys; additive, safe to apply."
+    },
+    {
+      "text": "Test anything that uses @trigger.dev/python: upgraded 4.5.3 -> 4.5.5",
+      "kind": "step",
+      "verdict": "right",
+      "why": "package.json bump."
+    },
+    {
+      "text": "Test anything that uses @trigger.dev/react-hooks: upgraded 4.5.3 -> 4.5.5",
+      "kind": "step",
+      "verdict": "right",
+      "why": "package.json bump."
+    },
+    {
+      "text": "Test anything that uses @trigger.dev/sdk: upgraded 4.5.3 -> 4.5.5",
+      "kind": "step",
+      "verdict": "right",
+      "why": "package.json bump."
+    },
+    {
+      "text": "Test anything that uses @trigger.dev/build: upgraded 4.5.3 -> 4.5.5",
+      "kind": "step",
+      "verdict": "right",
+      "why": "package.json bump."
+    },
+    {
+      "text": "(Hidden: 1 file with only formatting changes, or lockfiles.)",
+      "kind": "description",
+      "verdict": "right",
+      "why": "package-lock.json for the trigger.dev bumps; 12 shown + 1 hidden = the commit's 13 files."
+    }
+  ],
+  "misses": [
+    {
+      "what": "The commit imports four redaction components from ee/features/redaction/ that are not in the repository, so the app will fail to build/deploy at this commit.",
+      "severity": "high"
+    },
+    {
+      "what": "The feature is a beta behind the 'redaction' feature flag (off for every team by default, PDFs only), so even once it builds, users won't see it unless enabled in Edge Config.",
+      "severity": "medium"
+    },
+    {
+      "what": "Redaction uses an AI model (Gemini, per schema comments) on document contents via background Trigger.dev jobs; owners may need to know documents are sent to a third-party AI and that the Trigger tasks aren't included here.",
+      "severity": "low"
+    },
+    {
+      "what": "Two new Trigger.dev queues (detect-redactions, apply-redactions) were added.",
+      "severity": "low"
+    }
+  ],
+  "silent": false
+}

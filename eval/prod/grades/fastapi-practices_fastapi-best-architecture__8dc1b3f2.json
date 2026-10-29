@@ -1,0 +1,35 @@
+{
+ "id": "fastapi-practices_fastapi-best-architecture__8dc1b3f2",
+ "summary": "Renames the ID-list fields in several admin request bodies (user roles, role menus, role scopes, data-scope rules) to *_ids; internal logic unchanged, but the API contract the admin frontend sends changes.",
+ "statements": [
+  {
+   "text": "✓ No problems spotted",
+   "kind": "reassurance",
+   "verdict": "misleading",
+   "why": "Breaking API change: request bodies for create/update user (roles->role_ids), role menus (menus->menu_ids), role scopes (scopes->scope_ids), data-scope rules (rules->rule_ids) renamed (schema/user.py:42,83; role.py:51,64; data_scope.py:42). Any admin frontend still sending old names gets 422 errors; owner must ship the frontend update together. Auth unchanged (SuperUser / RequestPermission+RBAC)."
+  },
+  {
+   "text": "• The agent changed the rules, menus and scopes parts of your server in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "misleading",
+   "why": "Names the right areas (PUT /sys/roles/{pk}/menus, /sys/roles/{pk}/scopes, /sys/data-scopes/{pk}/rules) but omits POST /sys/users and PUT /sys/users/{pk}, and gives no hint that the expected request fields were renamed."
+  },
+  {
+   "text": "• The agent also changed crud_data_scope.py, crud_role.py, crud_user.py, schema files and service files.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Accurate file list."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Admin API request fields renamed (roles/menus/scopes/rules -> role_ids/menu_ids/scope_ids/rule_ids) on create user, edit user, edit role menus, edit role data scopes, edit data-scope rules. Admin UI must be updated at the same time or these saves fail (422) in production.",
+   "severity": "high"
+  },
+  {
+   "what": "Creating/editing users (role assignment) is affected too, not just rules/menus/scopes.",
+   "severity": "medium"
+  }
+ ],
+ "silent": false
+}

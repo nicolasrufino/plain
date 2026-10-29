@@ -1,0 +1,7 @@
+{ "id": "getopenpost_openpost__7f0d634c",
+  "summary": "Test-only: reshuffles/dedupes six web (Svelte) browser test files; no app code touched.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "right", "why": "All 6 files are *.svelte.test.ts under apps/web; no runtime code changed." }
+  ],
+  "misses": [],
+  "silent": false }

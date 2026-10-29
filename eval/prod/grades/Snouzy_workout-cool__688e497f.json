@@ -1,0 +1,11 @@
+{ "id": "Snouzy_workout-cool__688e497f",
+  "summary": "Adds a new 'What's New' release note (Portuguese support + donation banner, with GitHub Sponsors/Ko-fi links) in all 6 languages, turns the Hacker News note title into a link, and makes the release-notes dialog render translation strings as HTML (dangerouslySetInnerHTML) and scroll when tall. It does not itself add Portuguese or a donation banner.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "wrong", "why": "Users see a new entry in the 'What's New' dialog with clickable donation links, the Hacker News title is now a link, and the dialog now renders HTML (src/features/release-notes/ui/release-notes-dialog.tsx:34-35) and scrolls (max-h-[60vh])." }
+  ],
+  "misses": [
+    { "what": "New 'What's New' note shown to all users announcing Portuguese support and a donation banner, linking to GitHub Sponsors and Ko-fi.", "severity": "medium" },
+    { "what": "The release-notes dialog now injects translation text as raw HTML (dangerouslySetInnerHTML). Safe today because the strings are in the code, but any future release-note text from an untrusted source would run as HTML.", "severity": "low" },
+    { "what": "Despite the commit title, this commit doesn't add Portuguese or a donation banner; it only announces them.", "severity": "low" }
+  ],
+  "silent": true }

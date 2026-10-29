@@ -1,0 +1,4 @@
+plain · 2 files changed since afd505e4~1
+You asked: "Related fix to story.rb to remove an unneeded include"
+
+Nothing about the app changed.

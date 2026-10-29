@@ -1,0 +1,4 @@
+plain · 2 files changed since 9c3f4937~1
+You asked: "Default Notification.archive to true when value casts to nil"
+
+Nothing about the app changed.

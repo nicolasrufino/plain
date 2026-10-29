@@ -1,0 +1,59 @@
+{
+ "id": "benavlabs_FastAPI-boilerplate__d1411725",
+ "summary": "PATCH /api/v1/users/{username}: credentials carrying a scope (API keys) no longer get the 'editing your own profile' free pass; they need user.update in scope. Closes a hole where read-only keys could rename the owning account.",
+ "statements": [
+  {
+   "text": "✓ No problems spotted",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "The change tightens access (service.py:415 `if not scoped and ...`); nothing newly exposed. Still, the card hides that this is a security fix and a behaviour change for API-key users."
+  },
+  {
+   "text": "• The main part of your server changed in a way plain can't describe yet. /[username]",
+   "kind": "description",
+   "verdict": "misleading",
+   "why": "Real address is PATCH /api/v1/users/{username} (profile edit). Gives no hint that API keys can no longer edit their owner's profile without user.update."
+  },
+  {
+   "text": "• The agent changed docs/changelog.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Changelog entry for the fix."
+  },
+  {
+   "text": "• The agent changed docs/user-guide/authentication/api-keys.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs updated."
+  },
+  {
+   "text": "• The agent changed docs/user-guide/authentication/permissions.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs updated."
+  },
+  {
+   "text": "• The agent changed docs/user-guide/authentication/user-management.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs updated."
+  },
+  {
+   "text": "• The agent also changed backend/src/modules/user/service.py and three test files.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "service.py holds the actual permission change; card doesn't say what it is."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Security fix: an API key scoped to nothing or only to reading could rename its owner's account (name/username) via PATCH /api/v1/users/{username}; scoped credentials now need user.update for that.",
+   "severity": "high"
+  },
+  {
+   "what": "Behaviour change: existing API-key integrations that edit their own profile now get 403 unless the key is scoped with user.update (and, without the rbac feature, only superusers' keys can hold it). Browser sessions are unaffected.",
+   "severity": "medium"
+  }
+ ],
+ "silent": true
+}

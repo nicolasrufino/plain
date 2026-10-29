@@ -1,0 +1,17 @@
+plain · 4 files changed since a3ae8bb8~1
+You asked: "Prepare for AWS deployment"
+
+  3 things to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed app.js, which doesn't look related to what you asked for. (This
+    is a guess.)
+  ? The agent also changed controllers/userController.js, which doesn't look related to what
+    you asked for. (This is a guess.)
+  ? The agent also changed routes/user.js, which doesn't look related to what you asked for.
+    (This is a guess.)
+
+WHAT CHANGED
+  Server
+    + New server code that lists data and works without logging in.
+      /api/user/status

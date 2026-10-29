@@ -1,0 +1,18 @@
+{ "id": "freescout-help-desk_freescout__9921987a",
+  "summary": "Internal links in FreeScout (previous-conversation sidebar, search results, navbar search form, logs page, customer-merge notice, mail-queue warning, and links inside email thread bodies that point at the app's own domain) now open in the same tab instead of a new tab; the client-side processLinks() that forced every thread link to a new tab is disabled; freescout.net links now come from config('app.freescout_url'). A leftover debug \\Log::error('SKIP host=...') line was committed in Thread::getBodyWithFormatedLinks.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "misleading", "why": "No security/data issue, but app/Thread.php:391 leaves a debug \\Log::error('SKIP host=...') that writes an ERROR log entry for every same-domain link each time a conversation is displayed, polluting the error log/App Logs." },
+    { "text": "• The agent changed resources/views/conversations/partials/prev_convs_short.blade.php.", "kind": "description", "verdict": "right", "why": "Previous-conversation links no longer open in a new tab; card doesn't say so." },
+    { "text": "• The agent changed resources/views/conversations/search.blade.php.", "kind": "description", "verdict": "right", "why": "Search results now open in the same tab (target_blank => false); not explained." },
+    { "text": "• The agent changed resources/views/layouts/app.blade.php.", "kind": "description", "verdict": "right", "why": "Navbar search form no longer opens results in a new tab; not explained." },
+    { "text": "• The agent changed resources/views/modules/modules.blade.php.", "kind": "description", "verdict": "right", "why": "Remind License Keys URL now built from config('app.freescout_url') (default https://freescout.net, same result)." },
+    { "text": "• The agent changed resources/views/secure/logs.blade.php.", "kind": "description", "verdict": "right", "why": "Conversation links in logs open in same tab." },
+    { "text": "• The agent changed resources/views/users/subscriptions_table.blade.php.", "kind": "description", "verdict": "right", "why": "Mobile app links use config URL; same destination by default." }
+  ],
+  "misses": [
+    { "what": "Links that used to open in a new browser tab (search results, header search, previous conversations, links to your own helpdesk inside emails, log links) now open in the same tab, replacing the page the agent was on.", "severity": "medium" },
+    { "what": "A debug line was left in (app/Thread.php: \\Log::error('SKIP host=...')) that writes an error-level log entry every time a conversation containing a link to your own helpdesk is shown, flooding the error log.", "severity": "medium" },
+    { "what": "The 'Recommendations' link in the outgoing-mail-problem warning points to an external wiki but also lost its new-tab behaviour.", "severity": "low" },
+    { "what": "Card omits the server-side changes entirely (Thread.php link rewriting, Helper.php warning, CustomersController.php, main.js processLinks disabled).", "severity": "low" }
+  ],
+  "silent": true }

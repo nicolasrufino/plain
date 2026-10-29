@@ -1,0 +1,26 @@
+{
+ "id": "fastapi-practices_fastapi-best-architecture__8d9a79de",
+ "summary": "Refactor only: repeated Redis key strings (captcha, lock, login-failure, session index, JWT user cache, celery last_update) stored in local variables; some calls reformatted. No behaviour change.",
+ "statements": [
+  {
+   "text": "✓ No problems spotted",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Pure refactor: Redis key f-strings hoisted into local variables / reformatted; identical keys and calls."
+  },
+  {
+   "text": "• The main part of your server changed in a way plain can't describe yet. Ask the agent what it does differently. /",
+   "kind": "description",
+   "verdict": "wrong",
+   "why": "The changed route is GET /api/v1/monitors/sessions (online.py, superuser-only via DependsSuperUser), not '/'; and nothing behaves differently."
+  },
+  {
+   "text": "• The agent also changed auth_service.py, user_password_history_service.py, user_service.py, schedulers.py, jwt.py, token.py and plugin/status.py.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True list; all are the same key-variable refactor."
+  }
+ ],
+ "misses": [],
+ "silent": true
+}

@@ -1,0 +1,16 @@
+plain · 3 files changed since 271c40d4~1
+You asked: "Keep draft navigation within filtered results"
+
+  1 thing to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed app/controllers/notifications_controller.rb, which doesn't look
+    related to what you asked for. (This is a guess.)
+
+WHAT CHANGED
+  Server
+    • The notification show part of your server changed in a way plain can't describe yet.
+      Ask the agent what it does differently.
+      /notifications/[id]/show
+  Other files
+    • The agent changed app/views/notifications/_filter-list.html.erb.

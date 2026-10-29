@@ -1,0 +1,12 @@
+plain · 5 files changed since e646f63a~1
+You asked: "restore transactional + notifications email; not yet mailing list mode"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent changed app/views/about/about.html.erb.
+    • The agent changed app/views/login/forgot_password.html.erb.
+    • The agent changed app/views/users/_invitationform.html.erb.
+    • The agent changed hatchbox/main.cf.
+    • The agent changed hatchbox/root-deploy.

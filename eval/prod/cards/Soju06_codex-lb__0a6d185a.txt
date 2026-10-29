@@ -1,0 +1,25 @@
+plain · 9 files changed since 0a6d185a~1
+You asked: "fix(scim): enforce body limits while reading the stream (#2541)"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    + The agent added
+      openspec/changes/archive/2026-09-30-bound-scim-streamed-bodies/context.md, a notes
+      file (not code).
+    + The agent added
+      openspec/changes/archive/2026-09-30-bound-scim-streamed-bodies/proposal.md, a notes
+      file (not code).
+    + The agent added
+      openspec/changes/archive/2026-09-30-bound-scim-streamed-bodies/specs/http-ingress-limits/spec.md,
+      a notes file (not code).
+    + The agent added
+      openspec/changes/archive/2026-09-30-bound-scim-streamed-bodies/tasks.md, a notes file
+      (not code).
+    + The agent added
+      openspec/changes/archive/2026-09-30-bound-scim-streamed-bodies/verification.md, a
+      notes file (not code).
+    • The agent changed openspec/specs/http-ingress-limits/spec.md, a notes file (not code).
+    • The agent also added tests/unit/test_scim_body_limit.py (tests).
+    • The agent also changed tests/integration/test_scim_v2_users.py (tests).

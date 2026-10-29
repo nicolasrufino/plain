@@ -1,0 +1,22 @@
+plain · 6 files changed since 412dd90a~1
+You asked: "Remove Vapor Core and update vulnerable dependencies (#1365)"
+
+  2 things to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed api/app/Http/Controllers/Content/SignedStorageUrlController.php,
+    which doesn't look related to what you asked for. (This is a guess.)
+  ? The agent also changed api/config/filesystems.php, which doesn't look related to what
+    you asked for. (This is a guess.)
+
+WHAT CHANGED
+  Server
+    • The vapor signed storage URL part of your server changed in a way plain can't describe
+      yet. Ask the agent what it does differently.
+      /vapor/signed-storage-url
+  Other files
+    • The agent changed api/composer.json.
+    • The agent changed api/composer.lock.
+    • The agent changed docs/deployment/docker.mdx.
+
+(Hidden: 1 file with only formatting changes, or lockfiles.)

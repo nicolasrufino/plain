@@ -1,0 +1,7 @@
+plain · 6 files changed since 933b3558~1
+You asked: "require terms acceptance when configured"
+
+  ✓ No problems spotted  ·  1 loose end
+
+LOOSE ENDS
+  ◐ getActiveTerms() returns made-up data instead of reading your database.

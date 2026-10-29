@@ -1,0 +1,13 @@
+{ "id": "OpnForm_OpnForm__a580a1cf",
+  "summary": "PDF templates can now place a form's computed variables (formula results) as zones: the editor lists/searches them, saving validates their ids, and PdfGeneratorService evaluates them per submission (booleans -> Yes/No, arrays joined). Also: values like 0/'0' are now printed instead of skipped, the PDF cache key includes a hash of the computed-variable definitions (old cached PDFs regenerate), and zone field_id validation is stricter.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "right", "why": "Signed-URL download/preview routes unchanged (api/routes/api.php:349-364, 'signed' middleware); template edit routes stay under auth.multi; computed variables are evaluated server-side from the submission only. No security/data-loss issue found." },
+    { "text": "• The agent changed the open form PDF template submission download and open form PDF template preview parts of your server in ways plain can't describe yet. Ask the agent what they do differently.", "kind": "description", "verdict": "right", "why": "Those routes use PdfGeneratorService, which changed; but nothing about what changed is explained." }
+  ],
+  "misses": [
+    { "what": "New feature: in the PDF editor you can now add computed variables (formula results) to a PDF template, and generated PDFs fill them in for each submission.", "severity": "medium" },
+    { "what": "Fields whose answer is 0 (or '0') now appear in generated PDFs; before they were left blank.", "severity": "low" },
+    { "what": "All previously cached PDFs are regenerated once (cache key changed), and PDFs refresh automatically when computed variable formulas change.", "severity": "low" },
+    { "what": "Saving a PDF template now rejects zones whose field_id isn't a non-empty string or isn't a real field/special field/computed variable of the form.", "severity": "low" }
+  ],
+  "silent": true }

@@ -1,0 +1,12 @@
+{ "id": "logtide-dev_logtide__933b3558",
+  "summary": "Opt-in Terms/Privacy acceptance (backend only): when LOGTIDE_TERMS_URL, LOGTIDE_PRIVACY_URL and LOGTIDE_TERMS_VERSION are all set, registration requires acceptTerms:true (else 400), the accepted version is stored on the user, /auth/config exposes the URLs/version, /auth/me flags termsAcceptanceRequired, and a new logged-in POST /accept-terms records (and audit-logs) acceptance; partial/invalid config aborts startup.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "right", "why": "Off by default (terms.ts:18-22 returns null unless all three env vars set); new /accept-terms validates the session token (users/routes.ts:524-531) and is rate-limited; columns come from migration 061 in the previous commit. No open data-changing address or secret exposure." },
+    { "text": "◐ getActiveTerms() returns made-up data instead of reading your database.", "kind": "warning", "verdict": "wrong", "why": "getActiveTerms (users/terms.ts:18) intentionally reads the three env vars from config; terms settings are configuration, not DB data. Acceptance itself is read/written in the users table (isPending/accept). False alarm." }
+  ],
+  "misses": [
+    { "what": "Turning the feature on now breaks sign-up from the web app: the frontend has no terms checkbox and never sends acceptTerms, so every registration gets 400 terms_not_accepted until a frontend change ships.", "severity": "medium" },
+    { "what": "New opt-in Terms of Service / Privacy Policy acceptance at registration and re-acceptance on version change, controlled by three env vars; setting only one or two, a non-https URL, or a bad version makes the server refuse to start.", "severity": "medium" },
+    { "what": "Existing and SSO users who haven't accepted are only flagged (termsAcceptanceRequired on /auth/me); nothing on the server blocks them from using the app.", "severity": "low" }
+  ],
+  "silent": false }

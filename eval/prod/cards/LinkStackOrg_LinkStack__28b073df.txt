@@ -1,0 +1,9 @@
+plain · 2 files changed since 28b073df~1
+You asked: "Now counting clicks using JS"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent changed resources/views/linkstack/elements/buttons.blade.php.
+    • The agent changed resources/views/linkstack/elements/icons.blade.php.

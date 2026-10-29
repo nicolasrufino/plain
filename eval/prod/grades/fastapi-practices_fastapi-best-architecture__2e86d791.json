@@ -1,0 +1,122 @@
+{
+ "id": "fastapi-practices_fastapi-best-architecture__2e86d791",
+ "summary": "Pure refactor of module-level globals: constants marked Final/TypeAlias or made private, SQLALCHEMY_DATABASE_URL and LOCAL_BEAT_SCHEDULE replaced by functions, create_database_url renamed get_database_url, config-plugin import made lazy, main.py startup code wrapped in a function. No user-facing behaviour change.",
+ "statements": [
+  {
+   "text": "? changed backend/alembic/env.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: it imports the renamed get_database_url() since the SQLALCHEMY_DATABASE_URL global was removed (db.py)."
+  },
+  {
+   "text": "? changed init_celery() in backend/app/task/celery.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: LOCAL_BEAT_SCHEDULE global became get_local_beat_schedule(); same schedule."
+  },
+  {
+   "text": "? changed acquire_distributed_beat_lock() in schedulers.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: DEFAULT_MAX_LOCK_TIMEOUT renamed to _DEFAULT_MAX_LOCK_TIMEOUT: Final; same value 25s."
+  },
+  {
+   "text": "? changed auto_init() in backend/cli.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: create_database_url renamed get_database_url; identical behaviour."
+  },
+  {
+   "text": "? changed main() in backend/cli.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: output_help global renamed _OUTPUT_HELP: Final."
+  },
+  {
+   "text": "? changed backend/common/lifespan.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: LifespanFunc annotated as TypeAlias; no runtime change."
+  },
+  {
+   "text": "? changed prometheus/config.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: PROMETHEUS_APP_NAME: Final; value unchanged."
+  },
+  {
+   "text": "? changed backend/main.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: module-level _log_prefix/_plugins globals moved into _prepare_plugins(); same startup steps."
+  },
+  {
+   "text": "? changed backend/plugin/validator.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: _VALID_TAGS/_VALID_DATABASES marked Final."
+  },
+  {
+   "text": "? changed backend/tests/utils/db.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: TEST_SQLALCHEMY_DATABASE_URL global removed; test-only."
+  },
+  {
+   "text": "? changed _load_config() in dynamic_config.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: module-level ConfigType/config_service globals replaced by lazy import inside _load_config; same result when config plugin is installed (it is in-tree)."
+  },
+  {
+   "text": "? changed load_user_security_config(), doesn't look related; check callers still work",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related to removing the ConfigType global; behaviour identical (passes 'user_security' attr name). Check-callers advice is harmless but the flag is a false alarm."
+  },
+  {
+   "text": "? changed load_login_config(), doesn't look related; check callers still work",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Same as above: only switched ConfigType.login to 'login' string; no behaviour change."
+  },
+  {
+   "text": "? changed load_email_config(), doesn't look related; check callers still work",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Same as above: ConfigType.email -> 'email'; no behaviour change."
+  },
+  {
+   "text": "? changed backend/utils/limiter.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: type aliases annotated TypeAlias."
+  },
+  {
+   "text": "? changed backend/utils/serializers.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: RowData: TypeAlias."
+  },
+  {
+   "text": "? changed backend/utils/sql_parser.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: SQL prefix sets marked Final; same values."
+  },
+  {
+   "text": "? changed backend/utils/timezone.py, doesn't look related",
+   "kind": "warning",
+   "verdict": "wrong",
+   "why": "Related: _UTC_IDENTIFIERS marked Final, reformatted; same set."
+  },
+  {
+   "text": "• The agent also changed backend/app/task/tasks/beat.py and backend/database/db.py.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True, but no explanation (global schedule dict -> function; DB URL global removed)."
+  }
+ ],
+ "misses": [],
+ "silent": true
+}

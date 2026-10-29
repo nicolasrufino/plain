@@ -1,0 +1,53 @@
+{
+ "id": "benavlabs_FastAPI-boilerplate__493e02fc",
+ "summary": "API-key usage middleware now stores the client IP only if it is a valid IP of <=45 chars (else none), and catches usage-schema validation errors so a bad forwarded address no longer turns a successful request into a 500.",
+ "statements": [
+  {
+   "text": "✓ No problems spotted",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Bug fix in API-key usage logging middleware (usage.py:63-90); no new exposure, data loss is only the bogus IP value now stored as empty."
+  },
+  {
+   "text": "• There's now a maximum address length of 45. backend/src/modules/api_keys/usage.py",
+   "kind": "description",
+   "verdict": "misleading",
+   "why": "The 45-char limit already existed on the DB columns (models.py:32,58). The change: a client IP from X-Forwarded-For that is too long or not a valid IP is now recorded as empty instead of crashing the request with a 500; nothing user-entered is newly rejected. 'Address' reads like an email/postal limit."
+  },
+  {
+   "text": "• The agent changed docs/changelog.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Changelog entry for the fix."
+  },
+  {
+   "text": "• The agent changed docs/user-guide/authentication/api-keys.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs explain the new recording rule."
+  },
+  {
+   "text": "• The agent also added backend/tests/unit/modules/api_keys/test_usage.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "New unit tests."
+  },
+  {
+   "text": "• The agent also changed backend/tests/integration/api/v1/api_keys/test_usage.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "New integration tests."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Fixes a production error: with TRUSTED_PROXY_HOPS set, an API-key request carrying a junk/overlong X-Forwarded-For used to get a 500 after its change was already saved (client sees failure but data changed, no usage row). Now it gets the real status and the usage row is written with no IP.",
+   "severity": "medium"
+  },
+  {
+   "what": "If the usage record can't be built (e.g. unusual HTTP method), it is now logged and skipped rather than failing the request, so some API-key usage may go unrecorded.",
+   "severity": "low"
+  }
+ ],
+ "silent": false
+}

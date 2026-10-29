@@ -1,0 +1,16 @@
+plain · 5 files changed since 1afa6312~1
+You asked: "add PWA support, fix #1287"
+
+  2 things to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed app/javascript/application.js, which doesn't look related to what
+    you asked for. (This is a guess.)
+  ? The agent also changed config/initializers/content_security_policy.rb, which doesn't
+    look related to what you asked for. (This is a guess.)
+
+WHAT CHANGED
+  Other files
+    + The agent added public/manifest.json.
+    + The agent added public/touch-icon-512.png.
+    • The agent changed app/views/layouts/application.html.erb.

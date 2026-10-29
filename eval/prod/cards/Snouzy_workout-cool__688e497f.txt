@@ -1,0 +1,4 @@
+plain · 8 files changed since 688e497f~1
+You asked: "feat(locales): add Portuguese language support and donation banner in release..."
+
+Nothing about the app changed.

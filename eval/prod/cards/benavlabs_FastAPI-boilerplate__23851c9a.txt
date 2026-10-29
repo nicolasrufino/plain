@@ -1,0 +1,15 @@
+plain · 14 files changed since 23851c9a~1
+You asked: "draw every module of the composition root in both guides, and say what writes..."
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent changed docs/user-guide/composable-features.md, a notes file (not code).
+    • The agent changed docs/user-guide/project-structure.md, a notes file (not code).
+    • The agent also added backend/tests/unit/test_docs_wiring.py (tests).
+    • The agent also changed backend/scripts/seeders.py, backend/src/wiring/admin.py,
+      backend/src/wiring/app.py, backend/src/wiring/cache.py, backend/src/wiring/email.py,
+      backend/src/wiring/hooks.py, backend/src/wiring/models.py,
+      backend/src/wiring/settings.py, backend/src/wiring/tables.py,
+      backend/src/wiring/tasks.py and backend/tests/wiring.py.

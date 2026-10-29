@@ -1,0 +1,9 @@
+{ "id": "documenso_documenso__914e3254",
+  "summary": "Documentation-only: adds OpenAPI descriptions to the public API envelope cancel/delete/update routes and their request fields (zod .describe()); no runtime behaviour change.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "right", "why": "Only route meta description strings and zod .describe() calls changed in packages/trpc/server/envelope-router/*.types.ts; validation and handlers are unchanged. Only the generated public API reference text differs." }
+  ],
+  "misses": [
+    { "what": "The public API reference now shows descriptions for the envelope cancel, delete and update endpoints and their fields.", "severity": "low" }
+  ],
+  "silent": false }

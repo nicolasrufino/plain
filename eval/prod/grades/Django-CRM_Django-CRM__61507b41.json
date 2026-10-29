@@ -1,0 +1,95 @@
+{
+  "id": "Django-CRM_Django-CRM__61507b41",
+  "summary": "Web and mobile custom-object record pages now load and show a Related records section, with new relatedAdd/relatedRemove form actions that link/unlink records via the API's /objects/related/ using target obj:<key>; notifications pages (web + mobile) now render real_estate.match ('X fits an open requirement') and education.seat_open ('A seat opened in X') alerts with icons; version bumps to 1.40.0.",
+  "statements": [
+    {
+      "text": "✓ No problems spotted",
+      "kind": "reassurance",
+      "verdict": "right",
+      "why": "Frontend-only; actions proxy to the API with the user's own session cookies and validate target/ids (custom-objects.ts:421-424, checkLink). Authorization for obj: links lives in the custom-objects backend, which is not in this repo, but nothing here widens access."
+    },
+    {
+      "text": "+ The agent added mobile/test/screens/record_alert_notifications_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True; a test file for the new alert notifications."
+    },
+    {
+      "text": "• The agent changed backend/uv.lock.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Only the backend's own version 1.39.0 -> 1.40.0 (matches pyproject.toml)."
+    },
+    {
+      "text": "• The agent changed mobile/lib/core/app_info.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Mobile app version 1.23.0 -> 1.24.0; true but unexplained."
+    },
+    {
+      "text": "• The agent changed mobile/lib/data/models/app_notification.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True, but doesn't say it adds the readable text for real_estate.match ('X fits an open requirement') and education.seat_open ('A seat opened in X') alerts."
+    },
+    {
+      "text": "• The agent changed mobile/lib/screens/notifications/notifications_screen.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True; shows those alerts with text and house/armchair icons, unexplained."
+    },
+    {
+      "text": "• The agent changed mobile/lib/screens/objects/object_record_detail_screen.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True; adds a Related records section to custom record pages, unexplained."
+    },
+    {
+      "text": "• The agent changed mobile/pubspec.yaml.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "App version bump only."
+    },
+    {
+      "text": "• The agent changed mobile/test/screens/objects/object_record_detail_screen_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Test file."
+    },
+    {
+      "text": "• The agent changed mobile/test/screens/phone_viewport_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Test file."
+    },
+    {
+      "text": "• The agent changed mobile/test/unit/lead_alerts_models_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Test file."
+    },
+    {
+      "text": "• The agent changed mobile/test/unit/notifications_provider_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Test file."
+    },
+    {
+      "text": "◐ Type checking is turned off in 1 spot in frontend/src/lib/server/v2/related-records.test.ts (`any`).",
+      "kind": "warning",
+      "verdict": "right",
+      "why": "True, but it's a test file; harmless."
+    }
+  ],
+  "misses": [
+    {
+      "what": "Custom record pages (web and mobile) now show a Related records section where users can add or remove links between custom records. The card only lists mobile file names and never mentions the web (frontend/) changes at all.",
+      "severity": "medium"
+    },
+    {
+      "what": "Real-estate match and education 'seat opened' alerts now appear in the notifications list (web and mobile) with readable text and icons instead of a generic/blank entry.",
+      "severity": "medium"
+    }
+  ],
+  "silent": true
+}

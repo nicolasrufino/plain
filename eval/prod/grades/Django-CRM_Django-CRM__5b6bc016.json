@@ -1,0 +1,14 @@
+{ "id": "Django-CRM_Django-CRM__5b6bc016",
+  "summary": "SvelteKit relay now forwards the visitor's browser User-Agent (X-BottleCRM-User-Agent, only alongside the relay secret) and the API records it in audit logs and on public estimate acceptance instead of the server's own axios UA; bundled with an unmentioned magic-link change: opening the emailed sign-in link no longer signs you in, the user must press a 'Continue to BottleCRM' button (POST) so mail scanners can't burn the one-time token.",
+  "statements": [
+    { "text": "? The agent also changed __Template() in frontend/src/routes/(no-layout)/login/verify/+page.svelte, which doesn't look related to what you asked for.", "kind": "warning", "verdict": "right", "why": "Correctly flags an unrelated bundled change, though it understates it: the companion +page.server.js moves token use from GET load to a POST action, changing the sign-in flow." },
+    { "text": "• The public estimate accept part of your server changed in a way plain can't describe yet. /api/public/estimate/[token]/accept", "kind": "description", "verdict": "right", "why": "invoices/public_views.py:444 now stores the relayed visitor UA as accepted_user_agent; true but says nothing about what changed." },
+    { "text": "• The agent changed backend/uv.lock.", "kind": "description", "verdict": "right", "why": "Own version bump 1.14.1->1.14.2." },
+    { "text": "• The agent also changed backend/common/audit_log.py, backend/common/request_meta.py, ...", "kind": "description", "verdict": "right", "why": "Accurate file list; no explanation." },
+    { "text": "21 files changed / Hidden: 2 files with only formatting changes, or lockfiles", "kind": "description", "verdict": "misleading", "why": "Several frontend files (hooks, relay.js, login, logout, org, portal pages) are not listed or described at all, not just formatting/lockfiles." }
+  ],
+  "misses": [
+    { "what": "Magic-link sign-in now needs an extra click: the emailed link opens a page with a 'Continue to BottleCRM' button and only the button press signs in (fixes mail scanners like Defender Safe Links using up the one-time link and leaving users with 'Link expired or invalid').", "severity": "medium" },
+    { "what": "Audit log entries (sign-in, logout, org switch) and estimate acceptance records now store the visitor's real browser User-Agent instead of the server's 'axios' UA, when RELAY_SECRET is configured on both frontend and API.", "severity": "low" }
+  ],
+  "silent": false }

@@ -1,0 +1,17 @@
+plain · 7 files changed since 7bec7fcf~1
+You asked: "feat(orders): order date"
+
+  ✓ No problems spotted  ·  1 step before you ship
+
+WHAT CHANGED
+  Pages
+    • Each crm order page changed in a way plain can't describe yet. Ask the agent what it
+      does differently.
+      /[locale]/crm/orders/[orderId]
+  Database
+    • Crm orders now also store the order date.
+
+BEFORE YOU SHIP
+  1. Apply prisma/migrations/20261013000000_order_date to your live database before the new
+     code goes live (`npx prisma migrate deploy`), or pages that load crm orders can fail
+     too, not just the new parts (Prisma asks for every column).

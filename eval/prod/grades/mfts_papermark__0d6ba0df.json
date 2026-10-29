@@ -1,0 +1,14 @@
+{ "id": "mfts_papermark__0d6ba0df",
+  "summary": "Adds an embed viewer on custom domains (https://<customer-domain>/<slug>/embed -> pages/view/domains/[domain]/[slug]/embed.tsx), makes the 'Embed code' modal use that URL for links that have a custom domain, has domain middleware send 'frame-ancestors *' for /embed paths so any site can iframe them (same as existing papermark.com /view/*/embed), and refactors the link-session cookie name into a helper (no behavior change).",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "right", "why": "No auth/data/money issue: the new page reuses the existing getStaticProps and DocumentView/DataroomView protection (password/email/agreement, expiry, archived, frozen). Allowing framing from any host mirrors next.config.mjs:265-285 for /view/:path*/embed." },
+    { "text": "The view domain embed page is new, titled \"Page not found.\" ... sections for Welcome, New Question, FAQ ... boxes for country, name, password ... sends verification tokens, agreement responses, chats ... deletes data ...", "kind": "description", "verdict": "misleading", "why": "It is an iframe-only embed viewer for document/dataroom links on a customer's custom domain. 'Page not found' is only shown when opened outside an iframe; the sections, boxes and server calls are pulled from the reused viewer components, not new behaviour. An owner can't tell from this what the page is." },
+    { "text": "The views part of your server changed in a way plain can't describe yet. /api/views", "kind": "description", "verdict": "misleading", "why": "app/api/views/route.ts only swaps the literal `pm_ls_${linkId}` for getLinkSessionCookieName(linkId), which returns the same string. Nothing changes for users, but the card implies a behaviour change to check." },
+    { "text": "Type checking is turned off in 2 spots in embed.tsx (`any`).", "kind": "description", "verdict": "right", "why": "recordMap: any and theme: any in DomainEmbedPageProps." }
+  ],
+  "misses": [
+    { "what": "For links on a custom domain, the 'Embed code' modal now gives an iframe pointing to https://<custom-domain>/<slug>/embed instead of the papermark URL; this only works if the customer's domain is set up and served by the app. Embed codes copied earlier still use the old URL and keep working.", "severity": "medium" },
+    { "what": "Custom-domain /<slug>/embed pages can now be framed by any website (Content-Security-Policy frame-ancestors * set in lib/middleware/domain.ts), same as default-domain embeds already were.", "severity": "low" },
+    { "what": "The point of the change: inside an embed on the same root domain, the viewer's session cookie now works so downloads work.", "severity": "low" }
+  ],
+  "silent": false }

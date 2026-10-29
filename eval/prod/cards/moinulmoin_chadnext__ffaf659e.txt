@@ -1,0 +1,21 @@
+plain · 4 files changed since ffaf659e~1
+You asked: "refactor: :recycle: streamline Stripe webhook handling and improve billing fo..."
+
+  ✓ No problems spotted  ·  1 step before you ship
+
+WHAT CHANGED
+  Server
+    • The stripe part of your server changed in a way plain can't describe yet. This is the
+      code that charges your customers 💰 Make a test payment before you ship.
+      /api/stripe
+    • The webhooks stripe part of your server changed in a way plain can't describe yet. Ask
+      the agent what it does differently.
+      /api/webhooks/stripe
+  Other files
+    + The agent added .cursor/mcp.json.
+
+BEFORE YOU SHIP
+  1. In Stripe (Workbench → Webhooks, your endpoint), make sure it receives
+     checkout.session.async_payment_succeeded (skip this if it's set to receive all events).
+     Stripe only sends an endpoint the events picked for it, so until then the new code for
+     it never runs.

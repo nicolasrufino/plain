@@ -1,0 +1,12 @@
+{ "id": "LinkStackOrg_LinkStack__cc406d18",
+  "summary": "Fixes the self-updater: the pre-update script (which update.blade.php downloads from pre-update.linkstack.org and overwrites locally) used to @include a separate links-table migration file that older installs don't have; the links-table upgrade (add links.type/type_params columns, set type from button_id for versions < 4.8.1) is now inlined into pre-update.blade.php and the separate file deleted. Column creation now only runs for versions < 4.8.1.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "right", "why": "Same database upgrade logic, just moved into one file; updater page remains admin-only; no new exposure. (Runs remote-downloaded code by design, pre-existing.)" },
+    { "text": "• The agent changed resources/views/components/pre-update.blade.php.", "kind": "description", "verdict": "right", "why": "Now contains the links-table upgrade; card doesn't say so." },
+    { "text": "• The agent deleted resources/views/components/updater/links-table-translation-layer.blade.php.", "kind": "description", "verdict": "right", "why": "Its content was moved into pre-update.blade.php." }
+  ],
+  "misses": [
+    { "what": "Updating LinkStack from older versions through the built-in updater should work again: the step that upgrades the links table (adds link type columns and sets each link's type) is now part of the downloaded pre-update script instead of a separate file older installs lack.", "severity": "medium" },
+    { "what": "The update step changes the links database table (adds columns, rewrites link types) for installs older than 4.8.1; take a backup before updating.", "severity": "low" }
+  ],
+  "silent": true }

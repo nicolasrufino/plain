@@ -1,0 +1,13 @@
+{ "id": "atinux_atidone__a345ecd7",
+  "summary": "Lint cleanups plus visible UI changes: a light/dark mode toggle button at the top of the page, footer now 'GitHub · Twitter' links, SEO description reworded (with a typo 'queyring'), and the login card links to Turso instead of D1 when a Turso URL is configured; server changes are only lint (unused params, a semicolon).",
+  "statements": [
+    { "text": "? The agent also changed composables/session.ts, which doesn't look related to what you asked for. (This is a guess.)", "kind": "warning", "verdict": "wrong", "why": "composables/session.ts:17 only renames an unused catch param `_` -> `()`, a lint fix; exactly what 'chore: lint' asked for. No behaviour change." },
+    { "text": "• The todos stats part of your server changed in a way plain can't describe yet. /api/todos/stats", "kind": "description", "verdict": "misleading", "why": "server/api/todos/stats.ts:3 only drops an unused `event` parameter; the endpoint behaves identically. Implies a behaviour change that doesn't exist." },
+    { "text": "(Hidden: 1 file with only formatting changes, or lockfiles.)", "kind": "description", "verdict": "right", "why": "server/plugins/migrations.ts only loses a semicolon." }
+  ],
+  "misses": [
+    { "what": "New light/dark mode toggle button shown at the top of every page (app.vue:27-29).", "severity": "medium" },
+    { "what": "Login card now says 'Turso database' and links to turso.tech when TURSO_DB_URL is set (otherwise D1); only a boolean reaches the browser, the Turso token stays server-side.", "severity": "low" },
+    { "what": "Footer changed from 'Source code on GitHub' to 'GitHub · Twitter' links; page meta description reworded and contains a typo ('queyring').", "severity": "low" }
+  ],
+  "silent": false }

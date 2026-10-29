@@ -1,0 +1,16 @@
+plain · 3 files changed since 2f8c0133~1
+You asked: "fix: email was not being sent for new users"
+
+  ✓ No problems spotted  ·  1 step before you ship
+
+WHAT CHANGED
+  Server
+    • The auth login github callback part of your server changed in a way plain can't
+      describe yet. Ask the agent what it does differently.
+      /api/auth/login/github/callback
+
+BEFORE YOU SHIP
+  1. A new package was added: @tailwindcss/line-clamp (^0.4.4). Make sure you actually need
+     it.
+
+(Hidden: 1 file with only formatting changes, or lockfiles.)

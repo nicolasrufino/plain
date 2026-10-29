@@ -1,0 +1,10 @@
+plain · 2 files changed since cc406d18~1
+You asked: "Fix Updater"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent changed resources/views/components/pre-update.blade.php.
+    • The agent deleted
+      resources/views/components/updater/links-table-translation-layer.blade.php.

@@ -1,0 +1,8 @@
+plain · 2 files changed since 0055de99~1
+You asked: "refactor(files): check ownership directly before deletion"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent also changed server/apps/system/permission.py.

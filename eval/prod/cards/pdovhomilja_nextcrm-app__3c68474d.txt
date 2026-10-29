@@ -1,0 +1,26 @@
+plain · 3 files changed since 3c68474d~1
+You asked: "feat(pricing): price list schema"
+
+  ✓ No problems spotted  ·  1 step before you ship
+
+WHAT CHANGED
+  Database
+    + Your database now stores crm price lists: name, currency, active, source, external
+      ref, created by, updated by, date created and date updated. Each one belongs to a
+      currency and can have many crm price list rules, crm price list rules and crm
+      accounts.
+    + Your database now stores crm price list rules: applies to, min quantity, date start,
+      date end, compute price, fixed price, percent price, base, price discount, price
+      surcharge, price round, price min margin, price max margin, external ref, date created
+      and date updated. Each one belongs to a crm price lists, a crm price lists, a crm
+      product categories and a crm products.
+    • Crm accounts are now linked to crm price lists.
+    • Currencies are now linked to crm price lists.
+    • Crm product categories are now linked to crm product categories, crm product
+      categories and crm price list rules.
+    • Crm products are now linked to crm price list rules.
+
+BEFORE YOU SHIP
+  1. Apply prisma/migrations/20261011000000_price_lists to your live database before the new
+     code goes live (`npx prisma migrate deploy`), or pages that load crm accounts and crm
+     product categories can fail too, not just the new parts (Prisma asks for every column).

@@ -1,0 +1,9 @@
+plain · 3 files changed since 46bd96f4~1
+You asked: "Mark notifications as read by convesrsation_id field in notifications table -..."
+
+  ✓ No problems spotted  ·  1 step before you ship
+
+BEFORE YOU SHIP
+  1. Apply 2026_08_28_010101_add_conversation_id_column_to_notifications_table to your live
+     database before the new code goes live (`php artisan migrate --force`), or the parts
+     that use it will fail.

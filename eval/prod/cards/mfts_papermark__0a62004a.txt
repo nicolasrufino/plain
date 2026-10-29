@@ -1,0 +1,49 @@
+plain · 12 files changed since 0a62004a~1
+You asked: "feat(ee): add redactions"
+
+  ✓ No problems spotted  ·  5 steps before you ship
+
+WHAT CHANGED
+  Pages
+    + Each document redaction page is new, titled "Q1 2024 Financial Performance Report". It
+      has sections for Data Rooms Unlimited, Identity verification, Executive Summary,
+      Financial Highlights, Financial Results Summary, Outlook, Share Link to Your Data
+      Room, Link Configuration and Invite Visitors by Email. It has a box for "Drag and drop
+      or click to upload. Recommended: 1200 x 630 pixels (max 5MB) OG image upload", a box
+      for "OG image upload", a box for "file", a "Base" button, a "Plus" button, a "Premium"
+      button, a "Permissions" button, an "Analytics" button, a "Q&A" button, a "Settings"
+      button, an "Add another folder" button, a "Visitors" button and a "Set up" button,
+      shows teams, sends data, user teams, permission groups, domains, agreements, tags and
+      teams to your server, deletes permission groups on your server, updates permission
+      groups and agreements on your server, loads domains, agreements and data from your
+      server and links to the documents page, the datarooms page, the settings general page,
+      the settings billing page, the account general page, the visitors page, the dashboard
+      page, the welcome?type=dataroom trial page, the settings billing upgrade page, the
+      dataroom permissions page, the settings presets page, the settings domains page, each
+      document page, each documents tree[…] page, each dataroom document page, each dataroom
+      documents[…] page, the settings tags page, the branding page, the settings slack page
+      and the settings people page.
+      /documents/[id]/redactions/[jobId]
+    • Each document page now shows the redaction launcher.
+      /documents/[id]
+  Server
+    • The file s3 get presigned get URL proxy part of your server changed in a way plain
+      can't describe yet. Ask the agent what it does differently.
+      /api/file/s3/get-presigned-get-url-proxy
+  Database
+    • Users now also store the created redaction jobs.
+  Other files
+    + The agent added prisma/schema/redaction.prisma.
+    • The agent changed prisma/schema/document.prisma.
+    • The agent changed prisma/schema/team.prisma.
+
+BEFORE YOU SHIP
+  1. Apply prisma/migrations/20260424000000_add_redactions_model to your live database
+     before the new code goes live (`npx prisma migrate deploy`), or the parts that use it
+     will fail.
+  2. Test anything that uses @trigger.dev/python: it was upgraded from 4.5.3 to 4.5.5.
+  3. Test anything that uses @trigger.dev/react-hooks: it was upgraded from 4.5.3 to 4.5.5.
+  4. Test anything that uses @trigger.dev/sdk: it was upgraded from 4.5.3 to 4.5.5.
+  5. Test anything that uses @trigger.dev/build: it was upgraded from 4.5.3 to 4.5.5.
+
+(Hidden: 1 file with only formatting changes, or lockfiles.)

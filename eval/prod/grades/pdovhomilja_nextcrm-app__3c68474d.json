@@ -1,0 +1,17 @@
+{ "id": "pdovhomilja_nextcrm-app__3c68474d",
+  "summary": "Database-only groundwork for price lists: new crm_PriceLists and crm_PriceListRules tables (+4 enums), a nullable pricelist_id on accounts and a parentId (category tree) on product categories, plus a schema test. The migration file starts with two lines of pnpm console output ('Already up to date', 'Done in 225ms ...'), so it is invalid SQL and will fail when applied (fixed later in e906a82f).",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "wrong", "why": "prisma/migrations/20261011000000_price_lists/migration.sql lines 1-2 are 'Already up to date' / 'Done in 225ms using pnpm v11.20.0': a syntax error. `prisma migrate deploy` will fail and record a failed migration, blocking the deploy; since Prisma selects every column, account and category pages would break if the code ships without the columns." },
+    { "text": "Your database now stores crm price lists: name, currency, active, source, external ref, created by, updated by, dates. Each belongs to a currency and can have many rules and accounts.", "kind": "description", "verdict": "right", "why": "Matches model crm_PriceLists (repetitive wording aside)." },
+    { "text": "Your database now stores crm price list rules: applies to, min quantity, dates, compute price, fixed/percent price, base, discount, surcharge, round, min/max margin, external ref. Each belongs to a price list, a price list, a category and a product.", "kind": "description", "verdict": "right", "why": "Matches model crm_PriceListRules (category/product/base list are optional)." },
+    { "text": "Crm accounts are now linked to crm price lists.", "kind": "description", "verdict": "right", "why": "crm_Accounts.pricelist_id (nullable, SET NULL on delete)." },
+    { "text": "Currencies are now linked to crm price lists.", "kind": "description", "verdict": "right", "why": "crm_PriceLists.currency FK to Currency.code." },
+    { "text": "Crm product categories are now linked to crm product categories, crm product categories and crm price list rules.", "kind": "description", "verdict": "right", "why": "parentId/children category tree + priceRules; wording is clumsy but true." },
+    { "text": "Crm products are now linked to crm price list rules.", "kind": "description", "verdict": "right", "why": "crm_Products.priceRules relation." },
+    { "text": "Apply prisma/migrations/20261011000000_price_lists to your live database before the new code goes live (`npx prisma migrate deploy`), or pages that load crm accounts and crm product categories can fail too.", "kind": "step", "verdict": "misleading", "why": "Right that it must be applied first, but as committed the migration cannot be applied: it fails on the pnpm output lines at the top. The owner needs to fix the file first, or they'll hit a failed migration in production." }
+  ],
+  "misses": [
+    { "what": "The migration file contains pnpm console output at the top, so it is invalid SQL; applying it fails and leaves Prisma with a failed migration that blocks later deploys. Remove the first two lines before shipping.", "severity": "high" },
+    { "what": "Nothing visible changes for users yet; this is only database structure for a future price-list feature.", "severity": "low" }
+  ],
+  "silent": false }

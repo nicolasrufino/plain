@@ -1,0 +1,10 @@
+plain · 4 files changed since b6db076e~1
+You asked: "fix 500 error on nats timeout"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent also added api/tacticalrmm/agents/tests/test_nats_no_responders.py (tests).
+    • The agent also changed api/tacticalrmm/autotasks/tasks.py and
+      api/tacticalrmm/tacticalrmm/nats_utils.py.

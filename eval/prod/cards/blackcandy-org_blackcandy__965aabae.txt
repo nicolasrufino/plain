@@ -1,0 +1,12 @@
+plain · 11 files changed since 965aabae~1
+You asked: "feat: add API search functionality for albums, artists, playlists, and songs"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    + The agent added app/views/search/albums/index.json.jbuilder.
+    + The agent added app/views/search/artists/index.json.jbuilder.
+    + The agent added app/views/search/index.json.jbuilder.
+    + The agent added app/views/search/playlists/index.json.jbuilder.
+    + The agent added app/views/search/songs/index.json.jbuilder.

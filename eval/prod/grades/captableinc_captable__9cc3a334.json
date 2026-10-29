@@ -1,0 +1,12 @@
+{ "id": "captableinc_captable__9cc3a334",
+  "summary": "Public API: GET /v1/companies/{id}/shares now falls back to 50 results when no `take` query param is sent (previously Number(undefined)=NaN was passed to Prisma, so the call failed); the shared pagination schema's default goes 10->50 and its API docs now advertise example 25 / maximum 250.",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "misleading", "why": "Not a security issue, but the API docs now say `limit` maximum is 250 while validation still rejects anything over 50 (pagination.ts .max(50) vs openapi maximum: 250), and the shares endpoint still ignores the documented `limit` param entirely (reads `take`, getMany.ts:64), so API users asking for limit=10 get 50 rows." },
+    { "text": "There's now a default pagination limit of 50. (src/server/api/schema/pagination.ts)", "kind": "description", "verdict": "misleading", "why": "True for the shares list (getMany.ts take || 50) and the schema default, but the stakeholders list still defaults to 10 (stakeholder/getMany.ts: Number(query.limit) || 10) even though its docs now say 50. Card also omits that this fixes the shares list failing when no page size was sent." }
+  ],
+  "misses": [
+    { "what": "Fix: the public 'list shares' API call no longer fails when the caller doesn't pass a page size; it now returns 50 shares per page.", "severity": "medium" },
+    { "what": "API docs now advertise up to 250 items per page, but requests with limit 51-250 are rejected by validation (max 50).", "severity": "medium" },
+    { "what": "The shares endpoint still ignores the documented `limit` parameter (it reads an undocumented `take`), so integrators can't control page size as documented; stakeholders endpoint defaults to 10, not the documented 50.", "severity": "medium" }
+  ],
+  "silent": false }

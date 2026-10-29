@@ -1,0 +1,63 @@
+{
+  "id": "lobsters_lobsters__1afa6312",
+  "summary": "Makes Lobsters installable as a home-screen app (PWA): adds public/manifest.json (standalone, portrait, theme color, 192/512 icons) linked from the layout, allows it through the Content-Security-Policy (manifest-src 'self', needed because default-src is 'none'), adds a 512px icon, and suppresses Chrome's automatic install prompt.",
+  "statements": [
+    {
+      "text": "plain · 5 files changed since 1afa6312~1",
+      "kind": "description",
+      "verdict": "right",
+      "why": "5 files changed."
+    },
+    {
+      "text": "2 things to decide",
+      "kind": "warning",
+      "verdict": "misleading",
+      "why": "Both 'decisions' are false alarms; there is nothing the owner needs to decide."
+    },
+    {
+      "text": "? The agent also changed app/javascript/application.js, which doesn't look related to what you asked for. (This is a guess.)",
+      "kind": "warning",
+      "verdict": "wrong",
+      "why": "The change is part of PWA support: it cancels Chrome's beforeinstallprompt so the browser doesn't nag users to install the app."
+    },
+    {
+      "text": "? The agent also changed config/initializers/content_security_policy.rb, which doesn't look related to what you asked for. (This is a guess.)",
+      "kind": "warning",
+      "verdict": "wrong",
+      "why": "Required for the PWA: CSP default_src is :none (content_security_policy.rb:11), so without manifest_src :self the browser would block /manifest.json."
+    },
+    {
+      "text": "+ The agent added public/manifest.json.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True, though it doesn't explain it makes the site installable as an app."
+    },
+    {
+      "text": "+ The agent added public/touch-icon-512.png.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True; the 512px icon used by the manifest for the installed app, unexplained."
+    },
+    {
+      "text": "• The agent changed app/views/layouts/application.html.erb.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Adds <link rel=manifest>; true but unexplained."
+    }
+  ],
+  "misses": [
+    {
+      "what": "Users can now install Lobsters to their phone/desktop home screen as a standalone app (no browser bars), with Lobsters name, icons and red theme color.",
+      "severity": "medium"
+    },
+    {
+      "what": "Installed app is locked to portrait orientation (manifest orientation: portrait), so tablet/landscape users of the installed app can't rotate.",
+      "severity": "low"
+    },
+    {
+      "what": "Chrome's automatic 'Install app' prompt is deliberately suppressed; users must install from the browser menu.",
+      "severity": "low"
+    }
+  ],
+  "silent": false
+}

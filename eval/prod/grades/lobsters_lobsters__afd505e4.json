@@ -1,0 +1,7 @@
+{ "id": "lobsters_lobsters__afd505e4",
+  "summary": "Removes the now-unneeded eager load of each story author's inviter from the hottest-stories query (recently_invited_by? compares invited_by_user_id since e5fda59), saving a query on the front page, and adds specs; story authors are still preloaded via the base scope.",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "right", "why": "Only a query-preloading tweak (story.rb:91-93) plus tests; users see no difference. Story.user is still included by base (story.rb:62), so no new N+1." }
+  ],
+  "misses": [],
+  "silent": false }

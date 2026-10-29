@@ -1,0 +1,4 @@
+plain · 11 files changed since 3c51932f~1
+You asked: "fix: keep previous table data during pagination (#3073)"
+
+Nothing about the app changed.

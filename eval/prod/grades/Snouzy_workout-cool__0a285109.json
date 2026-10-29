@@ -1,0 +1,15 @@
+{ "id": "Snouzy_workout-cool__0a285109",
+  "summary": "Despite the 'server port' commit message, this reworks program/subscription API routes for the mobile app: enroll, program progress, start/complete session and RevenueCat sync now read the login via getMobileCompatibleSession (cleans mobile cookies) and inline the logic that used to live in server actions; adds a logged-in /api/user/preferences (GET/PUT the caller's own onboarding preferences) backed by a new User.onboardingPreferences JSON column (no migration); tweaks workout scroll alignment.",
+  "statements": [
+    { "text": "Anyone can use the user preferences part of your server without logging in.", "kind": "warning", "verdict": "wrong", "why": "app/api/user/preferences/route.ts: both GET and PUT call getMobileCompatibleSession(req) and return 401 when there is no session.user; getMobileCompatibleSession (src/shared/api/mobile-auth.ts) returns null without a valid better-auth session cookie." },
+    { "text": "New server code that lists users and updates users. /api/user/preferences", "kind": "description", "verdict": "misleading", "why": "It only reads and updates the logged-in user's own onboardingPreferences (where: { id: session.user.id }); it doesn't list users or touch other users." },
+    { "text": "The agent changed the program enroll, program progress, session progress complete, session progress start and revenuecat sync status parts of your server in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative: they now accept the mobile app's cookies and inline the old server-action logic; ownership checks are kept." },
+    { "text": "Users now also store the onboarding preferences.", "kind": "description", "verdict": "right", "why": "prisma/schema.prisma adds onboardingPreferences Json? to User." },
+    { "text": "Update your database: run `npx prisma migrate dev` (live: `npx prisma migrate deploy`). The database's structure changed, but no migration was created.", "kind": "step", "verdict": "right", "why": "No migration added (prisma/migrations only has 0_init). Without the column Prisma's default user queries would fail." }
+  ],
+  "misses": [
+    { "what": "The commit message ('update server port variable') doesn't describe the change at all; it actually changes how logins are read on 6 API routes for the mobile app.", "severity": "medium" },
+    { "what": "Enrolling via the API no longer sends the 'EnrolledInProgram' analytics event or refreshes the program page cache (revalidatePath), which the old enrollInProgram action did.", "severity": "low" },
+    { "what": "Program progress API now requires login, only works for published/active programs, and accepts any localized slug; returns null instead of 404 when not enrolled.", "severity": "low" }
+  ],
+  "silent": false }

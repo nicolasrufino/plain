@@ -1,0 +1,4 @@
+plain · 3 files changed since c993470c~1
+You asked: "hide null quotas only under a telemetry cap"
+
+Nothing about the app changed.

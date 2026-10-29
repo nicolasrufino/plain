@@ -1,0 +1,16 @@
+plain · 11 files changed since 8dc1b3f2~1
+You asked: "Rename relation id list request fields to *_ids (#1286)"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Server
+    • The agent changed the rules, menus and scopes parts of your server in ways plain can't
+      describe yet. Ask the agent what they do differently.
+  Other files
+    • The agent also changed backend/app/admin/crud/crud_data_scope.py,
+      backend/app/admin/crud/crud_role.py, backend/app/admin/crud/crud_user.py,
+      backend/app/admin/schema/data_scope.py, backend/app/admin/schema/role.py,
+      backend/app/admin/schema/user.py, backend/app/admin/service/data_scope_service.py,
+      backend/app/admin/service/role_service.py and
+      backend/app/admin/service/user_service.py.

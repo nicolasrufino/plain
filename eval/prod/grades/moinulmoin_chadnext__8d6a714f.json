@@ -1,0 +1,111 @@
+{
+ "id": "moinulmoin_chadnext__8d6a714f",
+ "summary": "Fixes profile-picture upload for users who had no picture (settings form now skips old-image deletion when currentUser.picture is empty instead of failing with 'User Picture Missing'); removeUserOldImageFromCDN now takes the current image URL from the client; renames the Prisma client db->prisma everywhere; moves getUserSubscriptionPlan into a 'use server' file; uploadthing handler/error API updates.",
+ "statements": [
+  {
+   "text": "Anyone can use the \"get user subscription plan\" action on your server without logging in.",
+   "kind": "warning",
+   "verdict": "right",
+   "why": "src/actions/subscription.ts now has 'use server', turning getUserSubscriptionPlan(userId) into a callable server action with no session check; it returns another user's stripeCustomerId/stripeSubscriptionId/priceId/period end for any userId passed."
+  },
+  {
+   "text": "The agent also changed generateEmailVerificationCode() in src/actions/auth.ts, which doesn't look related to what you asked for... check that it still works. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The agent also changed verifyVerificationCode() in src/actions/auth.ts, which doesn't look related to what you asked for... check that it still works. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The agent also changed createProject() in projects/action.ts, which doesn't look related to what you asked for... check that it still works. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The agent also changed checkIfFreePlanLimitReached() in projects/action.ts, which doesn't look related to what you asked for... check that it still works. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The agent also changed getProjects() in projects/action.ts, which doesn't look related to what you asked for... check that it still works. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The agent also changed getProjectById() in projects/action.ts, which doesn't look related to what you asked for... check that it still works. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The agent also changed updateProjectById() in projects/action.ts, which doesn't look related to what you asked for... check that it still works. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The agent also changed deleteProjectById() in projects/action.ts, which doesn't look related to what you asked for... check that it still works. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The agent also changed src/components/sections/pricing.tsx, which doesn't look related to what you asked for. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only the import path of getUserSubscriptionPlan changed (~/lib/subscription -> ~/actions/subscription); no behaviour change."
+  },
+  {
+   "text": "The agent also changed src/lib/lucia.ts, which doesn't look related to what you asked for. (This is a guess.)",
+   "kind": "warning",
+   "verdict": "misleading",
+   "why": "Only change is the Prisma client import renamed db -> prisma (src/lib/db.ts -> src/lib/prisma.ts); no behaviour change. Flagging it as an unrelated change to check is noise that implies a behaviour change."
+  },
+  {
+   "text": "The dashboard billing page changed in a way plain can't describe yet. /[locale]/dashboard/billing",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Only an import path changed; true but uninformative."
+  },
+  {
+   "text": "New server code that looks up users. (server action) getUserSubscriptionPlan in src/actions/subscription.ts",
+   "kind": "description",
+   "verdict": "misleading",
+   "why": "Not new: the existing helper moved from src/lib/subscription.ts to src/actions/ and gained 'use server', which is what exposes it publicly. It looks up a user's Stripe subscription details."
+  },
+  {
+   "text": "The stripe part of your server changed in a way plain can't describe yet. This is the code that charges your customers. Make a test payment before you ship. /api/stripe",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Only the import path changed in src/app/api/stripe/route.ts; a test payment is harmless advice though nothing payment-related changed."
+  },
+  {
+   "text": "The agent changed the auth login github callback, send OTP, verify OTP, uploadthing, webhooks stripe, ... update user and remove user old image from cdn parts of your server in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "misleading",
+   "why": "Lumps a pure db->prisma rename together with the two real behaviour changes (removeUserOldImageFromCDN now takes the current image URL from the browser; settings form skips old-image removal when the user has no picture), without describing either."
+  }
+ ],
+ "misses": [
+  {
+   "what": "removeUserOldImageFromCDN is a server action with no login or ownership check and now deletes whatever UploadThing URL the caller passes (settings/actions.ts) instead of the picture stored in the database, so anyone can delete arbitrary files from the app's file storage.",
+   "severity": "high"
+  },
+  {
+   "what": "The actual fix: users without a profile picture (e.g. email-OTP sign-ups) can now upload an avatar and save settings; previously saving failed with 'Something went wrong'.",
+   "severity": "medium"
+  },
+  {
+   "what": "updateUser(id, payload) in the same settings actions file is still an unauthenticated server action that updates any user's name/email/picture by id (pre-existing, not introduced here).",
+   "severity": "medium"
+  }
+ ],
+ "silent": false
+}

@@ -1,0 +1,11 @@
+{ "id": "mfts_papermark__a100d70e",
+  "summary": "Makes link/data-room passcodes ignore trailing spaces: new passcodes are saved without trailing spaces (also trimmed on blur in the link editor), visitors' typed passcodes are trimmed before checking (with a fallback to the raw input for old bcrypt-hashed passcodes), and the visitor access form no longer accepts a passcode made only of spaces.",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "right", "why": "No security/data issue: checks in app/api/views/route.ts and app/api/views-dataroom/route.ts still require the passcode; legacy bcrypt hashes keep a raw-input fallback so no owner is locked out." },
+    { "text": "The agent changed the views dataroom and views parts of your server in ways plain can't describe yet. Ask the agent what they do differently.", "kind": "description", "verdict": "right", "why": "True but says nothing about the actual change (trailing spaces in passcodes are now ignored)." }
+  ],
+  "misses": [
+    { "what": "Visitors who accidentally type (or paste) a passcode with trailing spaces can now get in; passcodes saved with trailing spaces are now stored/compared without them, so 'secret ' and 'secret' are the same passcode.", "severity": "medium" },
+    { "what": "A passcode made only of spaces now becomes empty, which saves the link with no passcode (generateEncrpytedPassword returns \"\" in lib/utils.ts).", "severity": "low" }
+  ],
+  "silent": true }

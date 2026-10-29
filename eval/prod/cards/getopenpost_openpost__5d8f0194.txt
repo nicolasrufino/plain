@@ -1,0 +1,4 @@
+plain · 3 files changed since 5d8f0194~1
+You asked: "fix(linkedin): resolve organization logo assets through Images API"
+
+Nothing about the app changed.

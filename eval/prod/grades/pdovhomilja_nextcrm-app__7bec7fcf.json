@@ -1,0 +1,13 @@
+{ "id": "pdovhomilja_nextcrm-app__7bec7fcf",
+  "summary": "Adds an orderDate (calendar day) to CRM orders: new column defaulting to today, existing orders backfilled from their creation day (UTC), indexed by account+date; the order page shows 'Date: ...' and the orders tables show orderDate instead of the creation date. Users can't set it (no backdating).",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "right", "why": "Additive column with a default and a backfill; no access, money or deletion changes. createOrder doesn't accept orderDate (test in __tests__/orders/service.test.ts)." },
+    { "text": "Each crm order page changed in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative: the order page now shows 'Date: YYYY-MM-DD' (orders/[orderId]/page.tsx:36)." },
+    { "text": "Crm orders now also store the order date.", "kind": "description", "verdict": "right", "why": "crm_Orders.orderDate DATE NOT NULL DEFAULT now." },
+    { "text": "Apply prisma/migrations/20261013000000_order_date to your live database before the new code goes live, or pages that load crm orders can fail too.", "kind": "step", "verdict": "right", "why": "Valid SQL migration (add column + index + backfill); Prisma selects all columns so order pages need it." }
+  ],
+  "misses": [
+    { "what": "The date column in the orders lists (orders page, account orders tab, approvals) now shows the order date instead of the created date; for existing orders it's the same UTC day.", "severity": "low" },
+    { "what": "The order date is always the UTC day the order was created and can't be edited, so orders created late in the evening in timezones ahead/behind UTC may show the neighbouring day.", "severity": "low" }
+  ],
+  "silent": false }

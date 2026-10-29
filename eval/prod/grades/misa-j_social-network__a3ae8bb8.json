@@ -1,0 +1,43 @@
+{
+  "id": "misa-j_social-network__a3ae8bb8",
+  "summary": "AWS deploy prep: moves the static-files + catch-all index.html handler after the /api routers (previously every GET to /api/* such as /api/user/email/activate/:token was swallowed and returned index.html), adds a public GET /api/user/status health check returning {message:'Ok'}, and gitignores ECS task JSON files.",
+  "statements": [
+    {
+      "text": "plain · 4 files changed since a3ae8bb8~1",
+      "kind": "description",
+      "verdict": "right",
+      "why": "4 files changed (.gitignore, app.js, controllers/userController.js, routes/user.js); .gitignore isn't listed but only adds ECS task JSON files."
+    },
+    {
+      "text": "? The agent also changed app.js, which doesn't look related to what you asked for.",
+      "kind": "warning",
+      "verdict": "wrong",
+      "why": "app.js change reorders the SPA catch-all after the API routers (app.js:119-122) - core deployment fix so API GET routes work behind the server; directly related."
+    },
+    {
+      "text": "? The agent also changed controllers/userController.js, which doesn't look related to what you asked for.",
+      "kind": "warning",
+      "verdict": "wrong",
+      "why": "Adds healthStatus handler - a standard health check for an AWS load balancer/ECS target group; directly related to AWS deployment."
+    },
+    {
+      "text": "? The agent also changed routes/user.js, which doesn't look related to what you asked for.",
+      "kind": "warning",
+      "verdict": "wrong",
+      "why": "Wires GET /status for the health check; related to AWS deployment."
+    },
+    {
+      "text": "+ New server code that lists data and works without logging in. /api/user/status",
+      "kind": "description",
+      "verdict": "misleading",
+      "why": "Route is public (no checkAuth, routes/user.js:119) - correct - but it returns only {message:'Ok'}; it lists no data. Owner may think user data is exposed publicly."
+    }
+  ],
+  "misses": [
+    {
+      "what": "Before this commit the catch-all app.get('*') sat before the API routers, so every GET API request (e.g. the email activation link /api/user/email/activate/:token) returned the React index.html instead of working; this commit fixes that.",
+      "severity": "medium"
+    }
+  ],
+  "silent": false
+}

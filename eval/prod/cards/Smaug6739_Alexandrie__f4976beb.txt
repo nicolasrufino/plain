@@ -1,0 +1,15 @@
+plain · 3 files changed since f4976beb~1
+You asked: "fix(oidc): widen users.avatar and skip non-URL picture claims (#796)"
+
+  ✓ No problems spotted  ·  1 step before you ship
+
+WHAT CHANGED
+  Server
+    • The auth oidc callback part of your server changed in a way plain can't describe yet.
+      Ask the agent what it does differently.
+      /api/auth/oidc/[provider]/callback
+
+BEFORE YOU SHIP
+  1. Apply 000021_users_avatar_text.up.sql to your live database before the new code goes
+     live (`migrate -path <folder> -database $DATABASE_URL up`), or the parts that use it
+     will fail.

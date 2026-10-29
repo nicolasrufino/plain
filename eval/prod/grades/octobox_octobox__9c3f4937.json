@@ -1,0 +1,10 @@
+{ "id": "octobox_octobox__9c3f4937",
+  "summary": "Fixes Notification.archive so a value that casts to nil (e.g. an empty string from POST /notifications/archive_selected or the API's value param) archives the notifications instead of writing archived = NULL via update_all (which skipped the true/false validation and left notifications in neither the inbox nor the archive).",
+  "statements": [
+    { "text": "Nothing about the app changed.", "kind": "description", "verdict": "wrong", "why": "notification.rb:80-81 changes behaviour of the archive action used by notifications_controller.rb:116 and api/notifications_controller.rb:217: an empty value now archives instead of saving NULL." }
+  ],
+  "misses": [
+    { "what": "Bug fix to archiving: a request with an empty 'value' used to set archived to NULL (bypassing validation), so notifications vanished from both Inbox and Archive; now they are archived.", "severity": "medium" },
+    { "what": "Notifications already stuck with archived = NULL from the old bug are not repaired by this commit.", "severity": "low" }
+  ],
+  "silent": true }

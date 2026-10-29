@@ -1,0 +1,77 @@
+{
+  "id": "amidaware_tacticalrmm__e56ebd3e",
+  "summary": "Routine dependency bumps: Python packages (cryptography, nats-py 2.15->2.16, packaging, psycopg, tldextract, uvicorn, Markdown), NATS server 2.14.4->2.15.0 (settings NATS_SERVER_VER + tactical-nats Docker image), MeshCentral 1.2.4->1.2.5, and the Nushell version installed on agents 0.112.2->0.115.1.",
+  "statements": [
+    {
+      "text": "✓ No problems spotted",
+      "kind": "reassurance",
+      "verdict": "right",
+      "why": "Patch/minor version bumps; no code or permission changes."
+    },
+    {
+      "text": "• The agent changed docker/containers/tactical-nats/dockerfile.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True, but doesn't say it upgrades the NATS server image 2.14.4 -> 2.15.0."
+    },
+    {
+      "text": "• The agent also changed api/tacticalrmm/tacticalrmm/settings.py.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True but doesn't say it bumps NATS server, MeshCentral and the Nushell version pushed to agents."
+    },
+    {
+      "text": "1. Test anything that uses cryptography: 50.0.0 to 50.0.1.",
+      "kind": "step",
+      "verdict": "right",
+      "why": "requirements.txt:7."
+    },
+    {
+      "text": "2. Test anything that uses nats-py: 2.15.0 to 2.16.0.",
+      "kind": "step",
+      "verdict": "right",
+      "why": "requirements.txt:17; nats is the server-agent messaging channel, so this is the important one."
+    },
+    {
+      "text": "3. Test anything that uses packaging: 25.0 to 26.3.",
+      "kind": "step",
+      "verdict": "right",
+      "why": "requirements.txt:18."
+    },
+    {
+      "text": "4. Test anything that uses psycopg: 3.3.4 to 3.3.5.",
+      "kind": "step",
+      "verdict": "right",
+      "why": "requirements.txt:20."
+    },
+    {
+      "text": "5. Test anything that uses tldextract: 5.3.1 to 5.3.2.",
+      "kind": "step",
+      "verdict": "right",
+      "why": "requirements.txt:30."
+    },
+    {
+      "text": "6. Test anything that uses uvicorn: 0.52.1 to 0.53.0.",
+      "kind": "step",
+      "verdict": "right",
+      "why": "requirements.txt:33."
+    },
+    {
+      "text": "7. Test anything that uses markdown: 3.10.2 to 3.10.3.",
+      "kind": "step",
+      "verdict": "right",
+      "why": "requirements.txt:42."
+    }
+  ],
+  "misses": [
+    {
+      "what": "NATS server (the message bus between the server and every agent) is upgraded 2.14.4->2.15.0 in settings and the tactical-nats Docker image; the card lists the dockerfile but neither says this nor puts it in the test steps.",
+      "severity": "medium"
+    },
+    {
+      "what": "Agents will install Nushell 0.115.1 (was 0.112.2) and MeshCentral version moves to 1.2.5; scripts relying on Nushell behaviour should be checked.",
+      "severity": "low"
+    }
+  ],
+  "silent": false
+}

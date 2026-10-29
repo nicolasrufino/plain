@@ -1,0 +1,19 @@
+{ "id": "LinkStackOrg_LinkStack__8ccdee47",
+  "summary": "Moves rich-text sanitising and allowed image types into a new app/Functions/validation.php + config/validation.php (DOM-based sanitizer; image types now include gif and SVG for avatars, backgrounds, admin logo/favicon and JSON import), adds validation to admin edit-user and admin site uploads. But it also deletes the end of app/Functions/functions.php, leaving footer() unclosed (PHP parse error in an autoloaded file) and removing the block helper functions (setBlockAssetContext, block_asset, block_text, bt, ...) that are still used.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "wrong", "why": "app/Functions/functions.php now ends inside footer() with no 'return $title; }' -> parse error in a composer 'files' autoload (and footer() is called in routes/web.php:77), so every page fails. Removed block helpers still used (LinkTypeViewController.php:51, buttons.blade.php, edit-link.blade.php). SVG uploads now allowed for any logged-in user (studio page/background, import-data writes raw base64 to assets/img/<id>.svg) -> stored XSS when the file URL is opened. Admin edit-user now fails when password left empty ('sometimes|string|min:8' on null)." },
+    { "text": "• The agent changed the admin edit user, admin site, studio page, studio background and import data parts of your server in ways plain can't describe yet. Ask the agent what they do differently.", "kind": "description", "verdict": "right", "why": "These handlers did change (validation, sanitizer, SVG support), but nothing is explained." },
+    { "text": "• The agent changed composer.json.", "kind": "description", "verdict": "right", "why": "Adds app/Functions/validation.php to autoload files; needs composer dump-autoload, not mentioned." },
+    { "text": "• The agent changed resources/views/panel/edit-user.blade.php.", "kind": "description", "verdict": "right", "why": "File inputs get accept= from the configured image list." },
+    { "text": "• The agent changed resources/views/studio/page.blade.php.", "kind": "description", "verdict": "right", "why": "Profile picture inputs now accept configured types incl. .svg/.gif." },
+    { "text": "• The agent changed resources/views/studio/theme.blade.php.", "kind": "description", "verdict": "right", "why": "Background input now accepts configured types incl. .svg." }
+  ],
+  "misses": [
+    { "what": "The whole site breaks: app/Functions/functions.php was cut off mid-function (footer() lost its closing lines), a PHP syntax error in a file loaded on every request.", "severity": "high" },
+    { "what": "Helper functions for custom link blocks (setBlockAssetContext, block_asset, get_block_file_contents, block_text, bt, block_text_translation_check) were deleted but are still used, so link blocks/pages using them crash even if the syntax error is fixed.", "severity": "high" },
+    { "what": "Any logged-in user can now upload SVG files as profile picture/background (and import-data saves any base64 content as .svg without checks); SVGs served from your domain can run scripts when opened, letting a user attack admins/other users (stored XSS).", "severity": "high" },
+    { "what": "Admin 'Edit user' now rejects saves when the password box is left empty (or the user has no page handle/email), because empty fields become null and fail the new 'string' rules.", "severity": "medium" },
+    { "what": "Profile/page descriptions and text blocks now go through a stricter HTML sanitizer that drops all attributes except safe link hrefs (improves XSS protection; may strip some formatting).", "severity": "low" },
+    { "what": "Needs `composer dump-autoload` on deploy so the new validation.php is loaded; otherwise new helper calls are undefined.", "severity": "medium" }
+  ],
+  "silent": false }

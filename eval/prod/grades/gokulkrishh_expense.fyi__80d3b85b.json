@@ -1,0 +1,22 @@
+{ "id": "gokulkrishh_expense.fyi__80d3b85b",
+  "summary": "Changes how the overview estimates subscription spending for the selected date range (new calculatePaidCount based on the previous renewal date; the overview now loads all subscriptions, not just active ones), adds a cancelled_at date that is set when a subscription is switched off (new column, no migration), shows 'Cancel Date' and previous renewal date in the subscriptions table, and bumps a few packages.",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "wrong", "why": "pages/app/index.js drops ?active=true, so inactive subscriptions now feed the spend totals. calculatePaidCount (utils/date.js) only zeroes a subscription when it has a valid cancelled_at, and every subscription switched off before this commit has none, so those count as paid again. The 'Subscriptions'/'Total spent'/balance figures on the overview are overstated." },
+    { "text": "The app page now says \"Estimated spent amount for selected date range.\"", "kind": "description", "verdict": "right", "why": "pages/app/index.js tooltip text changed." },
+    { "text": "The agent changed the subscriptions all and subscriptions update parts of your server in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative: /all now returns every subscription (active filter and field whitelist removed) with prev_renewal_date and paid_count; /update now saves cancelled_at. Both still require login (withUserAuth) and are scoped to the user." },
+    { "text": "Subscriptions now also store the cancelled date.", "kind": "description", "verdict": "right", "why": "prisma/schema.prisma adds cancelled_at String?." },
+    { "text": "Update your database: run `npx prisma migrate dev` (live: `npx prisma migrate deploy`). The database's structure changed, but no migration was created.", "kind": "step", "verdict": "misleading", "why": "Right that the column must be added, but this project doesn't use Prisma Migrate (prisma/migrations holds .ts scripts; package.json has 'dbpush': prisma db push). `migrate deploy` won't add the column; `npm run dbpush` / `prisma db push` is what works here." },
+    { "text": "Test anything that uses @heroicons/react: ^2.0.14 -> ^2.0.15", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "Test anything that uses @prisma/client: ^4.10.0 -> ^4.10.1", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "Test anything that uses @react-email/container: ^0.0.6 -> ^0.0.7", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "Test anything that uses @react-email/section: ^0.0.6 -> ^0.0.8", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "Test anything that uses resend: ^0.10.0 -> ^0.11.0", "kind": "step", "verdict": "right", "why": "package.json bump; resend sends the usage/plan emails (lib/auth.js)." },
+    { "text": "Test anything that uses prisma: ^4.10.0 -> ^4.10.1", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "Test anything that uses tailwindcss: ^3.2.4 -> ^3.2.6", "kind": "step", "verdict": "right", "why": "package.json bump." }
+  ],
+  "misses": [
+    { "what": "The overview's estimated subscription spend (and total spent/balance) changes: the formula now counts payments from the previous renewal date, and subscriptions turned off before this change (no cancel date) are counted as paid again, inflating totals.", "severity": "high" },
+    { "what": "Switching a subscription off now records today's date as its cancel date (shown in a new 'Cancel Date' column); switching it back on clears it. The renewal date column now shows a date for inactive subscriptions too (used to show '-'), plus a 'prev:' date.", "severity": "medium" },
+    { "what": "/api/subscriptions/all now returns all subscription columns (field whitelist removed), including internal ones like nameHash/user_id, but only for the logged-in user's own rows.", "severity": "low" }
+  ],
+  "silent": false }

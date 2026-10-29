@@ -1,0 +1,8 @@
+plain · 5 files changed since 8276f99d~1
+You asked: "feat: add minimum app version support"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent changed app/views/api/v1/systems/show.json.jbuilder.

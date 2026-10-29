@@ -103,7 +103,8 @@ Early and rough. It will get things wrong: false alarms, missed risks, awkward E
 actually true.
 
 Known gaps are in [docs/trials.md](docs/trials.md), where plain was tested against 6 kinds of
-vibe coders and compared to just asking the agent "explain what you did".
+vibe coders and compared to just asking the agent "explain what you did". How it does on real commits in
+real apps, and what it gets wrong there, is in [docs/production-eval.md](docs/production-eval.md).
 
 ## Docs
 
@@ -117,6 +118,7 @@ vibe coders and compared to just asking the agent "explain what you did".
 - [Trials, round 8](docs/trials-rails.md): the same on Ruby on Rails
 - [Trials, round 9](docs/trials-go.md): the same on Go
 - [Trials, round 10](docs/trials-saas-chat-ai.md): apps that aren't shops (a team SaaS, a chat app, an AI writing app)
+- [Production pilot](docs/production-eval.md): 70 real commits from 26 open-source apps, graded
 - [Scenario](docs/scenario.md): one feature, from building to reviewing
 - [Review research](docs/review-research.md): the review bottleneck, what exists, the gap
 - [Code-to-English research](docs/research.md): line-level English and prior work

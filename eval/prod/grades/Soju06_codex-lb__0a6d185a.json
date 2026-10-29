@@ -1,0 +1,67 @@
+{
+ "id": "Soju06_codex-lb__0a6d185a",
+ "summary": "SCIM request reader now enforces its 64 KiB limit chunk-by-chunk while streaming, returning SCIM 413 early instead of buffering the full body; plus spec notes and tests.",
+ "statements": [
+  {
+   "text": "✓ No problems spotted",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Hardening only: SCIM _read (app/modules/scim/api.py:58-62) now streams and stops at 64 KiB instead of buffering the whole body; SCIM routes still bearer-token protected."
+  },
+  {
+   "text": "+ The agent added openspec/changes/archive/2026-09-30-bound-scim-streamed-bodies/context.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added .../proposal.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added .../specs/http-ingress-limits/spec.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added .../tasks.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added .../verification.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "• The agent changed openspec/specs/http-ingress-limits/spec.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec updated."
+  },
+  {
+   "text": "• The agent also added tests/unit/test_scim_body_limit.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "New tests."
+  },
+  {
+   "text": "• The agent also changed tests/integration/test_scim_v2_users.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "New test."
+  }
+ ],
+ "misses": [
+  {
+   "what": "The only code change (app/modules/scim/api.py) is not mentioned at all: SCIM user-provisioning writes now reject oversized bodies (>64 KiB) as soon as the limit is crossed while reading, instead of buffering up to the 32 MiB global cap first — reduces memory abuse.",
+   "severity": "low"
+  }
+ ],
+ "silent": true
+}

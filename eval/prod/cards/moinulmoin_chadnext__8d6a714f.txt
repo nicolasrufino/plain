@@ -1,0 +1,60 @@
+plain · 20 files changed since 8d6a714f~1
+You asked: "fix: :bug: fix imageupload on no image account"
+
+  ⚠ 1 problem  ·  10 things to decide
+
+LOOK AT THIS FIRST
+  ⚠ Anyone can use the "get user subscription plan" action on your server without logging
+    in.
+  ? The agent also changed generateEmailVerificationCode() in src/actions/auth.ts, which
+    doesn't look related to what you asked for. It's used by the auth login send OTP part of
+    your server, so check that it still works. (This is a guess.)
+  ? The agent also changed verifyVerificationCode() in src/actions/auth.ts, which doesn't
+    look related to what you asked for. It's used by the auth login verify OTP part of your
+    server, so check that it still works. (This is a guess.)
+  ? The agent also changed createProject() in src/app/[locale]/dashboard/projects/action.ts,
+    which doesn't look related to what you asked for. It's used by
+    src/app/[locale]/dashboard/projects/create-project-modal.tsx, so check that it still
+    works. (This is a guess.)
+  ? The agent also changed checkIfFreePlanLimitReached() in
+    src/app/[locale]/dashboard/projects/action.ts, which doesn't look related to what you
+    asked for. It's used by src/app/[locale]/dashboard/projects/create-project-modal.tsx, so
+    check that it still works. (This is a guess.)
+  ? The agent also changed getProjects() in src/app/[locale]/dashboard/projects/action.ts,
+    which doesn't look related to what you asked for. It's used by the dashboard projects
+    page, so check that it still works. (This is a guess.)
+  ? The agent also changed getProjectById() in
+    src/app/[locale]/dashboard/projects/action.ts, which doesn't look related to what you
+    asked for. It's used by each dashboard project page, so check that it still works. (This
+    is a guess.)
+  ? The agent also changed updateProjectById() in
+    src/app/[locale]/dashboard/projects/action.ts, which doesn't look related to what you
+    asked for. It's used by
+    src/app/[locale]/dashboard/projects/[projectId]/editable-details.tsx, so check that it
+    still works. (This is a guess.)
+  ? The agent also changed deleteProjectById() in
+    src/app/[locale]/dashboard/projects/action.ts, which doesn't look related to what you
+    asked for. It's used by src/app/[locale]/dashboard/projects/[projectId]/delete-card.tsx,
+    so check that it still works. (This is a guess.)
+  ? The agent also changed src/components/sections/pricing.tsx, which doesn't look related
+    to what you asked for. (This is a guess.)
+  ? The agent also changed src/lib/lucia.ts, which doesn't look related to what you asked
+    for. (This is a guess.)
+
+WHAT CHANGED
+  Pages
+    • The dashboard billing page changed in a way plain can't describe yet. Ask the agent
+      what it does differently.
+      /[locale]/dashboard/billing
+  Server
+    + New server code that looks up users.
+      (server action) getUserSubscriptionPlan in src/actions/subscription.ts
+    • The stripe part of your server changed in a way plain can't describe yet. This is the
+      code that charges your customers 💰 Make a test payment before you ship.
+      /api/stripe
+    • The agent changed the auth login github callback, auth login send OTP, auth login
+      verify OTP, uploadthing, webhooks stripe, generate email verification code, verify
+      verification code, create project, check if free plan limit reached, get projects, get
+      project by id, update project by id, delete project by id, update user and remove user
+      old image from cdn parts of your server in ways plain can't describe yet. Ask the
+      agent what they do differently.

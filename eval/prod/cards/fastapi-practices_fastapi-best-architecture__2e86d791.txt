@@ -1,0 +1,53 @@
+plain · 17 files changed since 2e86d791~1
+You asked: "Optimize some global variable definitions (#1178)"
+
+  18 things to decide
+
+LOOK AT THIS FIRST
+  ? The agent also changed backend/alembic/env.py, which doesn't look related to what you
+    asked for. (This is a guess.)
+  ? The agent also changed init_celery() in backend/app/task/celery.py, which doesn't look
+    related to what you asked for. (This is a guess.)
+  ? The agent also changed acquire_distributed_beat_lock() in
+    backend/app/task/utils/schedulers.py, which doesn't look related to what you asked for.
+    (This is a guess.)
+  ? The agent also changed auto_init() in backend/cli.py, which doesn't look related to what
+    you asked for. (This is a guess.)
+  ? The agent also changed main() in backend/cli.py, which doesn't look related to what you
+    asked for. (This is a guess.)
+  ? The agent also changed backend/common/lifespan.py, which doesn't look related to what
+    you asked for. (This is a guess.)
+  ? The agent also changed backend/common/observability/prometheus/config.py, which doesn't
+    look related to what you asked for. (This is a guess.)
+  ? The agent also changed backend/main.py, which doesn't look related to what you asked
+    for. (This is a guess.)
+  ? The agent also changed backend/plugin/validator.py, which doesn't look related to what
+    you asked for. (This is a guess.)
+  ? The agent also changed backend/tests/utils/db.py, which doesn't look related to what you
+    asked for. (This is a guess.)
+  ? The agent also changed _load_config() in backend/utils/dynamic_config.py, which doesn't
+    look related to what you asked for. (This is a guess.)
+  ? The agent also changed load_user_security_config() in backend/utils/dynamic_config.py,
+    which doesn't look related to what you asked for. It's used by
+    backend/app/admin/service/user_password_history_service.py and
+    backend/app/admin/utils/password_security.py, so check that they still work. (This is a
+    guess.)
+  ? The agent also changed load_login_config() in backend/utils/dynamic_config.py, which
+    doesn't look related to what you asked for. It's used by
+    backend/app/admin/api/v1/auth/captcha.py and backend/app/admin/service/auth_service.py,
+    so check that they still work. (This is a guess.)
+  ? The agent also changed load_email_config() in backend/utils/dynamic_config.py, which
+    doesn't look related to what you asked for. It's used by
+    backend/plugin/email/utils/send.py, so check that it still works. (This is a guess.)
+  ? The agent also changed backend/utils/limiter.py, which doesn't look related to what you
+    asked for. (This is a guess.)
+  ? The agent also changed backend/utils/serializers.py, which doesn't look related to what
+    you asked for. (This is a guess.)
+  ? The agent also changed backend/utils/sql_parser.py, which doesn't look related to what
+    you asked for. (This is a guess.)
+  ? The agent also changed backend/utils/timezone.py, which doesn't look related to what you
+    asked for. (This is a guess.)
+
+WHAT CHANGED
+  Other files
+    • The agent also changed backend/app/task/tasks/beat.py and backend/database/db.py.

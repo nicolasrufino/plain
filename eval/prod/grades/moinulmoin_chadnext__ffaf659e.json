@@ -1,0 +1,15 @@
+{ "id": "moinulmoin_chadnext__ffaf659e",
+  "summary": "Stripe webhook: subscription period end is now taken from the subscription item's current_period_end instead of subscription.ended_at (which is null for active subscriptions, so paying users were stored with a 1970 end date and never counted as Pro); also handles checkout.session.async_payment_succeeded, and wraps both database updates in try/catch that only logs, still answering Stripe 200. Billing button loading state cleaned up; removes explicit billing_address_collection 'auto' (Stripe's default); adds a local-only .cursor/mcp.json.",
+  "statements": [
+    { "text": "No problems spotted", "kind": "reassurance", "verdict": "wrong", "why": "webhooks/stripe/route.ts now catches and only console.errors database failures, then returns 200. Before, a failed update threw (500) and Stripe retried; now a customer who paid can silently never get Pro and Stripe won't retry. That's a money problem an owner should hear about." },
+    { "text": "The stripe part of your server changed in a way plain can't describe yet. This is the code that charges your customers. Make a test payment before you ship. /api/stripe", "kind": "description", "verdict": "right", "why": "Only removed billing_address_collection: 'auto', which is Stripe's default, so no behaviour change; a test payment is reasonable given the webhook changes." },
+    { "text": "The webhooks stripe part of your server changed in a way plain can't describe yet. Ask the agent what it does differently. /api/webhooks/stripe", "kind": "description", "verdict": "right", "why": "True but empty: it doesn't mention the Pro-status fix (current_period_end) or the swallowed errors." },
+    { "text": "The agent added .cursor/mcp.json.", "kind": "description", "verdict": "right", "why": "Editor config for a local Postgres MCP server with default localhost credentials; doesn't affect the app." },
+    { "text": "In Stripe (Workbench -> Webhooks, your endpoint), make sure it receives checkout.session.async_payment_succeeded ... until then the new code for it never runs.", "kind": "step", "verdict": "misleading", "why": "Checkout is created with payment_method_types: ['card'] (api/stripe/route.ts), and card payments never produce async_payment_succeeded, so the new branch can't run anyway. The step is harmless but suggests required setup that changes nothing." }
+  ],
+  "misses": [
+    { "what": "Fix: paying subscribers were saved with a period end from subscription.ended_at (null -> 1970), so they never showed as Pro; now their real current_period_end is stored and Pro status works after checkout and on renewals.", "severity": "high" },
+    { "what": "Database update failures in the Stripe webhook are now swallowed and Stripe gets 200, so it won't retry; a paid customer can be left on the free plan with only a server log line.", "severity": "high" },
+    { "what": "Upgrade/Manage button now stops spinning if Stripe returns no URL instead of toggling its loading state.", "severity": "low" }
+  ],
+  "silent": false }

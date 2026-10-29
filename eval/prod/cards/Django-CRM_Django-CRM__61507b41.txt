@@ -1,0 +1,22 @@
+plain · 23 files changed since 61507b41~1
+You asked: "Show related records on custom record pages, and name the real estate match a..."
+
+  ✓ No problems spotted  ·  1 loose end
+
+WHAT CHANGED
+  Other files
+    + The agent added mobile/test/screens/record_alert_notifications_test.dart.
+    • The agent changed backend/uv.lock.
+    • The agent changed mobile/lib/core/app_info.dart.
+    • The agent changed mobile/lib/data/models/app_notification.dart.
+    • The agent changed mobile/lib/screens/notifications/notifications_screen.dart.
+    • The agent changed mobile/lib/screens/objects/object_record_detail_screen.dart.
+    • The agent changed mobile/pubspec.yaml.
+    • The agent changed mobile/test/screens/objects/object_record_detail_screen_test.dart.
+    • The agent changed mobile/test/screens/phone_viewport_test.dart.
+    • The agent changed mobile/test/unit/lead_alerts_models_test.dart.
+    • The agent changed mobile/test/unit/notifications_provider_test.dart.
+
+LOOSE ENDS
+  ◐ Type checking is turned off in 1 spot in
+    frontend/src/lib/server/v2/related-records.test.ts (`any`).

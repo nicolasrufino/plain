@@ -1,0 +1,14 @@
+{ "id": "LinkStackOrg_LinkStack__28b073df",
+  "summary": "Public profile buttons and social icons now link straight to the stored URL (href=$link->link) instead of going through the /going/{id}?url redirect; clicks are counted by a JS fetch to /going/{id} on mousedown/touchstart, only when the clicked element itself has class button-click, and only once per link per browser session (sessionStorage). Because stored links are not scheme-validated, javascript: links now become directly clickable on public pages.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "wrong", "why": "saveLink/editLink/importData store link URLs without scheme validation (UserController.php:241-278, 711-715, 1157; no exturl/url rule anywhere at this commit). Previously such links went through redirect()->away() (UserController.php:551), so a javascript: URL was inert; now buttons.blade.php/icons.blade.php put it straight in href, so any registered user can plant a script link on their public page that runs on your domain when clicked (stored XSS). Click counts also become less accurate." },
+    { "text": "• The agent changed resources/views/linkstack/elements/buttons.blade.php.", "kind": "description", "verdict": "right", "why": "Direct hrefs + new JS click counter; card doesn't explain." },
+    { "text": "• The agent changed resources/views/linkstack/elements/icons.blade.php.", "kind": "description", "verdict": "right", "why": "Social icons now link directly; counted via JS." }
+  ],
+  "misses": [
+    { "what": "Links on public pages now point straight at whatever URL the user saved; since saved links aren't checked, a user can add a 'javascript:' link that runs code in visitors' (including admins') browsers on your site. Before, the redirect page made such links harmless.", "severity": "high" },
+    { "what": "Click statistics change: clicks are only counted with JavaScript on, only once per link per visitor session, and not when the visitor clicks the button's icon image (the click lands on the <img>, which lacks the button-click class), so counts will drop compared with before.", "severity": "medium" },
+    { "what": "Buttons with custom CSS lost their base 'button' class (class changed from 'button button-hover' to 'button-click button-hover'), so their look may change on public pages.", "severity": "medium" },
+    { "what": "Visitors now go directly to the destination (no /going/ redirect, no X-Robots-Tag noindex header on the hop); destination sites see your page as referrer subject to rel=noreferrer.", "severity": "low" }
+  ],
+  "silent": true }

@@ -1,0 +1,13 @@
+{ "id": "octobox_octobox__271c40d4",
+  "summary": "When a notification is opened in the preview pane (XHR to /notifications/:id/show), the previous/next links are now computed within the active filters (e.g. draft=true, repo, reason) instead of the whole inbox; also shows a 'Draft'/'Not draft' chip in the filter bar.",
+  "statements": [
+    { "text": "1 thing to decide", "kind": "warning", "verdict": "misleading", "why": "The only flagged item is a false alarm; nothing to decide." },
+    { "text": "? The agent also changed app/controllers/notifications_controller.rb, which doesn't look related to what you asked for. (This is a guess.)", "kind": "warning", "verdict": "wrong", "why": "This line (notifications_controller.rb:19) is the core of the fix: it applies current_notifications filters to XHR previews so prev/next stay within the filtered results." },
+    { "text": "• The notification show part of your server changed in a way plain can't describe yet. Ask the agent what it does differently. /notifications/[id]/show", "kind": "description", "verdict": "right", "why": "Correct route (routes.rb member get :show) but no explanation; still behind authenticate_web_or_api! and scoped to current_user." },
+    { "text": "• The agent changed app/views/notifications/_filter-list.html.erb.", "kind": "description", "verdict": "right", "why": "Adds a Draft/Not draft filter chip; true but unexplained." }
+  ],
+  "misses": [
+    { "what": "Previous/next buttons in the notification preview now stay inside the current filter (e.g. Draft, repo, type) instead of jumping to unrelated inbox items.", "severity": "medium" },
+    { "what": "A 'Draft' / 'Not draft' chip now appears in the active-filters bar when the draft filter is on.", "severity": "low" }
+  ],
+  "silent": false }

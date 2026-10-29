@@ -1,0 +1,9 @@
+plain · 4 files changed since 26e19510~1
+You asked: "Conversation split view"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent changed public/css/style.css.
+    • The agent changed resources/views/conversations/partials/conv_list.blade.php.

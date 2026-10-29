@@ -1,0 +1,9 @@
+plain · 4 files changed since 2eac19a0~1
+You asked: "Add arrow key navigation shortcuts"
+
+  ✓ No problems spotted
+
+WHAT CHANGED
+  Other files
+    • The agent changed README.md, a notes file (not code).
+    • The agent changed app/views/shared/_keyboard_mappings.html.erb.

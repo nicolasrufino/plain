@@ -1,0 +1,12 @@
+{ "id": "blackcandy-org_blackcandy__4eeca7f6",
+  "summary": "Playlists page (GET /playlists, HTML and JSON API) now always lists the user's Favorites playlist first, before the chosen sort order, via a new Playlist.favorite_first scope; also bumps the dev-only brakeman gem.",
+  "statements": [
+    { "text": "✓ No problems spotted", "kind": "reassurance", "verdict": "right", "why": "Ordering-only change on a page still behind require_login (Authentication concern) and scoped to Current.user.playlists_with_favorite; brakeman is a dev/security-scan tool." },
+    { "text": "• The playlists part of your server changed in a way plain can't describe yet. Ask the agent what it does differently. /playlists", "kind": "description", "verdict": "right", "why": "Correct address (playlists_controller.rb:10-16) but no explanation of the change." },
+    { "text": "• The agent changed Gemfile.lock.", "kind": "description", "verdict": "right", "why": "brakeman 8.0.6 -> 8.1.0; not explained." },
+    { "text": "• The agent changed test/fixtures/playlists.yml.", "kind": "description", "verdict": "right", "why": "Test data only." }
+  ],
+  "misses": [
+    { "what": "Users' Favorites playlist is now pinned at the top of the playlists list (web and API) regardless of the sort they pick.", "severity": "medium" }
+  ],
+  "silent": false }

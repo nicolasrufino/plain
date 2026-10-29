@@ -1,0 +1,7 @@
+plain · 4 files changed since 8f03bda0~1
+You asked: "rules: Add PostHog events for rule changes (#4374)"
+
+  ✓ No problems spotted  ·  1 loose end
+
+LOOSE ENDS
+  ◐ Type checking is turned off in 1 spot in apps/web/utils/rule/rule.test.ts (`any`).

@@ -1,0 +1,67 @@
+{
+ "id": "Soju06_codex-lb__7010af09",
+ "summary": "Refactor: connect_address, additional_quota_registry_file and forwarded_allow_ips become Settings fields (same env names/defaults; .env files and a prefixed alias now honored) and the trusted-proxy middleware, connect-address endpoint and quota registry read them from Settings; docs/reference generator updated.",
+ "statements": [
+  {
+   "text": "✓ No problems spotted",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Config refactor: three env reads (FORWARDED_ALLOW_IPS, CODEX_LB_CONNECT_ADDRESS, CODEX_LB_ADDITIONAL_QUOTA_REGISTRY_FILE) moved into Settings with the same defaults; no new routes or exposure. Firewall/auth still use the raw socket peer."
+  },
+  {
+   "text": "+ The agent added openspec/changes/env-reads-through-settings/proposal.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added .../specs/deployment-installation/spec.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added .../specs/user-documentation/spec.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "+ The agent added openspec/changes/env-reads-through-settings/tasks.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec note."
+  },
+  {
+   "text": "• The agent changed docs/reference/settings.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Generated settings reference updated."
+  },
+  {
+   "text": "• The agent changed openspec/specs/deployment-installation/context.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Spec context updated."
+  },
+  {
+   "text": "• The agent also added tests/unit/test_settings_promoted_env.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "New tests."
+  },
+  {
+   "text": "• The agent also changed app/core/config/settings.py, trusted_proxy_headers.py, additional_quota_keys.py, scripts/generate_settings_reference.py and tests...",
+   "kind": "description",
+   "verdict": "misleading",
+   "why": "File list only, no explanation; omits app/modules/settings/api.py (connect-address override now via Settings) and tests/integration/test_auth_middleware.py although the header counts 23 files."
+  }
+ ],
+ "misses": [
+  {
+   "what": "These three settings are now also picked up from the app's .env/.env.local files (Settings env_file), not only the process environment, and FORWARDED_ALLOW_IPS gains a CODEX_LB_FORWARDED_ALLOW_IPS alias. A value sitting in .env (e.g. FORWARDED_ALLOW_IPS=*) that was ignored before now changes which proxies the app trusts for client address/scheme.",
+   "severity": "low"
+  }
+ ],
+ "silent": true
+}

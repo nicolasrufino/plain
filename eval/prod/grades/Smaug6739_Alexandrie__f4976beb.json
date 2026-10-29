@@ -1,0 +1,13 @@
+{ "id": "Smaug6739_Alexandrie__f4976beb",
+  "summary": "Fixes OIDC sign-up failing for providers like Authentik: users.avatar widened from VARCHAR(150) to TEXT by migration 000021 (applied automatically at startup), and new OIDC users only get the picture claim saved as avatar if it is an http(s) URL of at most 2048 chars (data URIs etc. are dropped).",
+  "statements": [
+    { "text": "✓ No problems spotted  ·  1 step before you ship", "kind": "reassurance", "verdict": "right", "why": "VARCHAR(150) -> TEXT is a widening change with no data loss; avatarFromPicture (oidc.service.go:320) only narrows what's stored. No new exposure." },
+    { "text": "• The auth oidc callback part of your server changed in a way plain can't describe yet. Ask the agent what it does differently. /api/auth/oidc/[provider]/callback", "kind": "description", "verdict": "right", "why": "Correct address (router.go:67 /api + routes/auth.go:37 POST /auth/oidc/:provider/callback, which calls createUserFromOIDC); true but doesn't say it fixes first-time OIDC sign-up or drops non-URL pictures." },
+    { "text": "1. Apply 000021_users_avatar_text.up.sql to your live database before the new code goes live (`migrate -path <folder> -database $DATABASE_URL up`), or the parts that use it will fail.", "kind": "step", "verdict": "misleading", "why": "The server applies embedded migrations itself on startup (app/app.go:55 -> app/migrations.go m.Up()), so no manual step is needed; and without it nothing new breaks, OIDC sign-up with a long picture just keeps failing as before." }
+  ],
+  "misses": [
+    { "what": "Fixes single sign-on: people signing in for the first time through an OIDC provider that sends a long or base64 picture (e.g. Authentik) previously hit a database error and couldn't create an account; now they can.", "severity": "medium" },
+    { "what": "The users table change (avatar column becomes TEXT) runs automatically on next server start, not by hand as the card suggests; the down migration fails if any stored avatar is over 150 characters.", "severity": "low" },
+    { "what": "New OIDC users whose provider sends a non-http(s) picture now get no avatar instead of storing it.", "severity": "low" }
+  ],
+  "silent": false }
