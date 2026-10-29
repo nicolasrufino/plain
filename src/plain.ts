@@ -208,10 +208,27 @@ export function fileFacts(path: string, text: string): FileFacts {
     for (const [name, node] of fns) {
       f.locals.set(name, collect(sf, node, empty(printer.printNode(ts.EmitHint.Unspecified, node, sf))))
       const param = (node as ts.FunctionLikeDeclaration).parameters[0]?.name.getText(sf)
+      // API_URL is this app's server: a const in this file named for it (not OLLAMA_URL, OPENAI_BASE), made only of env reads named
+      // the same way and localhost, and not declared again inside the helper
+      const OWN = (n: string) => /^(api|apibase|apibaseurl|apiurl|apiorigin|baseurl|serverurl|backendurl)$/.test(n.replace(/^(VITE|NEXT_PUBLIC|REACT_APP|PUBLIC|EXPO_PUBLIC|NUXT_PUBLIC)_/, '').replace(/_/g, '').toLowerCase())
+      const declares = (n: ts.Node, name: string): boolean => (ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n)) && !!n.name && ts.isIdentifier(n.name) && n.name.text === name
+        || !!ts.forEachChild(n, c => declares(c, name) || undefined)
+      const ownOrigin = (e: ts.Expression): boolean => {
+        if (!ts.isIdentifier(e) || !OWN(e.text) || declares(node, e.text)) return false
+        const d = sf.statements.flatMap(s => ts.isVariableStatement(s) && s.declarationList.flags & ts.NodeFlags.Const ? [...s.declarationList.declarations] : [])
+          .filter(x => ts.isIdentifier(x.name) && x.name.text === e.text)
+        const ok = (x: ts.Expression): boolean => ts.isParenthesizedExpression(x) ? ok(x.expression)
+          : ts.isBinaryExpression(x) ? /^(\?\?|\|\|)$/.test(x.operatorToken.getText(sf)) && ok(x.left) && ok(x.right)
+          : ts.isStringLiteralLike(x) ? /^(https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?)?\/?$/.test(x.text)
+          : /^(import\.meta\.env|process\.env)\.\w+$/.test(x.getText(sf)) && OWN(x.getText(sf).split('.').pop()!)
+        return d.length === 1 && !!d[0].initializer && ok(d[0].initializer)
+      }
       const wraps = (n: ts.Node): string | undefined => {
         if (ts.isCallExpression(n) && n.expression.getText(sf) === 'fetch') {
-          const a = n.arguments[0]
-          if (a && ts.isTemplateExpression(a) && a.templateSpans[0].expression.getText(sf) === param) return a.head.text
+          const a = n.arguments[0], sp = a && ts.isTemplateExpression(a) ? a.templateSpans : undefined
+          if (sp?.[0].expression.getText(sf) === param) return (a as ts.TemplateExpression).head.text
+          // `${API_URL}/api${path}`: this app's own server at another origin (only env reads and localhost in API_URL)
+          if (sp?.[1]?.expression.getText(sf) === param && (a as ts.TemplateExpression).head.text === '' && ownOrigin(sp[0].expression)) return sp[0].literal.text
         }
         return ts.forEachChild(n, wraps)
       }
@@ -1865,8 +1882,15 @@ export function appFacts(snap: Snap) {
       // lib/ and server code (server actions, server/, *.server.ts) aren't part of what the page shows; calls to them are
       if (!q || seen.has(q) || /(^|\/)lib\//.test(q) || page && (/(^|\/)server\/|\.server\.[jt]sx?$/.test(q) || files.get(q)!.serverFns.size)) continue
       seen.add(q)
-      const c = files.get(q)!
-      for (const k of ['ui', 'fetches', 'links', 'outside', 'tables', 'written', 'ops'] as const) for (const x of c[k]) into[k].add(x)
+      const c = files.get(q)!, self = files.get(p)!
+      // useAuth() from a context: its login/logout calls are the whole app's, not this page's, unless the page renders the provider.
+      // Only the app's own auth addresses (/api/auth/login, /logout, GET /me), not /me/favorites or a tutor's /sessions; and they still
+      // count as something the page can change (a sign-up page isn't "only shows information").
+      const appWide = /\bcreateContext\s*[<(]/.test(snap.get(q) ?? '') && ![...self.binds].some(([k, m]) => m === spec && self.jsx.has(k))
+        ? /^GET (\/api)?\/(auth\/)?me$|^\S+ (\/api)?\/(auth\/)?(login|logout|signin|signout|sign-in|sign-out|signup|sign-up|register|session|refresh|guest)$/ : undefined
+      const quiet = ((into as FileFacts & { quiet?: Set<string> }).quiet ??= new Set())
+      for (const x of (c as FileFacts & { quiet?: Set<string> }).quiet ?? []) quiet.add(x)
+      for (const k of ['ui', 'fetches', 'links', 'outside', 'tables', 'written', 'ops'] as const) for (const x of c[k]) if (k === 'fetches' && appWide?.test(x)) quiet.add(x); else into[k].add(x)
       into.headings.push(...c.headings); into.forms += c.forms
       fold(q, into, seen, page)
     }
@@ -2045,6 +2069,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     // sending: what that address writes, when it writes one thing (a booking form on a tutor's page sends bookings, not tutors)
     const t = e && (sends && e[1].written.size === 1 ? [...e[1].written][0] : mainTable(e[1], r!.url)), noun = t ? things(t) : 'data'
     if (e?.[1].money) return 'starts a payment 💰'
+    // POST /rooms/[id]/leave whose one write is a delete: what it does, not how it's sent
     return method === 'PUT' || method === 'PATCH' ? `updates ${noun} on your server` : method === 'DELETE' ? `deletes ${noun} on your server`
       : sends ? `sends ${noun} to your server` : `loads ${noun} from your server`
   }
@@ -2063,7 +2088,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   }
   // Server code that an admin page calls is admin-only, whatever its name.
   const adminCalls = (url: string) => [...B.files].some(([p, f]) => route(p)?.kind === 'page' && /(^|\/)(admin|dashboard)(\/|$)/.test(route(p)!.url)
-    && [...f.fetches].some(x => norm(x.slice(x.indexOf(' ') + 1)) === norm(url)))
+    && [...f.fetches, ...(f as FileFacts & { quiet?: Set<string> }).quiet ?? []].some(x => norm(x.slice(x.indexOf(' ') + 1)) === norm(url)))
   // A private link: the address carries a secret (/share/[token], /s/{public_id}) and the lookup uses it (`where: { token }`,
   // `.where(Document.public_id == public_id)`, on one line). Only people holding the link find it, whether or not they also log in. (Pages say
   // only that: an app-wide guard plain can't read, Next's middleware, Nuxt's Supabase module, a SvelteKit hook, may still ask for login.)
@@ -2127,7 +2152,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const fs = writtenFields(x)
       return fs.length > 0 && fs.every(k => LINK_FIELD.test(k)) && !/updateMany|update_all|setattr|\$executeRaw|\$queryRaw|\bsql`|\bdata\s*:(?!\s*\{)|\bdata\s*:\s*\{[^{}]*\{/.test(x)
         && onlyKnownCalls(x) })
-  const viewOnly = (f: FileFacts) => ![...f.fetches].some(x => !x.startsWith('GET ')) && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
+  const viewOnly = (f: FileFacts) => ![...f.fetches, ...(f as FileFacts & { quiet?: Set<string> }).quiet ?? []].some(x => !x.startsWith('GET ')) && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
 
   const changes: Change[] = [], problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []
   const limiterSomewhere = [...after].some(([p, x]) => /\.(?:[cm]?[jt]sx?|py|rb|php|go|cs|java|kt)$|(?:^|\/)(?:Gemfile|package\.json|requirements\.txt|pyproject\.toml|composer\.json|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/.test(p)
@@ -2144,7 +2169,10 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       if (ui.length) clauses.push(`${a ? 'now has' : 'has'} ${list(ui)}`)
       for (const t of newOnly(a?.tables, b.tables).filter(t => !b.written.has(t))) clauses.push(`${a ? 'now shows' : 'shows'} ${things(t)}`)
       for (const t of newOnly(a?.written, b.written)) clauses.push(`${a ? 'now saves' : 'saves'} ${things(t)}`)
-      for (const x of newOnly(a?.fetches, b.fetches)) clauses.push((a ? 'now ' : '') + fetchPhrase(x))
+      // (loading the same things from a new address, /rooms -> /rooms/[id], isn't new: "now loads rooms" would say it didn't before.
+      // A send to a new address is a new action, and "data" says too little to tell.)
+      const did = new Set([...a?.fetches ?? []].map(fetchPhrase).filter(x => x.startsWith('loads ') && !x.startsWith('loads data ')))
+      for (const x of newOnly(a?.fetches, b.fetches)) if (!did.has(fetchPhrase(x))) clauses.push((a ? 'now ' : '') + fetchPhrase(x))
       for (const x of newOnly(a?.links, b.links)) clauses.push(`${a ? 'now links' : 'links'} to ${pageName(x)}`)
       // icons (lucide, heroicons, ...) aren't content: "shows the gift" would be noise
       const comps = newOnly(a?.jsx, b.jsx).filter(x => /^[A-Z]/.test(x) && !/^(Link|Image|Script|Head|NuxtLink|NuxtPage|NuxtLayout|NuxtImg|NuxtLoadingIndicator|ClientOnly|RouterLink|RouterView|Teleport|Transition|KeepAlive|Suspense)$/.test(x) && !x.includes('.')
@@ -2568,7 +2596,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const notes = rls.length ? ["Database access rules are read from supabase/migrations. Rules changed in the Supabase dashboard aren't visible to plain."] : []
   // A page that asks for login but gets its data from a server that isn't in this project (an Angular or React app on its own):
   // its guard only hides the page; the data is safe only if that server checks login too, and plain can't see it.
-  const outsideCalls = real.filter(p => route(p)?.kind === 'page' && B.files.get(p)?.auth).flatMap(p => [...B.files.get(p)!.fetches].map(x => x.slice(x.indexOf(' ') + 1))).filter(u => u.startsWith('/') && !endpoint(u))
+  const outsideCalls = real.filter(p => route(p)?.kind === 'page' && B.files.get(p)?.auth).flatMap(p => [...B.files.get(p)!.fetches, ...(B.files.get(p) as FileFacts & { quiet?: Set<string> }).quiet ?? []].map(x => x.slice(x.indexOf(' ') + 1))).filter(u => u.startsWith('/') && !endpoint(u))
   // (a server plain can't read yet, in this repo: NestJS, .NET, Java, Go, PHP, Ruby)
   const unread = '@nestjs/core' in B.deps || [...after.keys()].some(p => /\.(cs|java|kt|go|php|rb)$/.test(p))
   const where = [...new Set(outsideCalls.map(u => u.split('/').slice(0, 3).join('/').replace(/\/\[…\]$/, '')))].slice(0, 3)

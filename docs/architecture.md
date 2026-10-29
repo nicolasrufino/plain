@@ -59,9 +59,12 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 
 - **Routes.** Each page and server address is matched to the file (or, for Express, the
   `file#/address` unit) that handles it. Mount prefixes and guards are followed up the chain.
-- **Pages include their components.** A page also does what the components it imports do.
+- **Pages include their components.** A page also does what the components it imports do,
+  except a context's login, logout and `GET /me` calls (`useAuth()`): those are the whole app's.
+  They still count against "It only shows information" and toward the admin and login checks.
 - **Helpers are resolved.** `api('/bookings')` becomes `/api/bookings` when `api` wraps
-  `` fetch(`/api${path}`) ``.
+  `` fetch(`/api${path}`) ``, or `` fetch(`${API_URL}/api${path}`) `` when `API_URL` is named for the
+  app's own server and holds only env reads and localhost (not `OLLAMA_URL` or another company's API).
 - **The database** comes from `schema.prisma`, or from replaying `supabase/migrations/*.sql`
   with the real Postgres parser ([src/supabase.ts](../src/supabase.ts)). The replay also gives
   who each table's access rules let in.

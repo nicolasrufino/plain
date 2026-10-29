@@ -3906,3 +3906,264 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   assert.ok(!c.includes("server/rooms.ts, which doesn't look related"), c)
   console.log('ok (called endpoint is related)')
 }
+// A fetch helper on this app's own server at another origin: fetch(`${API_URL}/api${path}`) (porch-chat). Not another company's API,
+// not useAuth()'s login calls folded into every page, not "now loads rooms" when the page loaded rooms before.
+{
+  const lib = (url: string) => `const API_URL = ${url}\nexport async function api(path: string, options: RequestInit = {}) { return fetch(\`\${API_URL}/api\${path}\`, options) }\n`
+  const app = "import { Routes, Route } from 'react-router-dom'\nimport Rooms from './pages/Rooms'\nexport default function App() { return <Routes><Route path=\"/rooms/:id\" element={<Rooms />} /></Routes> }\n"
+  const ctx = "import { createContext, useContext } from 'react'\nimport { api } from '../lib/api'\nconst C = createContext(null)\nexport function AuthProvider({ children }) { const logout = () => api('/auth/logout', { method: 'POST' }); return <C.Provider value={{ logout }}>{children}</C.Provider> }\nexport const useAuth = () => useContext(C)\n"
+  const page = (call: string, auth = true) => `import { api } from '../lib/api'\n${auth ? "import { useAuth } from '../context/AuthContext'\n" : ''}export default function Rooms() { ${call}; return <main>Rooms</main> }\n`
+  const server = "import express from 'express'\nconst app = express()\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\napp.get('/api/rooms/:id', async (req, res) => res.json(await prisma.room.findUnique({ where: { id: req.params.id } })))\napp.get('/api/messages', async (req, res) => res.json(await prisma.message.findMany()))\napp.post('/api/auth/logout', async (req, res) => {})\n"
+  const ex = (url: string, call: string, auth = true) => ({ 'package.json': '{"dependencies":{"express":"4.0.0","react":"18.0.0"}}', 'client/src/lib/api.ts': lib(url), 'client/src/App.tsx': app,
+    'client/src/context/AuthContext.tsx': ctx, 'client/src/pages/Rooms.tsx': page(call, auth), 'server/index.ts': server })
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const local = 'import.meta.env.VITE_API_URL ?? "http://localhost:4000"'
+  let c = card(ex(local, "api('/rooms')", false), ex(local, "api('/rooms'); api('/messages')"))
+  assert.ok(c.includes('now loads messages from your server'), c)
+  assert.ok(!/sends (data|users) to your server/.test(c), c)
+  for (const url of ['"https://api.github.com"', 'process.env.VITE_API_URL || "https://example.com"']) {
+    c = card(ex(url, "api('/rooms')"), ex(url, "api('/rooms'); api('/messages')"))
+    assert.ok(!c.includes('loads messages'), c)
+  }
+  c = card(ex(local, "api('/rooms')"), ex(local, 'api(`/rooms/${id}`)'))
+  assert.ok(!c.includes('now loads rooms'), c)
+  // an AuthContext that also toggles favorites (dog-walks p3): the favorites call stays the page's, so it isn't "only shows information"
+  const fav = { ...ex(local, 'useAuth()'), 'client/src/context/AuthContext.tsx': ctx.replace("const logout", "const toggle = () => api('/favorites/1', { method: 'POST' }); const logout") }
+  c = card({ 'package.json': fav['package.json'] }, fav)
+  assert.ok(c.includes('sends data to your server') && !c.includes('only shows information'), c)
+  console.log('ok (fetch helper at its own origin)')
+}
+// Review 46: context auth calls dropped only for the app's own auth addresses (and still not "only shows information"), a POST
+// worded by a delete on another method, base URLs that are another service (Ollama, OpenAI) or a local of the same name
+{
+// New Account page; its only "change" is an icon-only delete-account button whose fetch lives in AuthContext (provider rendered in App, not the page)
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const server = "import express from 'express'\nconst app = express()\napp.get('/api/me', async (req, res) => res.json(await prisma.user.findUnique({ where: { id: 1 } })))\napp.delete('/api/me', async (req, res) => { await prisma.user.delete({ where: { id: 1 } }); res.json({}) })\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\n"
+const ctx = "import { createContext, useContext } from 'react'\nconst C = createContext(null)\nexport function AuthProvider({ children }) { const deleteAccount = () => fetch('/api/me', { method: 'DELETE' }); return <C.Provider value={{ deleteAccount }}>{children}</C.Provider> }\nexport const useAuth = () => useContext(C)\n"
+const appB = "import { Routes, Route } from 'react-router-dom'\nimport { AuthProvider } from './context/AuthContext'\nimport Home from './pages/Home'\nexport default function App() { return <AuthProvider><Routes><Route path=\"/\" element={<Home />} /></Routes></AuthProvider> }\n"
+const appA = "import { Routes, Route } from 'react-router-dom'\nimport { AuthProvider } from './context/AuthContext'\nimport Home from './pages/Home'\nimport Account from './pages/Account'\nexport default function App() { return <AuthProvider><Routes><Route path=\"/\" element={<Home />} /><Route path=\"/account\" element={<Account />} /></Routes></AuthProvider> }\n"
+const home = "export default function Home() { return <main>Home</main> }\n"
+const account = "import { Trash2 } from 'lucide-react'\nimport { useAuth } from '../context/AuthContext'\nexport default function Account() { const { deleteAccount } = useAuth(); return <main><h1>Your account</h1><button onClick={deleteAccount} aria-label=\"Delete my account\"><Trash2 /></button></main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'client/src/context/AuthContext.tsx': ctx, 'client/src/App.tsx': appB, 'client/src/pages/Home.tsx': home }
+const after = { ...before, 'client/src/App.tsx': appA, 'client/src/pages/Account.tsx': account }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('deletes users on your server') && !c.includes('only shows information'), c)
+}
+{
+// New Account page; its only "change" is an icon-only delete-account button whose fetch lives in AuthContext (provider rendered in App, not the page)
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const server = "import express from 'express'\nconst app = express()\napp.get('/api/me', async (req, res) => res.json(await prisma.user.findUnique({ where: { id: 1 } })))\napp.post('/api/me/favorites/:id', async (req, res) => { await prisma.favorite.create({ where: { id: 1 } }); res.json({}) })\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\n"
+const ctx = "import { createContext, useContext } from 'react'\nconst C = createContext(null)\nexport function AuthProvider({ children }) { const toggleFavorite = () => fetch('/api/me/favorites/1', { method: 'POST' }); return <C.Provider value={{ toggleFavorite }}>{children}</C.Provider> }\nexport const useAuth = () => useContext(C)\n"
+const appB = "import { Routes, Route } from 'react-router-dom'\nimport { AuthProvider } from './context/AuthContext'\nimport Home from './pages/Home'\nexport default function App() { return <AuthProvider><Routes><Route path=\"/\" element={<Home />} /></Routes></AuthProvider> }\n"
+const appA = "import { Routes, Route } from 'react-router-dom'\nimport { AuthProvider } from './context/AuthContext'\nimport Home from './pages/Home'\nimport Account from './pages/Account'\nexport default function App() { return <AuthProvider><Routes><Route path=\"/\" element={<Home />} /><Route path=\"/account\" element={<Account />} /></Routes></AuthProvider> }\n"
+const home = "export default function Home() { return <main>Home</main> }\n"
+const account = "import { Heart } from 'lucide-react'\nimport { useAuth } from '../context/AuthContext'\nexport default function Account() { const { toggleFavorite } = useAuth(); return <main><h1>Your account</h1><button onClick={toggleFavorite} aria-label=\"Favorite\"><Heart /></button></main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'client/src/context/AuthContext.tsx': ctx, 'client/src/App.tsx': appB, 'client/src/pages/Home.tsx': home }
+const after = { ...before, 'client/src/App.tsx': appA, 'client/src/pages/Account.tsx': account }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('sends data to your server') && !c.includes('only shows information'), c)
+}
+{
+// A tutoring app: "sessions" are bookings. SessionsContext (createContext, provider in App) books/cancels; the new page uses shadcn <Button>.
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const server = "import express from 'express'\nconst app = express()\napp.get('/api/sessions', async (req, res) => res.json(await prisma.session.findMany()))\napp.post('/api/sessions', async (req, res) => res.json(await prisma.session.create({ data: req.body })))\napp.delete('/api/sessions/:id', async (req, res) => { await prisma.session.delete({ where: { id: req.params.id } }); res.json({}) })\n"
+const ctx = "import { createContext, useContext, useEffect, useState } from 'react'\nconst C = createContext(null)\nexport function SessionsProvider({ children }) { const [sessions, setSessions] = useState([]); useEffect(() => { fetch('/api/sessions').then(r => r.json()).then(setSessions) }, []); const book = (data) => fetch('/api/sessions', { method: 'POST', body: JSON.stringify(data) }); const cancel = (id) => fetch(`/api/sessions/${id}`, { method: 'DELETE' }); return <C.Provider value={{ sessions, book, cancel }}>{children}</C.Provider> }\nexport const useSessions = () => useContext(C)\n"
+const appB = "import { Routes, Route } from 'react-router-dom'\nimport { SessionsProvider } from './context/SessionsContext'\nimport Home from './pages/Home'\nexport default function App() { return <SessionsProvider><Routes><Route path=\"/\" element={<Home />} /></Routes></SessionsProvider> }\n"
+const appA = appB.replace("import Home from './pages/Home'", "import Home from './pages/Home'\nimport MySessions from './pages/MySessions'").replace('<Route path="/" element={<Home />} />', '<Route path="/" element={<Home />} /><Route path="/my-sessions" element={<MySessions />} />')
+const home = "export default function Home() { return <main>Home</main> }\n"
+const page = "import { Button } from '@/components/ui/button'\nimport { useSessions } from '../context/SessionsContext'\nexport default function MySessions() { const { sessions, cancel } = useSessions(); return <main><h1>My sessions</h1>{sessions.map(s => <div key={s.id}>{s.time}<Button variant=\"destructive\" onClick={() => cancel(s.id)}>Cancel</Button></div>)}</main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'client/src/context/SessionsContext.tsx': ctx, 'client/src/App.tsx': appB, 'client/src/pages/Home.tsx': home }
+const after = { ...before, 'client/src/App.tsx': appA, 'client/src/pages/MySessions.tsx': page }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('deletes sessions on your server') && !c.includes('only shows information'), c)
+}
+{
+// New Sign-up page whose submit goes through useAuth().register (POST /api/auth/register creates a user); fields + shadcn <Button>, no <form>
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const server = "import express from 'express'\nconst app = express()\napp.post('/api/auth/register', async (req, res) => res.json(await prisma.user.create({ data: req.body })))\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\n"
+const ctx = "import { createContext, useContext } from 'react'\nconst C = createContext(null)\nexport function AuthProvider({ children }) { const register = (email, password) => fetch('/api/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) }); return <C.Provider value={{ register }}>{children}</C.Provider> }\nexport const useAuth = () => useContext(C)\n"
+const appB = "import { Routes, Route } from 'react-router-dom'\nimport { AuthProvider } from './context/AuthContext'\nimport Home from './pages/Home'\nexport default function App() { return <AuthProvider><Routes><Route path=\"/\" element={<Home />} /></Routes></AuthProvider> }\n"
+const appA = appB.replace("import Home from './pages/Home'", "import Home from './pages/Home'\nimport Signup from './pages/Signup'").replace('<Route path="/" element={<Home />} />', '<Route path="/" element={<Home />} /><Route path="/signup" element={<Signup />} />')
+const home = "export default function Home() { return <main>Home</main> }\n"
+const page = "import { useState } from 'react'\nimport { Button } from '@/components/ui/button'\nimport { useAuth } from '../context/AuthContext'\nexport default function Signup() { const { register } = useAuth(); const [email, setEmail] = useState(''); const [pw, setPw] = useState(''); return <main><h1>Create your account</h1><input type=\"email\" value={email} onChange={e => setEmail(e.target.value)} /><input type=\"password\" value={pw} onChange={e => setPw(e.target.value)} /><Button onClick={() => register(email, pw)}>Sign up</Button></main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'client/src/context/AuthContext.tsx': ctx, 'client/src/App.tsx': appB, 'client/src/pages/Home.tsx': home }
+const after = { ...before, 'client/src/App.tsx': appA, 'client/src/pages/Signup.tsx': page }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(!c.includes('only shows information'), c)
+}
+{
+// Same endpoint, POST writes through a service function in another file (a create); DELETE clears with prisma directly.
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const svc = "export async function addMessage(roomId, text) { return prisma.message.create({ data: { roomId, text } }) }\n"
+const server = "import express from 'express'\nimport { addMessage } from './services/messages'\nconst app = express()\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\napp.post('/api/rooms/:id/messages', async (req, res) => res.json(await addMessage(req.params.id, req.body.text)))\napp.delete('/api/rooms/:id/messages', async (req, res) => { await prisma.message.deleteMany({ where: { roomId: req.params.id } }); res.json({}) })\n"
+const app = "import { Routes, Route } from 'react-router-dom'\nimport Room from './pages/Room'\nexport default function App() { return <Routes><Route path=\"/rooms/:id\" element={<Room />} /></Routes> }\n"
+const pageA = "export default function Room() { return <main><h1>Room</h1></main> }\n"
+const pageB = "export default function Room({ id }) { const send = (text) => fetch(`/api/rooms/${id}/messages`, { method: 'POST', body: JSON.stringify({ text }) }); return <main><h1>Room</h1><button onClick={() => send('hi')}>Send</button></main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'server/services/messages.ts': svc, 'client/src/App.tsx': app, 'client/src/pages/Room.tsx': pageA }
+const after = { ...before, 'client/src/pages/Room.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('sends messages to your server') && !c.includes('deletes messages'), c)
+}
+{
+// /api/rooms/:id/messages: POST posts a message (through Pusher + a raw insert plain doesn't read as a write); DELETE clears the room's messages.
+// The endpoint's only recognised op is 'delete', so the chat page's POST reads as a delete.
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const server = "import express from 'express'\nconst app = express()\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\napp.post('/api/rooms/:id/messages', async (req, res) => { await pusher.trigger(`room-${req.params.id}`, 'message', req.body); res.json({}) })\napp.delete('/api/rooms/:id/messages', async (req, res) => { await prisma.message.deleteMany({ where: { roomId: req.params.id } }); res.json({}) })\n"
+const app = "import { Routes, Route } from 'react-router-dom'\nimport Room from './pages/Room'\nexport default function App() { return <Routes><Route path=\"/rooms/:id\" element={<Room />} /></Routes> }\n"
+const pageA = "export default function Room() { return <main><h1>Room</h1></main> }\n"
+const pageB = "export default function Room({ id }) { const send = (text) => fetch(`/api/rooms/${id}/messages`, { method: 'POST', body: JSON.stringify({ text }) }); return <main><h1>Room</h1><button onClick={() => send('hi')}>Send</button></main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'client/src/App.tsx': app, 'client/src/pages/Room.tsx': pageA }
+const after = { ...before, 'client/src/pages/Room.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(!c.includes('deletes messages'), c)
+}
+{
+// The client talks straight to a local Ollama (AI model server, http://localhost:11434/api/chat), not to the app's Express server.
+// The app's own Express server also has /api/chat (which saves messages). The wrapper rule (env read ?? localhost literal) takes Ollama for "this app's server".
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const server = "import express from 'express'\nconst app = express()\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\napp.post('/api/chat', async (req, res) => res.json(await prisma.message.create({ data: req.body })))\n"
+const lib = "const OLLAMA_URL = import.meta.env.VITE_OLLAMA_URL ?? 'http://localhost:11434'\nexport async function ollama(path: string, options: RequestInit = {}) { return fetch(`${OLLAMA_URL}/api${path}`, options) }\n"
+const app = "import { Routes, Route } from 'react-router-dom'\nimport Chat from './pages/Chat'\nexport default function App() { return <Routes><Route path=\"/chat\" element={<Chat />} /></Routes> }\n"
+const pageA = "export default function Chat() { return <main><h1>Chat</h1></main> }\n"
+const pageB = "import { ollama } from '../lib/ollama'\nexport default function Chat() { const ask = (q) => ollama('/chat', { method: 'POST', body: JSON.stringify({ model: 'llama3', messages: [{ role: 'user', content: q }] }) }); return <main><h1>Chat</h1><button onClick={() => ask('hi')}>Ask</button></main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'client/src/lib/ollama.ts': lib, 'client/src/App.tsx': app, 'client/src/pages/Chat.tsx': pageA }
+const after = { ...before, 'client/src/pages/Chat.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(!c.includes('to your server'), c)
+}
+{
+// lib has a module-level own-origin API_URL, but the partner() helper shadows it with a third-party host. ownOrigin() reads only the module-level const.
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const server = "import express from 'express'\nconst app = express()\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\napp.post('/api/orders', async (req, res) => res.json(await prisma.order.create({ data: req.body })))\n"
+const lib = "const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000'\nexport async function partner(path: string, options: RequestInit = {}) { const API_URL = 'https://partner.example.com'; return fetch(`${API_URL}/api${path}`, options) }\n"
+const app = "import { Routes, Route } from 'react-router-dom'\nimport Shop from './pages/Shop'\nexport default function App() { return <Routes><Route path=\"/shop\" element={<Shop />} /></Routes> }\n"
+const pageA = "export default function Shop() { return <main><h1>Shop</h1></main> }\n"
+const pageB = "import { partner } from '../lib/partner'\nexport default function Shop() { const buy = () => partner('/orders', { method: 'POST' }); return <main><h1>Shop</h1><button onClick={buy}>Order from partner</button></main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'client/src/lib/partner.ts': lib, 'client/src/App.tsx': app, 'client/src/pages/Shop.tsx': pageA }
+const after = { ...before, 'client/src/pages/Shop.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(!c.includes('to your server'), c)
+}
+{
+// The client calls OpenAI directly (base URL from an env var alone, no literal). The env-only const passes ownOrigin.
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0"}}'
+const server = "import express from 'express'\nconst app = express()\napp.get('/api/rooms', async (req, res) => res.json(await prisma.room.findMany()))\n"
+const lib = "const OPENAI_BASE = import.meta.env.VITE_OPENAI_BASE_URL\nexport async function openai(path: string, options: RequestInit = {}) { return fetch(`${OPENAI_BASE}/v1${path}`, options) }\n"
+const app = "import { Routes, Route } from 'react-router-dom'\nimport Chat from './pages/Chat'\nexport default function App() { return <Routes><Route path=\"/chat\" element={<Chat />} /></Routes> }\n"
+const pageA = "export default function Chat() { return <main><h1>Chat</h1></main> }\n"
+const pageB = "import { openai } from '../lib/openai'\nexport default function Chat() { const ask = (q) => openai('/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'llama3', messages: [{ role: 'user', content: q }] }) }); return <main><h1>Chat</h1><button onClick={() => ask('hi')}>Ask</button></main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': server, 'client/src/lib/openai.ts': lib, 'client/src/App.tsx': app, 'client/src/pages/Chat.tsx': pageA }
+const after = { ...before, 'client/src/pages/Chat.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(!c.includes('to your server'), c)
+}
+console.log('ok (review 46)')
+// Review 47 (the POST verb rule these first three caught was dropped after review 49): a POST's verb never borrowed from a GET or another file's DELETE; an admin page's impersonate call isn't an app-wide login call
+{
+// Express: POST /api/posts/:id/comments (adds a comment) lives in routes/comments.ts; a moderator's DELETE on the same address
+// (clears a post's comments) lives in routes/moderation.ts. Two units share the URL; endpoint() picks the first, the DELETE-only one,
+// whose only non-GET method is DELETE and only op is delete, so the page's POST reads "deletes comments".
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0","@prisma/client":"6.0.0"}}'
+const index = "import express from 'express'\nimport moderation from './routes/moderation.js'\nimport comments from './routes/comments.js'\nconst app = express()\napp.use(express.json())\napp.use('/api', moderation)\napp.use('/api', comments)\napp.listen(3001)\n"
+const moderation = "import { Router } from 'express'\nimport { prisma } from '../db.js'\nconst router = Router()\nrouter.delete('/posts/:id/comments', async (req, res) => { await prisma.comment.deleteMany({ where: { postId: +req.params.id } }); res.json({}) })\nexport default router\n"
+const comments = "import { Router } from 'express'\nimport { prisma } from '../db.js'\nconst router = Router()\nrouter.get('/posts/:id/comments', async (req, res) => res.json(await prisma.comment.findMany({ where: { postId: +req.params.id } })))\nrouter.post('/posts/:id/comments', async (req, res) => res.json(await prisma.comment.create({ data: { postId: +req.params.id, text: req.body.text } })))\nexport default router\n"
+const app = "import { Routes, Route } from 'react-router-dom'\nimport Post from './pages/Post'\nexport default function App() { return <Routes><Route path=\"/posts/:id\" element={<Post />} /></Routes> }\n"
+const pageA = "export default function Post({ id }) { return <main><h1>Post</h1></main> }\n"
+const pageB = "export default function Post({ id }) { const add = (text) => fetch(`/api/posts/${id}/comments`, { method: 'POST', body: JSON.stringify({ text }) }); return <main><h1>Post</h1><button onClick={() => add('nice')}>Comment</button></main> }\n"
+const before = { 'package.json': pkg, 'server/src/index.ts': index, 'server/src/routes/moderation.ts': moderation, 'server/src/routes/comments.ts': comments, 'client/src/App.tsx': app, 'client/src/pages/Post.tsx': pageA }
+const after = { ...before, 'client/src/pages/Post.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('sends comments to your server') && !c.includes('deletes comments'), c)
+}
+{
+// New open endpoint POST /api/auth/impersonate (log in as any user). Only the admin page calls it, through useAuth().impersonate from
+// AuthContext (createContext; provider in App). HEAD: the admin page's call makes it admin-only server code -> Unsafe.
+// NEW: the call is "quiet", adminCalls() no longer sees it -> softer Check that calls it normal for sign-ups.
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0","@prisma/client":"6.0.0"}}'
+const serverA = "import express from 'express'\nconst app = express()\napp.use(express.json())\napp.get('/api/users', requireAuth, async (req, res) => res.json(await prisma.user.findMany()))\napp.listen(3001)\n"
+const serverB = serverA.replace('app.listen', "app.post('/api/auth/impersonate', async (req, res) => { const u = await prisma.user.findUnique({ where: { id: req.body.userId } }); await prisma.session.create({ data: { userId: u.id } }); res.json(u) })\napp.listen")
+const ctxA = "import { createContext, useContext, useState } from 'react'\nconst C = createContext(null)\nexport function AuthProvider({ children }) { const [user, setUser] = useState(null); const login = (d) => fetch('/api/auth/login', { method: 'POST', body: JSON.stringify(d) }); return <C.Provider value={{ user, login }}>{children}</C.Provider> }\nexport const useAuth = () => useContext(C)\n"
+const ctxB = ctxA.replace("return <C.Provider value={{ user, login }}>", "const impersonate = (userId) => fetch('/api/auth/impersonate', { method: 'POST', body: JSON.stringify({ userId }) }); return <C.Provider value={{ user, login, impersonate }}>")
+const app = "import { Routes, Route } from 'react-router-dom'\nimport { AuthProvider } from './context/AuthContext'\nimport AdminUsers from './pages/AdminUsers'\nexport default function App() { return <AuthProvider><Routes><Route path=\"/admin/users\" element={<AdminUsers />} /></Routes></AuthProvider> }\n"
+const pageA = "import { useEffect, useState } from 'react'\nexport default function AdminUsers() { const [users, setUsers] = useState([]); useEffect(() => { fetch('/api/users').then(r => r.json()).then(setUsers) }, []); return <main><h1>Users</h1>{users.map(u => <div key={u.id}>{u.email}</div>)}</main> }\n"
+const pageB = "import { useEffect, useState } from 'react'\nimport { useAuth } from '../context/AuthContext'\nexport default function AdminUsers() { const { impersonate } = useAuth(); const [users, setUsers] = useState([]); useEffect(() => { fetch('/api/users').then(r => r.json()).then(setUsers) }, []); return <main><h1>Users</h1>{users.map(u => <div key={u.id}>{u.email}<button onClick={() => impersonate(u.id)}>Log in as</button></div>)}</main> }\n"
+const before = { 'package.json': pkg, 'server/index.ts': serverA, 'client/src/context/AuthContext.tsx': ctxA, 'client/src/App.tsx': app, 'client/src/pages/AdminUsers.tsx': pageA }
+const after = { ...before, 'server/index.ts': serverB, 'client/src/context/AuthContext.tsx': ctxB, 'client/src/pages/AdminUsers.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('⚠ Anyone can use the auth impersonate part'), c)
+}
+{
+// /api/messages: GET lists messages and marks them read (prisma.message.updateMany); POST saves a new message through a service in
+// another file (not followed). The unit's ops = {update} (from the GET), its only non-GET method is POST, so the chat page's
+// new Send (a POST) reads "updates messages on your server".
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0","@prisma/client":"6.0.0"}}'
+const server = "import express from 'express'\nimport { createMessage } from './services/messages.js'\nconst app = express()\napp.use(express.json())\napp.get('/api/messages', async (req, res) => { const list = await prisma.message.findMany(); await prisma.message.updateMany({ where: { read: false }, data: { read: true } }); res.json(list) })\napp.post('/api/messages', async (req, res) => res.json(await createMessage(req.body)))\napp.listen(3001)\n"
+const service = "export async function createMessage(data) { return prisma.message.create({ data }) }\n"
+const app = "import { Routes, Route } from 'react-router-dom'\nimport Chat from './pages/Chat'\nexport default function App() { return <Routes><Route path=\"/chat\" element={<Chat />} /></Routes> }\n"
+const pageA = "import { useEffect, useState } from 'react'\nexport default function Chat() { const [m, setM] = useState([]); useEffect(() => { fetch('/api/messages').then(r => r.json()).then(setM) }, []); return <main><h1>Chat</h1>{m.map(x => <p key={x.id}>{x.text}</p>)}</main> }\n"
+const pageB = pageA.replace("return <main>", "const send = (text) => fetch('/api/messages', { method: 'POST', body: JSON.stringify({ text }) }); return <main>").replace('</main>', "<button onClick={() => send('hi')}>Send</button></main>")
+const before = { 'package.json': pkg, 'server/index.ts': server, 'server/services/messages.ts': service, 'client/src/App.tsx': app, 'client/src/pages/Chat.tsx': pageA }
+const after = { ...before, 'client/src/pages/Chat.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('sends messages to your server') && !c.includes('updates messages'), c)
+}
+{
+// Same as r3, but the GET purges expired messages (deleteMany): the Send button reads "deletes messages on your server".
+// another file (not followed). The unit's ops = {update} (from the GET), its only non-GET method is POST, so the chat page's
+// new Send (a POST) reads "updates messages on your server".
+const pkg = '{"dependencies":{"express":"4.0.0","react":"18.0.0","react-router-dom":"6.0.0","@prisma/client":"6.0.0"}}'
+const server = "import express from 'express'\nimport { createMessage } from './services/messages.js'\nconst app = express()\napp.use(express.json())\napp.get('/api/messages', async (req, res) => { const list = await prisma.message.findMany(); await prisma.message.deleteMany({ where: { expiresAt: { lt: new Date() } } }); res.json(list) })\napp.post('/api/messages', async (req, res) => res.json(await createMessage(req.body)))\napp.listen(3001)\n"
+const service = "export async function createMessage(data) { return prisma.message.create({ data }) }\n"
+const app = "import { Routes, Route } from 'react-router-dom'\nimport Chat from './pages/Chat'\nexport default function App() { return <Routes><Route path=\"/chat\" element={<Chat />} /></Routes> }\n"
+const pageA = "import { useEffect, useState } from 'react'\nexport default function Chat() { const [m, setM] = useState([]); useEffect(() => { fetch('/api/messages').then(r => r.json()).then(setM) }, []); return <main><h1>Chat</h1>{m.map(x => <p key={x.id}>{x.text}</p>)}</main> }\n"
+const pageB = pageA.replace("return <main>", "const send = (text) => fetch('/api/messages', { method: 'POST', body: JSON.stringify({ text }) }); return <main>").replace('</main>', "<button onClick={() => send('hi')}>Send</button></main>")
+const before = { 'package.json': pkg, 'server/index.ts': server, 'server/services/messages.ts': service, 'client/src/App.tsx': app, 'client/src/pages/Chat.tsx': pageA }
+const after = { ...before, 'client/src/pages/Chat.tsx': pageB }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('sends messages to your server') && !c.includes('deletes messages'), c)
+}
+console.log('ok (review 47)')
+// Review 48: SvelteKit actions sharing one address and a Nuxt isMethod branch don't lend a delete to a POST; the outside-server note sees
+// a context's login calls
+{
+// SvelteKit: /posts/+page.server.ts has two form actions: create (through a $lib/server helper plain doesn't follow) and delete (inline
+// Drizzle delete). All actions share one POST unit, so ops = {delete}. A new /posts/new page whose only form posts to ?/create.
+const pkg = '{"dependencies":{"@sveltejs/kit":"2.0.0","svelte":"4.0.0","drizzle-orm":"0.30.0"}}'
+const server = "import { db } from '$lib/server/db'\nimport { posts } from '$lib/server/schema'\nimport { eq } from 'drizzle-orm'\nimport { createPost } from '$lib/server/posts'\nexport const load = async () => ({ posts: await db.select().from(posts) })\nexport const actions = {\n  create: async ({ request, locals }) => {\n    const data = await request.formData()\n    await createPost(locals.user.id, String(data.get('title')), String(data.get('body')))\n  },\n  delete: async ({ request }) => {\n    const data = await request.formData()\n    await db.delete(posts).where(eq(posts.id, Number(data.get('id'))))\n  },\n}\n"
+const list = "<script>\n  export let data\n</script>\n<h1>Posts</h1>\n{#each data.posts as p}<div>{p.title}<form method=\"POST\" action=\"?/delete\"><input type=\"hidden\" name=\"id\" value={p.id} /><button>Delete</button></form></div>{/each}\n<a href=\"/posts/new\">New post</a>\n"
+const newPage = "<h1>New post</h1>\n<form method=\"POST\" action=\"/posts?/create\">\n  <input name=\"title\" />\n  <textarea name=\"body\"></textarea>\n  <button>Publish</button>\n</form>\n"
+const before = { 'package.json': pkg, 'src/routes/posts/+page.server.ts': server, 'src/routes/posts/+page.svelte': list }
+const after = { ...before, 'src/routes/posts/new/+page.svelte': newPage }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('sends posts to your server') && !c.includes('deletes posts'), c)
+}
+{
+// Nuxt (h3's isMethod helper): server/api/subscribers.ts (no .post/.delete in the name: answers every method). POST subscribes through an auto-imported
+// server/utils helper plain doesn't follow; DELETE unsubscribes with an inline Drizzle delete. plain calls the file POST (it writes),
+// ops = {delete}. A new signup page POSTs to it.
+const pkg = '{"dependencies":{"nuxt":"3.12.0","drizzle-orm":"0.30.0"}}'
+const api = "import { subscribers } from '~/server/db/schema'\nimport { eq } from 'drizzle-orm'\nexport default defineEventHandler(async (event) => {\n  const body = await readBody(event)\n  if (isMethod(event, 'DELETE')) {\n    await db.delete(subscribers).where(eq(subscribers.email, body.email))\n    return { ok: true }\n  }\n  return await addSubscriber(body.email)\n})\n"
+const page = "<script setup>\nconst email = ref('')\nasync function join() { await $fetch('/api/subscribers', { method: 'POST', body: { email: email.value } }) }\n</script>\n<template>\n  <main><h1>Join the newsletter</h1><input v-model=\"email\" placeholder=\"Email\" /><button @click=\"join\">Subscribe</button></main>\n</template>\n"
+const before = { 'package.json': pkg, 'server/api/subscribers.ts': api, 'pages/index.vue': '<template><main>Home</main></template>\n' }
+const after = { ...before, 'pages/newsletter.vue': page }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes('sends subscribers to your server') && !c.includes('deletes subscribers'), c)
+}
+{
+// Frontend-only React app (backend in another repo). AuthContext (createContext, provider rendered in App) loads GET /api/auth/me and
+// updates the profile with PUT... no: only /me and logout. A new protected Account page shows the user from useAuth() (name, email,
+// plan) and a log out button. HEAD: "A page's login check only hides the page. Its data comes from /api/auth ..." note.
+// NEW: those calls are quiet, outsideCalls doesn't read quiet -> the note is gone.
+const pkg = '{"dependencies":{"react":"18.0.0","react-router-dom":"6.0.0"}}'
+const ctx = "import { createContext, useContext, useEffect, useState } from 'react'\nconst C = createContext(null)\nexport function AuthProvider({ children }) { const [user, setUser] = useState(null); useEffect(() => { fetch('/api/auth/me').then(r => r.json()).then(setUser) }, []); const logout = () => fetch('/api/auth/logout', { method: 'POST' }); return <C.Provider value={{ user, logout }}>{children}</C.Provider> }\nexport const useAuth = () => useContext(C)\n"
+const guard = "import { Navigate } from 'react-router-dom'\nimport { useAuth } from './context/AuthContext'\nexport function RequireAuth({ children }) { const { user } = useAuth(); if (!user) return <Navigate to=\"/login\" />; return children }\n"
+const appA = "import { Routes, Route } from 'react-router-dom'\nimport { AuthProvider } from './context/AuthContext'\nimport { RequireAuth } from './RequireAuth'\nimport Home from './pages/Home'\nexport default function App() { return <AuthProvider><Routes><Route path=\"/\" element={<Home />} /></Routes></AuthProvider> }\n"
+const appB = appA.replace("import Home from './pages/Home'", "import Home from './pages/Home'\nimport Account from './pages/Account'").replace('<Route path="/" element={<Home />} />', '<Route path="/" element={<Home />} /><Route path="/account" element={<RequireAuth><Account /></RequireAuth>} />')
+const home = "export default function Home() { return <main>Home</main> }\n"
+const account = "import { useAuth } from '../context/AuthContext'\nexport default function Account() { const { user, logout } = useAuth(); return <main><h1>Your account</h1><p>{user.name}</p><p>{user.email}</p><p>{user.plan}</p><button onClick={logout}>Log out</button></main> }\n"
+const before = { 'package.json': pkg, 'src/context/AuthContext.tsx': ctx, 'src/RequireAuth.tsx': guard, 'src/App.tsx': appA, 'src/pages/Home.tsx': home }
+const after = { ...before, 'src/App.tsx': appB, 'src/pages/Account.tsx': account }
+const c = report(new Map(Object.entries(before)), new Map(Object.entries(after)), { ref: 'main' }).replace(/\s+/g, ' ')
+assert.ok(c.includes("A page's login check only hides the page"), c)
+}
+console.log('ok (review 48)')
