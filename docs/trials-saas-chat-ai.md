@@ -695,10 +695,18 @@ OpenAI errors are charged too (its code comment says so). Incomplete, not false.
      page shows ("It shows project shares" on Huddle p1 is really the project board).
 6. **"Only people in this room"** (Porch p2, p3): a membership check before a 403 should upgrade
    "requires login ✓".
-7. **Migration wording.**
-   - Say "every page fails" when the new column is on a record every page loads (Huddle p5, Quill p3,
-     p5), not "the parts that use it".
-   - When the project's only migrate script is `prisma migrate dev`, say it isn't for live servers.
+7. ✅ **Migration wording** (Prisma). Fixed later.
+   - **A new column on a table the app already had:** the step now says "pages that load workspaces can fail too, not
+     just the new parts (Prisma asks for every column)". This applies to Huddle p5, Porch p1 and p3, and plant-swap.
+     A local SQLite repro confirmed it: `findMany` and `update` fail with P2022 until the column exists.
+   - **The project's only migrate script is `prisma migrate dev`:** the step adds "Don't use the `db:migrate` script
+     there: it runs `prisma migrate dev`, which is for your own computer and can offer to wipe the database". The
+     repro showed the reset prompt when the database had drifted.
+   - **Review 34** (one round, nothing blocking) confirmed both against Prisma's docs. It narrowed the column rule to
+     plain fields: `Unsupported(...)`, `@ignore` and SQL-only columns are never selected.
+   - **Still open:**
+     - Quill (Alembic/SQLAlchemy) isn't covered.
+     - `prisma db push` scripts get no warning.
 
 Smaller items seen on the regenerated cards: the guest sign-in is still a "⚠ problem" (Porch p1); the
 "empty catch" false alarm is still there (Quill p5); some wrong nouns remain ("lists memberships" on Huddle p5).

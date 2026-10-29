@@ -3559,3 +3559,31 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   no(card({ 'lib/authz.ts': authz('  const project = await prisma.project.findFirst({ where: { id: workspaceId, workspace: { memberships: { some: { userId: user.id } } } } })\n  if (!project) notFound()'), 'app/actions/tasks.ts': act(scoped) }), 'project via workspace')
   console.log('ok (workspace members)')
 }
+// Migrations: a new column on a table the app already had (Prisma asks for every column, so loading those rows fails anywhere until
+// it's applied), and a project whose own migrate script is `prisma migrate dev` (not for a live database)
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const pkg = (scripts: string) => ({ 'package.json': `{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"},"scripts":{${scripts}}}` })
+  const schema = (extra: string) => ({ 'prisma/schema.prisma': `model Workspace {\n  id String @id\n  name String\n${extra}}\n` })
+  const base = { ...pkg('"db:migrate":"prisma migrate dev"'), ...schema('') }
+  const mig = (sql: string) => ({ 'prisma/migrations/2_x/migration.sql': sql })
+  let c = card(base, { ...base, ...schema('  plan String @default("free")\n'), ...mig('ALTER TABLE "Workspace"\nADD COLUMN "plan" TEXT NOT NULL DEFAULT \'free\';\n') })
+  assert.ok(c.includes('or pages that load workspaces can fail too, not just the new parts (Prisma asks for every column).'), c)
+  assert.ok(c.includes("Don't use the `db:migrate` script there: it runs `prisma migrate dev`"), c)
+  // a new table only: the new parts
+  c = card(base, { ...base, 'prisma/schema.prisma': base['prisma/schema.prisma'] + 'model Label {\n  id String @id\n}\n', ...mig('CREATE TABLE "Label" ("id" TEXT NOT NULL);\n') })
+  assert.ok(c.includes('or the parts that use it will fail.'), c)
+  // a deploy script too: no warning about the dev one
+  const both = { ...pkg('"db:migrate":"prisma migrate dev","db:deploy":"prisma migrate deploy"'), ...schema('') }
+  c = card(both, { ...both, ...schema('  plan String @default("free")\n'), ...mig('ALTER TABLE "Workspace" ADD COLUMN "plan" TEXT;\n') })
+  assert.ok(!c.includes("Don't use"), c)
+  // a table named apart from its model (@@map): plain doesn't guess
+  const mapped = { ...base, 'prisma/schema.prisma': 'model Workspace {\n  id String @id\n  @@map("workspaces")\n}\n' }
+  c = card(mapped, { ...mapped, 'prisma/schema.prisma': 'model Workspace {\n  id String @id\n  plan String?\n  @@map("workspaces")\n}\n', ...mig('ALTER TABLE "workspaces" ADD COLUMN "plan" TEXT;\n') })
+  assert.ok(c.includes('or the parts that use it will fail.'), c)
+  // (review 34) a column Prisma never asks for (Unsupported, @ignore, only in the SQL), or one only in a comment: the new parts
+  for (const [extra, sql] of [['  search Unsupported("tsvector")?\n', 'ALTER TABLE "Workspace" ADD COLUMN "search" tsvector;\n'], ['  legacy String? @ignore\n', 'ALTER TABLE "Workspace" ADD COLUMN "legacy" TEXT;\n'],
+    ['', 'ALTER TABLE "Workspace" ADD COLUMN "search" tsvector;\n'], ['  plan String?\n', '-- was: ALTER TABLE "Workspace" ADD COLUMN "plan" TEXT;\nCREATE TABLE "Label" ("id" TEXT);\n']]) {
+    c = card(base, { ...base, ...schema(extra), ...mig(sql) }); assert.ok(c.includes('or the parts that use it will fail.'), `${sql}: ${c}`) }
+  console.log('ok (migration wording)')
+}
