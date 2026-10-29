@@ -3667,3 +3667,16 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   assert.ok(/You asked for a discount/.test(c), c)
   console.log('ok (money wording)')
 }
+// "Nothing limits spam" only when no server code mentions a rate limiter (Rails 8 rate_limit, express-rate-limit, ...)
+{
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","@prisma/client":"6.0.0"}}' }
+  const srv = (pre: string) => ({ 'server.js': `const express = require("express")\n${pre}const app = express()\napp.post("/reviews", async (req, res) => {\n  res.json(await prisma.review.create({ data: req.body }))\n})\napp.listen(3000)\n` })
+  let c = report(new Map(Object.entries(ex)), new Map(Object.entries({ ...ex, ...srv('') })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(c.includes('nothing limits spam or fake reviews'), c)
+  c = report(new Map(Object.entries(ex)), new Map(Object.entries({ ...ex, ...srv('const rateLimit = require("express-rate-limit")\napp.use(rateLimit({ windowMs: 60000, limit: 10 }))\n') })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(c.includes('Anyone can post reviews without logging in.') && !c.includes('nothing limits spam'), c)
+  const rb = { 'Gemfile': 'gem "rails"\n' }
+  c = report(new Map(Object.entries(rb)), new Map(Object.entries({ ...rb, 'config/routes.rb': 'Rails.application.routes.draw do\n  resources :reviews, only: [:create]\nend\n', 'app/controllers/reviews_controller.rb': 'class ReviewsController < ApplicationController\n  rate_limit to: 10, within: 3.minutes, only: :create\n  def create\n    Review.create!(params.require(:review).permit(:body))\n  end\nend\n' })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(!c.includes('nothing limits spam'), c)
+  console.log('ok (spam limiter)')
+}

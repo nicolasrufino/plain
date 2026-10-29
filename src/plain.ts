@@ -2113,6 +2113,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const viewOnly = (f: FileFacts) => ![...f.fetches].some(x => !x.startsWith('GET ')) && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
 
   const changes: Change[] = [], problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []
+  const limiterSomewhere = [...after].some(([p, x]) => /\.(?:[cm]?[jt]sx?|py|rb|php|go|cs|java|kt)$|(?:^|\/)(?:Gemfile|package\.json|requirements\.txt|pyproject\.toml|composer\.json|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/.test(p)
+    && /express-rate-limit|\brateLimit\s*\(|@upstash\/ratelimit|\bslowapi\b|\bLimiter\s*\(|@ratelimit|django-ratelimit|\bRateLimiter\b|rack-attack|Rack::Attack|\brate_limit\s+to:|AddRateLimiter|EnableRateLimiting|RequireRateLimiting|['"]throttle:|throttleApi|throttle_classes|RateThrottle\b|@Throttle|httprate|ulule\/limiter|golang\.org\/x\/time\/rate|middleware\/limiter|tollbooth|bucket4j|resilience4j|rate-limiter-flexible|RateLimiter(?:Memory|Redis|Postgres|Mongo)|\brate-?limit\b|@nestjs\/throttler|Throttler(?:Module|Guard)|@arcjet\/|checkRateLimit/i.test(x))
 
   // pages and server code
   for (const p of real) {
@@ -2208,7 +2210,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         problems.push({ kind: 'Unsafe', text: `Anyone can turn sharing on or off for your ${things(mainTable(b, r.url)!)} without logging in.` })
       else if (r.kind === 'endpoint' && writes) {
         const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
-        problems.push({ kind: 'Check', text: `Anyone can ${b.ops.has('create') || !b.ops.size ? 'post' : 'change'} ${noun} without logging in, and nothing limits spam or fake ${noun}. That's normal for things like sign-ups or reviews, but make sure it's what you want.` })
+        // ("nothing limits spam" only when no server code mentions a rate limiter: Rails 8's `rate_limit to:`, express-rate-limit,
+        // slowapi, Laravel's throttle, DRF throttles, ASP.NET's rate limiter, Rack::Attack... plain doesn't map one to an address)
+        problems.push({ kind: 'Check', text: `Anyone can ${b.ops.has('create') || !b.ops.size ? 'post' : 'change'} ${noun} without logging in${limiterSomewhere ? '' : `, and nothing limits spam or fake ${noun}`}. That's normal for things like sign-ups or reviews, but make sure it's what you want.` })
       }
       // SvelteKit: the page asks for login (its layout or load checks), but form actions run before any load function, so that check never
       // stops them. Say why, or the "You have to log in" on the page reads as if the form were safe too.
