@@ -92,6 +92,9 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 - **Uploads.** A new way for people to send files is described: what's accepted, how big, and where files go. It's a
   guess-worded problem when nothing caps the size, or how much one person can upload (except admin-only uploads), or when
   SVG is allowed.
+- **Money, said for what it does.** "charges customers 💰" only for Stripe calls that charge (checkout, payment intents,
+  charges, subscriptions, invoices, payment links, capturing or paying). A refund "gives customers money back 💰", a new
+  price "adds a price in Stripe 💰", a coupon "creates a Stripe discount 💰", payouts "send money out of your Stripe balance 💰".
 - **Workspace members.** A Next.js server action reads "only lets the workspace's members in ✓" when its login helper
   also checks the user's membership of the workspace it's given, and every Prisma read and write in it stays in that
   workspace (`src/members.ts`, read with the TypeScript parser). Anything it can't follow keeps "requires login ✓".

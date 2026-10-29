@@ -104,6 +104,10 @@ function userCheck(body: N | null | undefined, callback: boolean, out: { admin?:
 }
 
 export function rbFacts(path: string, text: string, empty: (printed?: string) => FileFacts): RbFacts | undefined {
+  // a Stripe client's resource (`stripe.refunds`, `client.v1.refunds`): a receiver named for Stripe, or a `client` in a file that uses
+  // Stripe (not `@client.subscriptions`, a has_many on a Client model)
+  const stripeRecv = (recv: string, what: string) => new RegExp(String.raw`^@?\w*stripe\w*(?:\.v1)?\.(?:${what})$`, 'i').test(recv)
+    || new RegExp(String.raw`^@?\w*client\w*(?:\.v1)?\.(?:${what})$`, 'i').test(recv) && /\bStripe(?:::|\.)/.test(text)
   if (!parser) return undefined
   const tree = parser.parse(text)
   if (!tree) return undefined
@@ -331,8 +335,8 @@ export function rbFacts(path: string, text: string, empty: (printed?: string) =>
       if (!r && isModel && /^(update|update!|update_column|update_columns|update_attribute|save|save!|destroy|destroy!|delete|touch|increment!|decrement!|toggle!)$/.test(m)) write(self, /destroy|delete/.test(m) ? 'delete' : 'update')
       // Stripe (stripe-ruby, legacy and client styles), Pay
       if (/^Stripe::Checkout::Session$/.test(r?.text ?? '') && m === 'create' || /\.checkout\.sessions$/.test(r?.text ?? '') && m === 'create') { g.money = true; g.services.add('Stripe'); g.outside.add('Stripe: checkout.sessions.create') }
-      if (/^Stripe::(PaymentIntent|Charge|Subscription)$/.test(r?.text ?? '') && m === 'create' || /\.(payment_intents|charges|subscriptions)$/.test(r?.text ?? '') && m === 'create') { g.money = true; g.services.add('Stripe') }
-      if (r?.text === 'Stripe::Refund' && m === 'create' || /\.refunds$/.test(r?.text ?? '') && m === 'create') { g.services.add('Stripe'); g.outside.add('Stripe: refunds.create') }
+      if (/^Stripe::(PaymentIntent|Charge|Subscription)$/.test(r?.text ?? '') && m === 'create' || stripeRecv(r?.text ?? '', 'payment_intents|charges|subscriptions') && m === 'create') { g.money = true; g.services.add('Stripe') }
+      if (r?.text === 'Stripe::Refund' && m === 'create' || stripeRecv(r?.text ?? '', 'refunds') && m === 'create') { g.services.add('Stripe'); g.outside.add('Stripe: refunds.create') }   // (a Stripe client's, not `order.refunds.create`, a has_many)
       if (r?.text === 'Stripe::Webhook' && m === 'construct_event') { g.services.add('Stripe'); g.outside.add('Stripe: webhooks.constructEvent') }
       if (/payment_processor$/.test(r?.text ?? '') && /^(charge|checkout|subscribe)$/.test(m)) { g.money = true; g.services.add('Stripe') }
       if (m === 'refund!' && /charge/.test(r?.text ?? '')) { g.services.add('Stripe'); g.outside.add('Stripe: refunds.create') }

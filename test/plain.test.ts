@@ -1584,7 +1584,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
     'app/Services/Canceller.php': "<?php\nnamespace App\\Services;\nclass Canceller { public function __construct(private Refunds $refunds) {} public function run(Order $order) { $this->refunds->refund($order); $order->user->notify(new Cancelled($order)); } }\n",
     'app/Services/StripeRefunds.php': "<?php\nnamespace App\\Services;\nclass StripeRefunds implements Refunds { public function refund(Order $order) { $stripe = new \\Stripe\\StripeClient('x'); $stripe->refunds->create(['payment_intent' => $order->pi]); } }\n",
     'app/Notifications/Cancelled.php': "<?php\nclass Cancelled extends Notification { public function via(object $n): array { return ['mail']; } }\n" })
-  has(c, 'asks Stripe to create a refund', 'emails people')
+  has(c, 'gives customers money back 💰', 'emails people')
   // a webhook that starts handling a new Stripe event: a dashboard step (not for event names in tests)
   const hook = (body: string) => "<?php\nnamespace App\\Http\\Controllers;\nclass StripeWebhookController extends Controller { public function __invoke(Request $request) { $event = \\Stripe\\Webhook::constructEvent($request->getContent(), $request->header('Stripe-Signature'), 'x'); " + body + " } }\n"
   const H = { ...L, 'app/Http/Controllers/StripeWebhookController.php': hook("if ($event->type === 'checkout.session.completed') { }") }
@@ -1679,7 +1679,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   c = rs({ ...routes('  delete "orders/:id", to: "orders#destroy"\n  authenticate :user do\n    delete "orders/:id", to: "orders#destroy"\n  end') })
   has(c, 'Anyone can')
   c = rs({ ...routes('  resources :orders, only: [:index] do\n    member { post :refund }\n  end'), 'app/controllers/orders_controller.rb': orders('\n  def refund\n    Stripe::Refund.create(payment_intent: "pi")\n  end\n') })
-  has(c, '/orders/[id]/refund', 'asks Stripe to create a refund'); not(c, '/orders/[id]\n')
+  has(c, '/orders/[id]/refund', 'gives customers money back 💰'); not(c, '/orders/[id]\n')
   // migrations: new table, data loss, the step (by itself when bin/docker-entrypoint runs db:prepare), index-only
   const mig = (body: string, extra: Record<string, string> = {}) => card(R, { ...R, ...extra, 'db/migrate/20261028000000_x.rb': `class X < ActiveRecord::Migration[8.1]\n  def change\n${body}\n  end\nend\n` })
   c = mig('    create_table :coupons do |t|\n      t.string :code\n      t.integer :percent_off\n    end\n    remove_column :orders, :status, :string')
@@ -1695,7 +1695,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   // following a service: OrderCanceller.new(order).call
   c = rs({ ...routes('  post "orders/:id/cancel", to: "orders#cancel"'), ...appCtl('  before_action :authenticate_user!'), 'app/controllers/orders_controller.rb': orders('\n  def cancel\n    OrderCanceller.new(Order.find(params[:id])).call\n  end\n'),
     'app/services/order_canceller.rb': 'class OrderCanceller\n  def initialize(order)\n    @order = order\n  end\n\n  def call\n    Order.where(id: @order.id).update_all(status: "cancelled")\n    Stripe::Refund.create(payment_intent: @order.payment_intent)\n  end\nend\n' })
-  has(c, 'updates orders', 'asks Stripe to create a refund', 'requires login ✓')
+  has(c, 'updates orders', 'gives customers money back 💰', 'requires login ✓')
   // risks: everything the visitor sends; forgery protection off (not for a webhook); the credentials key committed
   has(rs({ ...res, 'app/controllers/orders_controller.rb': orders('').replace('params.expect(order: [:status])', 'params.require(:order).permit!') }), 'Saves whatever the visitor sends')
   c = rs({ ...res, 'app/controllers/orders_controller.rb': orders('', '  skip_forgery_protection only: [:create]') })
@@ -1851,7 +1851,7 @@ chk('P4.1', { ...routes('  resources :orders, only: [:destroy]'), 'app/controlle
     '\nfunc pay(w http.ResponseWriter, r *http.Request) {\n\tkey := mustEnv("STRIPE_SECRET_KEY")\n\t_ = key\n\ts, _ := session.New(&stripe.CheckoutSessionParams{})\n\t_ = s\n}\n'))
   has(c, 'charges customers 💰', 'Add STRIPE_SECRET_KEY to your hosting settings')
   // a hand-written call to Stripe's refunds API
-  has(gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/orders/{id}/refund", refund)\n\thttp.ListenAndServe(":8080", r)', '\nfunc refund(w http.ResponseWriter, r *http.Request) {\n\treq, _ := http.NewRequest("POST", "https://api.stripe.com/v1/refunds", nil)\n\thttp.DefaultClient.Do(req)\n}\n')), 'asks Stripe to create a refund')
+  has(gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Post("/orders/{id}/refund", refund)\n\thttp.ListenAndServe(":8080", r)', '\nfunc refund(w http.ResponseWriter, r *http.Request) {\n\treq, _ := http.NewRequest("POST", "https://api.stripe.com/v1/refunds", nil)\n\thttp.DefaultClient.Do(req)\n}\n')), 'gives customers money back 💰')
   console.log('ok (go)')
 }
 
@@ -1983,7 +1983,7 @@ const em = echo + '\n\t"github.com/labstack/echo/v4/middleware"'
 const gin2 = (body: string) => gc(app(gin, '\tr := gin.Default()\n\tr.POST("/orders", createOrderGin)\n\tr.Run()', `\nfunc createOrderGin(c *gin.Context) {\n\tif c.GetString("userID") == "" {\n\t\tc.JSON(http.StatusUnauthorized, gin.H{"error": "please log in"})\n\t} else {\n${body}\n}\n`))
 const C: [string, string, (c: string) => boolean][] = [
   ['echo handler literal + route middleware, if/else', gc(app(em, '\te := echo.New()\n\te.POST("/orders", func(c echo.Context) error {\n\t\tif c.Get("user") == nil {\n\t\t\tc.JSON(http.StatusUnauthorized, map[string]string{"error": "login"})\n\t\t} else {\n\t\t\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n\t\t}\n\t\treturn nil\n\t}, middleware.Logger())\n\te.Start(":8080")')), c => !TRAP(c) && LOGIN(c)],
-  ['GET api.stripe.com/v1/refunds/{id}', gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Get("/refunds/{id}", showRefund)\n\thttp.ListenAndServe(":8080", r)', '\nfunc showRefund(w http.ResponseWriter, r *http.Request) {\n\treq, _ := http.NewRequest("GET", "https://api.stripe.com/v1/refunds/"+chi.URLParam(r, "id"), nil)\n\thttp.DefaultClient.Do(req)\n}\n')), c => !/create a refund|refunds money/i.test(c)],
+  ['GET api.stripe.com/v1/refunds/{id}', gc(app(chi, '\tr := chi.NewRouter()\n\tr.Use(requireAuth)\n\tr.Get("/refunds/{id}", showRefund)\n\thttp.ListenAndServe(":8080", r)', '\nfunc showRefund(w http.ResponseWriter, r *http.Request) {\n\treq, _ := http.NewRequest("GET", "https://api.stripe.com/v1/refunds/"+chi.URLParam(r, "id"), nil)\n\thttp.DefaultClient.Do(req)\n}\n')), c => !/create a refund|refunds money|money back/i.test(c)],
   ['gin final handler if {401} else {work}', gin2('\t\tdb.Exec("INSERT INTO orders (total) VALUES (1)")\n\t}'), LOGIN],
   ['gin if/else, then the work after it', gin2('\t\tlog.Println("ok")\n\t}\n\tdb.Exec("INSERT INTO orders (total) VALUES (1)")'), c => !LOGIN(c)],
   ['net/http if/else, then the work after it', gc(app(chi, '\tr := chi.NewRouter()\n\tr.Post("/orders", mk)\n\thttp.ListenAndServe(":8080", r)', '\nfunc mk(w http.ResponseWriter, r *http.Request) {\n\tif currentUser(r) == nil {\n\t\thttp.Error(w, "please log in", http.StatusUnauthorized)\n\t} else {\n\t\tlog.Println("ok")\n\t}\n\tdb.ExecContext(r.Context(), "INSERT INTO orders (total) VALUES ($1)", 10)\n}\n')), c => !LOGIN(c) && TRAP(c)],
@@ -3623,4 +3623,47 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
     ['', 'ALTER TABLE "Workspace" ADD COLUMN "search" tsvector;\n'], ['  plan String?\n', '-- was: ALTER TABLE "Workspace" ADD COLUMN "plan" TEXT;\nCREATE TABLE "Label" ("id" TEXT);\n']]) {
     c = card(base, { ...base, ...schema(extra), ...mig(sql) }); assert.ok(c.includes('or the parts that use it will fail.'), `${sql}: ${c}`) }
   console.log('ok (migration wording)')
+}
+// 💰 said for what it does: a refund gives money back, a price or a coupon changes what people pay; only a charge "charges customers"
+{
+  const card = (files: Record<string, string>) => report(new Map(Object.entries(pkg)), new Map(Object.entries({ ...pkg, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+  const pkg = { 'package.json': '{"dependencies":{"next":"15.0.0","stripe":"17.0.0","next-auth":"5.0.0"}}' }
+  const route = (body: string) => ({ 'app/api/admin/x/route.ts': `import { auth } from "@/auth"\nimport Stripe from "stripe"\nconst stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)\nexport async function POST(req: Request) {\n  const s = await auth()\n  if (!s?.user) return new Response(null, { status: 401 })\n  ${body}\n  return Response.json({})\n}\n` })
+  let c = card(route('await stripe.refunds.create({ payment_intent: "pi" })'))
+  assert.ok(c.includes('gives customers money back 💰') && !c.includes('charges customers'), c)
+  c = card(route('await stripe.prices.create({ unit_amount: 500, currency: "usd", product: "p" })'))
+  assert.ok(c.includes('adds a price in Stripe 💰') && !c.includes('charges customers'), c)
+  // (review 36) an update can't change a price's amount, a product isn't a price: plain words; capturing a payment charges
+  c = card(route('await stripe.prices.update("price_1", { active: false })\n  await stripe.products.update("prod_1", { name: "x" })'))
+  assert.ok(!c.includes('💰') && c.includes('asks Stripe to update a price'), c)
+  c = card(route('await stripe.paymentIntents.capture("pi_1")'))
+  assert.ok(c.includes('charges customers 💰') && c.includes('asks Stripe to collect a payment'), c)
+  c = card(route('await stripe.invoiceItems.list()\n  await stripe.payouts.create({ amount: 100, currency: "usd" })'))
+  assert.ok(c.includes('sends money out of your Stripe balance 💰') && c.includes('asks Stripe to list invoice items'), c)
+  c = card(route('await stripe.coupons.create({ percent_off: 20 })'))
+  assert.ok(c.includes('creates a Stripe discount 💰') && !c.includes('charges customers'), c)
+  c = card(route('await stripe.promotionCodes.create({ coupon: "c", code: "SPRING" })'))
+  assert.ok(c.includes('makes Stripe discount codes 💰'), c)
+  c = card(route('await stripe.paymentIntents.create({ amount: 500, currency: "usd" })'))
+  assert.ok(c.includes('charges customers 💰'), c)
+  // Python
+  const py = { 'requirements.txt': 'fastapi\nstripe\n' }
+  c = report(new Map(Object.entries(py)), new Map(Object.entries({ ...py, 'app/main.py': 'import stripe\nfrom fastapi import FastAPI, Depends\napp = FastAPI()\n@app.post("/orders/{order_id}/refund")\ndef refund(order_id: int, user = Depends(get_current_user)):\n    stripe.Refund.create(payment_intent="pi")\n' })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(c.includes('gives customers money back 💰'), c)
+  // a refund row of the app's own (a Django related manager, a Rails has_many) isn't Stripe
+  const dj = { 'requirements.txt': 'django\n' }
+  c = report(new Map(Object.entries(dj)), new Map(Object.entries({ ...dj, 'shop/views.py': 'from django.contrib.auth.decorators import login_required\nfrom .models import Order\n@login_required\ndef refund(request, pk):\n    order = Order.objects.get(pk=pk)\n    order.refunds.create(amount=order.total)\n', 'shop/urls.py': 'from django.urls import path\nfrom . import views\nurlpatterns = [path("orders/<int:pk>/refund", views.refund)]\n' })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(!c.includes('money back') && !c.includes('uses Stripe'), c)
+  const rb = { 'Gemfile': 'gem "rails"\n' }
+  c = report(new Map(Object.entries(rb)), new Map(Object.entries({ ...rb, 'config/routes.rb': 'Rails.application.routes.draw do\n  post "orders/:id/refund", to: "orders#refund"\nend\n', 'app/controllers/orders_controller.rb': 'class OrdersController < ApplicationController\n  def refund\n    order = Order.find(params[:id])\n    order.refunds.create(amount: order.total)\n  end\nend\n' })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(!c.includes('money back') && !c.includes('uses Stripe'), c)
+  // (review 36b) a Client model's refunds aren't Stripe's
+  c = report(new Map(Object.entries(dj)), new Map(Object.entries({ ...dj, 'shop/views.py': 'from django.contrib.auth.decorators import login_required\nfrom .models import Client\n@login_required\ndef refund(request, pk):\n    client = Client.objects.get(pk=pk)\n    client.refunds.create(amount=5)\n', 'shop/urls.py': 'from django.urls import path\nfrom . import views\nurlpatterns = [path("clients/<int:pk>/refund", views.refund)]\n' })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(!c.includes('money back') && !c.includes('uses Stripe'), c)
+  c = report(new Map(Object.entries(rb)), new Map(Object.entries({ ...rb, 'config/routes.rb': 'Rails.application.routes.draw do\n  post "clients/:id/charge", to: "clients#charge"\nend\n', 'app/controllers/clients_controller.rb': 'class ClientsController < ApplicationController\n  def charge\n    @client = Client.find(params[:id])\n    @client.charges.create(amount: 5)\n  end\nend\n' })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(!c.includes('charges customers') && !c.includes('uses Stripe'), c)
+  // a discount made in Stripe still counts as money for "you asked for a discount" guesses
+  c = report(new Map(Object.entries(pkg)), new Map(Object.entries({ ...pkg, ...route('await stripe.promotionCodes.create({ coupon: "c", code: "WELCOME20" })') })), { ref: 'main', asked: 'give new customers 20% off with a welcome code when they sign up' }).replace(/\s+/g, ' ')
+  assert.ok(/You asked for a discount/.test(c), c)
+  console.log('ok (money wording)')
 }

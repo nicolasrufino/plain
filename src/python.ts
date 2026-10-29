@@ -410,6 +410,8 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
       const sb = c.text.match(/\.(?:table|from_)\(\s*['"](\w+)['"]\s*\)\s*\.\s*(select|insert|update|upsert|delete)\b/)
       if (sb && fn.endsWith(sb[2])) { g.tables.add(sb[1]); if (sb[2] !== 'select') { g.written.add(sb[1]); g.writes = true; g.ops.add(sb[2] === 'insert' || sb[2] === 'upsert' ? 'create' : sb[2]) } }
       // money and outside services
+      // (a Stripe refund, not `order.refunds.create`, a related manager; a `client` only in a file that uses Stripe, not a Client model)
+      if (/^stripe\.Refund\.create$|^stripe\.(?:v1\.)?refunds\.create$/.test(fn) || /^(?:stripe_client|client)\.(?:v1\.)?refunds\.create$/.test(fn) && /\bimport\s+stripe\b|\bfrom\s+stripe\b|StripeClient/.test(text)) { g.services.add('Stripe'); g.outside.add('Stripe: refunds.create') }
       if (/^stripe\.(checkout\.Session|PaymentIntent|Charge|Subscription|Invoice)\.create$|checkout\.sessions\.create$/.test(fn)) {
         g.money = true; g.services.add('Stripe'); if (/checkout/i.test(fn)) g.outside.add('Stripe: checkout.sessions.create')
       }

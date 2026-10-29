@@ -513,7 +513,10 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
         if (dz && last !== 'from') { f.tables.add(dz); f.written.add(dz); f.writes = true; f.ops.add(last === 'insert' ? 'create' : last) }
         else if (dz || last === 'from' && /^(db|tx)\.select\(/.test(obj) && n.arguments[0] && ts.isIdentifier(n.arguments[0])) f.tables.add((n.arguments[0] as ts.Identifier).text.replace(/Table$/, ''))
         if (/^(db|tx)$/.test(parts[0]) && parts[1] === 'query' && parts.length === 4) f.tables.add(parts[2].replace(/Table$/, ''))
-        if (parts[0] === 'stripe' && parts.at(-1) === 'create') f.money = true
+        // (money: what charges someone; a refund, a price or a coupon is said apart, by outsidePhrase)
+        // (Stripe's docs: capturing or confirming a payment, paying or finalizing an invoice and accepting a quote charge too)
+        if (parts[0] === 'stripe' && (parts.at(-1) === 'create' && /^(?:checkout|paymentIntents|charges|subscriptions|subscriptionItems|subscriptionSchedules|invoices|invoiceItems|paymentLinks)$/.test(parts[1] ?? '')
+          || /^(?:paymentIntents\.(?:capture|confirm)|charges\.capture|invoices\.(?:pay|finalizeInvoice)|quotes\.accept)$/.test(parts.slice(1).join('.')))) f.money = true
         if (CLIENTS[parts[0]] && parts.length > 1 && !parts.some(x => x.includes('('))) f.outside.add(`${CLIENTS[parts[0]]}: ${parts.slice(1).join('.')}`)
         if (parts.at(-1) === 'push' && /router/.test(parts[0]) && str(n.arguments[0])?.startsWith('/')) f.links.add(str(n.arguments[0])!)
       }
@@ -1938,8 +1941,15 @@ function outsidePhrase(o: string) {
   if (chain === 'webhooks.constructEvent') return `checks that messages really come from ${svc} ✓`
   if (EMAIL.has(svc) && /emails?\.send|send/.test(chain)) return svc === 'email' ? 'emails people' : `emails people through ${svc}`
   if (chain === 'request') return `calls ${svc}`
+  if (svc === 'Stripe' && /^refunds\.create$/.test(chain)) return 'gives customers money back 💰'
+  if (svc === 'Stripe' && /^(?:prices|plans)\.create$/.test(chain)) return 'adds a price in Stripe 💰'   // (an update can't change the amount)
+  if (svc === 'Stripe' && /^(?:paymentIntents\.(?:capture|confirm)|charges\.capture|invoices\.(?:pay|finalizeInvoice)|quotes\.accept)$/.test(chain)) return `asks Stripe to ${{ capture: 'collect a payment', confirm: 'confirm a payment', pay: 'collect an invoice', finalizeInvoice: 'send an invoice for payment', accept: 'accept a quote' }[chain.split('.')[1]]}`
+  if (svc === 'Stripe' && chain === 'creditNotes.create') return 'gives customers credit or money back 💰'
+  if (svc === 'Stripe' && /^(?:transfers|payouts)\.create$/.test(chain)) return 'sends money out of your Stripe balance 💰'
+  if (svc === 'Stripe' && chain === 'coupons.create') return 'creates a Stripe discount 💰'   // (often a one-off amount off at checkout)
+  if (svc === 'Stripe' && chain === 'promotionCodes.create') return 'makes Stripe discount codes 💰'
   const parts = chain.split('.'), verb = parts.at(-1)!, what = singular(words(parts.at(-2) ?? ''))
-  return VERBS[verb] ? `asks ${svc} to ${VERBS[verb]} ${verb === 'list' ? pluralize(what) : `a ${what}`}` : `calls ${svc} (${chain})`
+  return VERBS[verb] ? `asks ${svc} to ${VERBS[verb]} ${verb === 'list' ? pluralize(what) : an(what)}` : `calls ${svc} (${chain})`
 }
 const VERB = /^((?:now )?(?:shows|links to|has|reads|saves|sends|loads|lists|looks up|updates|deletes|refuses with|says|asks \w+ to \w+))\s(.+)$/
 function merge(clauses: string[]): string[] {
@@ -2632,7 +2642,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         : AI.has(s) ? `Your app now uses ${s}. What people write in it can be sent to ${s}, and each request costs you money.` : `Your app now uses ${s}.` })
 
   // Guesses about money, worded as questions. Each says it's a guess.
-  const moneyChanged = real.some(p => B.files.get(p)?.money && route(p))
+  // (a discount or a new price counts too: a Stripe coupon, promotion code or price)
+  const moneyChanged = real.some(p => route(p) && (B.files.get(p)?.money || [...B.files.get(p)?.outside ?? []].some(o => /^Stripe: (?:coupons|promotionCodes|prices|plans)\.create$/.test(o))))
   const said = (x: string | undefined) => x ?? ''
   // A deal for new sign-ups (newsletter, first order, welcome) can be claimed again with another email.
   if (moneyChanged && /(\d+\s*(%|percent)|\$\s*\d+\s+off|half[- ]?(off|price)|discount|promo|coupon|\bfree\b(\s+\w+){0,2}\s+(shipping|delivery|trial|month|week|walk|order|item|session|class|lesson|booking|visit|consultation)s?\b|\bfirst\s+\w+\s+(is\s+)?free\b)/i.test(said(opts.asked)) && /(sign ?up|newsletter|subscribe|\bfirst\b|new (customer|user|account)|welcome|referr)/i.test(said(opts.asked)))
