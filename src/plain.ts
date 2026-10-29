@@ -2145,12 +2145,14 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
       if (!a) {
         const can: string[] = [], creates = b.ops.has('create') || (b.writes && !b.ops.size)
+        // (what it changes: a table it writes, or one its address names; not just the first one it reads)
+        const wnoun = b.written.size || named(r.url).some(seg => [...b.tables].some(x => things(x) === pluralize(seg))) ? noun : 'data'
         const link = linkOnly(r.url, b), share = shareRoute(r.url, b, t)
         if (b.fns.has('GET')) can.push(link ? `shows ${noun} to anyone with the link, no login needed` : `lists ${noun}`)
         if (share) can.push(`turns sharing on or off for ${noun}`)   // (not which: a POST may set the token to nothing)
         if (!share && (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m)))) can.push(creates ? (can.length && (!t || b.written.has(t)) ? 'saves new ones' : `saves new ${t && !b.written.has(t) && b.written.size ? things([...b.written][0]) : noun}`)
           : b.ops.has('update') && b.ops.has('delete') && !['PUT', 'PATCH', 'DELETE'].some(m => b.fns.has(m)) ? `updates and deletes ${list([...(b.written.size ? b.written : [t ?? 'data'])].map(x => x === 'data' ? x : things(x)))}`   // (not which one each: plain doesn't keep that)
-          : b.ops.has('update') ? `updates ${noun}` : b.ops.has('delete') ? `deletes ${noun}` : t ? `looks up ${noun}` : 'accepts requests')
+          : b.ops.has('update') ? `updates ${wnoun}` : b.ops.has('delete') ? `deletes ${wnoun}` : t ? `looks up ${noun}` : 'accepts requests')
         if (!share && (b.fns.has('PUT') || b.fns.has('PATCH'))) can.push(`updates ${noun}`)
         if (!share && b.fns.has('DELETE')) can.push(`deletes ${noun}`)
         clauses.push(...new Set(can))
@@ -2169,8 +2171,11 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       } else {
         // what it now does to them: an address that gains update and delete doesn't "save" anything new
         // (ops aren't kept per table, so only when it writes to that one table alone)
+        // (when plain can't tell which verb goes with which table: the one kind of write it does, or "changes", never a "saves" it didn't see:
+        // a leave route that now also deletes read receipts doesn't save them)
         const verbs = b.written.size > 1 ? [] : ([['create', 'saves'], ['update', 'updates'], ['delete', 'deletes']] as const).filter(([o]) => b.ops.has(o) && (!a.ops.has(o) || !a.written.size)).map(([, v]) => v)
-        for (const x of newOnly(a.written, b.written)) clauses.push(`${list(verbs.length ? [...verbs] : ['saves'])} ${things(x)}`)
+        const only = ([['create', 'saves'], ['update', 'updates'], ['delete', 'deletes']] as const).filter(([o]) => b.ops.has(o)).map(([, v]) => v)
+        for (const x of newOnly(a.written, b.written)) clauses.push(`${list(verbs.length ? [...verbs] : only.length === 1 ? only : b.ops.size ? ['changes'] : ['saves'])} ${things(x)}`)
         for (const x of newOnly(a.tables, b.tables).filter(x => !b.written.has(x))) clauses.push(`reads ${things(x)}`)
         if (!a.money && b.money) clauses.push('charges customers 💰')
         // only when there are more ways to say no than before: a reworded message isn't a new rule

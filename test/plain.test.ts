@@ -3767,3 +3767,22 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   assert.ok(c.includes('no two projects can share'), c)
   console.log('ok (rule-only migrations)')
 }
+// Deletes said as deletes: a route that now also deletes another table's rows (one kind of write: its verb, never "saves"), and a
+// Python db.delete(x) named by where x came from, not by the variable's name
+{
+  const card = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","@prisma/client":"6.0.0"}}' }
+  const leave = (extra: string) => ({ ...ex, 'server.js': `const express = require("express")\nconst app = express()\napp.post("/rooms/:id/leave", requireAuth, async (req, res) => {\n  await prisma.roomMember.deleteMany({ where: { roomId: req.params.id } })\n${extra}  res.json({})\n})\napp.listen(3000)\n` })
+  let c = card(leave(''), leave('  await prisma.roomReadReceipt.deleteMany({ where: { roomId: req.params.id } })\n'))
+  assert.ok(c.includes('now deletes room read receipts') && !c.includes('saves room read receipts'), c)
+  const py = { 'requirements.txt': 'fastapi\nsqlalchemy\n' }
+  c = report(new Map(Object.entries(py)), new Map(Object.entries({ ...py, 'app/main.py': 'from fastapi import FastAPI, Depends\napp = FastAPI()\n@app.post("/ai")\ndef ai(user = Depends(get_current_user), db = Depends(get_db)):\n    try:\n        call()\n    except Exception:\n        failed_reservation = db.get(AIRequest, 1)\n        db.delete(failed_reservation)\n' })), { ref: 'main' }).replace(/\s+/g, ' ')
+  assert.ok(!/failed reservation/i.test(c) && /AI requests/.test(c), c)
+  // (review 40) db.query(Model); a loop variable, a with-binding, a tuple or a reassigned name: no guessed table
+  const del = (body: string) => report(new Map(Object.entries(py)), new Map(Object.entries({ ...py, 'app/main.py': `from fastapi import FastAPI, Depends\napp = FastAPI()\n@app.post("/x")\ndef x(user = Depends(get_current_user), db = Depends(get_db)):\n${body}` })), { ref: 'main' }).replace(/\s+/g, ' ')
+  c = del('    tag = db.query(Tag).filter_by(id=1).first()\n    db.delete(tag)\n')
+  assert.ok(c.includes('deletes tags'), c)
+  for (const body of ['    for item in db.query(CartItem).all():\n        db.delete(item)\n', '    with lookup(db) as rec:\n        db.delete(rec)\n', '    row, extra = load(db)\n    db.delete(row)\n', '    order = db.get(Order, 1)\n    order = db.get(Refund, 2)\n    db.delete(order)\n'])
+    { c = del(body); assert.ok(!/deletes (items|recs|rows|orders)/.test(c), `${body}: ${c}`) }
+  console.log('ok (deletes said as deletes)')
+}

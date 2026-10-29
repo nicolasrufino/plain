@@ -398,7 +398,16 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
         g.writes = true; if (t !== '') g.ops.add(inst[2] === 'delete' ? 'delete' : /^[A-Z]/.test(mf) && !fetched ? 'create' : 'update')   // a form: saves, new or not
         if (/^[A-Z]\w*$/.test(t)) { g.written.add(t); g.tables.add(t) }
       }
-      if (/(^|\.)(session|db)\.delete$/.test(fn) && a0) { const t = a0.type === 'identifier' ? modelOf(a0.text) : ''; if (t) { g.written.add(t); g.tables.add(t) } g.writes = true; g.ops.add('delete') }
+      // (the table from where the row came: `x = db.get(AIRequest, id)`, `select(Order)`, `Order.query...`; the variable's name only when
+      // nothing assigns it, not `failed_reservation` read as a FailedReservation table)
+      if (/(^|\.)(session|db)\.delete$/.test(fn) && a0) {
+        // (bound some other way, a `for` loop, `with ... as`, a tuple, or assigned twice: plain can't tell which row, so no table)
+        const v = a0.text, sets = a0.type === 'identifier' ? all(node, 'assignment').filter(x => x.childForFieldName('left')?.text === v) : []
+        const otherwise = new RegExp(String.raw`\bfor\s+[\w\s,()]*\b${v}\b[\w\s,()]*\bin\b|\bas\s+\(?[\w\s,]*\b${v}\b|(?:^|\n)\s*\(?[\w\s]*,\s*${v}\b[\w\s,]*\)?\s*=[^=]|(?:^|\n)\s*\(?${v}\s*,[\w\s,]*\)?\s*=[^=]`).test(node.text)
+        const made = sets.length === 1 ? sets[0].childForFieldName('right') : undefined
+        const from = made?.text.match(/\b(?:session|db)\.(?:get|query)\(\s*([A-Z]\w*)|\bselect\(\s*([A-Z]\w*)|\b([A-Z]\w*)\.(?:query|objects)\b|get_object_or_404\(\s*([A-Z]\w*)/)
+        const t = a0.type !== 'identifier' || otherwise || sets.length > 1 ? '' : made ? (from?.slice(1).find(Boolean) ?? '') : modelOf(v)
+        if (t) { g.written.add(t); g.tables.add(t) } g.writes = true; g.ops.add('delete') }
       if (/(^|\.)(query|select|get)$/.test(fn) && a0 && /^[A-Z]\w*$/.test(a0.text) && /session|db|^select$/.test(fn)) g.tables.add(a0.text)
       if (/^(insert|update|delete)$/.test(fn) && a0 && /^[A-Z]\w*$/.test(a0.text)) { g.tables.add(a0.text); g.written.add(a0.text); g.writes = true; g.ops.add(fn === 'insert' ? 'create' : fn) }
       // Django: Order.objects.create(...), Order.objects.filter(...).delete()

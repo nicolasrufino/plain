@@ -763,7 +763,10 @@ cards were made with plain as pushed at that time (commit 6b3f57c).
    function bodies, but `DO` blocks yes). The unique-rule warning is skipped when the rule includes the model's one
    `@id`. A migration that only adds or drops plain indexes says the new code doesn't need it first; anything else
    keeps "before the new code goes live".
-2. A `delete` in a route or an `except` branch is a delete, not a save ("un-counts on failure").
+2. ✅ Done later (review 40): a changed route that now writes another table uses its one kind of write ("deletes",
+   "updates") or "changes", never a "saves" it didn't see. Python `db.delete(x)` names the table from where x came
+   (`db.get(Model, …)`, `db.query(Model)`, `select(Model)`), not from the variable's name; a loop, `with … as`, tuple or
+   reassigned variable names none.
 3. A limit constant used with a time window reads "5 per 10 seconds".
 4. A 🔴 guess when an AI client's timeout is far shorter than `max_tokens` needs and nothing streams.
 5. Changed Socket.IO events (not only new ones) get a line.
