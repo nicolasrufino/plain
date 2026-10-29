@@ -767,7 +767,9 @@ cards were made with plain as pushed at that time (commit 6b3f57c).
    "updates") or "changes", never a "saves" it didn't see. Python `db.delete(x)` names the table from where x came
    (`db.get(Model, …)`, `db.query(Model)`, `select(Model)`), not from the variable's name; a loop, `with … as`, tuple or
    reassigned variable names none.
-3. A limit constant used with a time window reads "5 per 10 seconds".
+3. ✅ Done later (review 41, two rounds): a count limit reads "a maximum of 5 messages per 10 seconds" when its file has
+   one `WINDOW` constant with a unit in its name, used as `now - WINDOW_MS` near the limit's check, and no other limit.
+   Timers, cleanups and token lifetimes (INTERVAL, PERIOD) don't count.
 4. A 🔴 guess when an AI client's timeout is far shorter than `max_tokens` needs and nothing streams.
 5. Changed Socket.IO events (not only new ones) get a line.
 6. "requires login ✓" upgrades to "admins only ✓" when the route's own check is an admin role.

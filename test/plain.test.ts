@@ -3786,3 +3786,20 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
     { c = del(body); assert.ok(!/deletes (items|recs|rows|orders)/.test(c), `${body}: ${c}`) }
   console.log('ok (deletes said as deletes)')
 }
+// A count limit with the one time window its file uses: "a maximum of 5 messages per 10 seconds"
+{
+  const card = (t: string) => report(new Map([['package.json', '{}']]), new Map([['package.json', '{}'], ['src/limit.ts', t]]), { ref: 'main' }).replace(/\s+/g, ' ')
+  const lim = (w: string) => `const MAX_MESSAGES = 5;\n${w}\nexport function ok(times: number[], now: number) {\n  const recent = times.filter(t => t > now - WINDOW)\n  return recent.length < MAX_MESSAGES\n}\n`
+  let c = card(lim('const WINDOW_MS = 10_000;').replace('now - WINDOW', 'now - WINDOW_MS'))
+  assert.ok(c.includes('a maximum of 5 messages per 10 seconds'), c)
+  c = card(lim('const WINDOW_MINUTES = 1;').replace('now - WINDOW', 'now - WINDOW_MINUTES * 60000'))
+  assert.ok(c.includes('a maximum of 5 messages per minute'), c)
+  // a window defined but not used, or two windows: just the number
+  c = card(lim('const WINDOW_MS = 10_000;').replace('now - WINDOW', 'now - 1000'))
+  assert.ok(c.includes('a maximum of 5 messages.') || c.includes('a maximum of 5 messages '), c)
+  assert.ok(!c.includes('per 10 seconds'), c)
+  // (review 41) a timer, a cleanup or a token's validity isn't a limit window
+  for (const w of ['const POLL_INTERVAL_MS = 30_000;\nsetInterval(poll, POLL_INTERVAL_MS)', 'const TOKEN_VALIDITY_PERIOD_DAYS = 30;\nexport const exp = Date.now() + TOKEN_VALIDITY_PERIOD_DAYS']) {
+    c = card(lim(w).replace('now - WINDOW', 'now - 1000')); assert.ok(!/ per \d|per (minute|day|second)/.test(c), `${w}: ${c}`) }
+  console.log('ok (limit windows)')
+}

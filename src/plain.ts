@@ -2899,10 +2899,23 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // (MAX_PROJECTS: "a maximum of 3 projects"; NAME_MAX_LENGTH: "a maximum name length of 80"; MAX_UPLOAD_MB: "a maximum upload size
   // of 10 MB"; COST_LIMIT_USD: "a cost limit of $0.0005")
   const UNIT: Record<string, string> = { MB: 'MB', KB: 'KB', GB: 'GB', BYTES: 'bytes', CHARS: 'characters', CHARACTERS: 'characters' }
-  const phrase = (n: string, v: string) => { const parts = n.split('_').filter(Boolean), last = parts.at(-1)!, usd = last === 'USD', unit = UNIT[last]
+  // (a count limit in a file with one time window, used as one: `MAX_MESSAGES = 5` and `WINDOW_MS = 10_000`, with `now - WINDOW_MS`
+  // within a few lines of the limit's comparison, nothing else between: "a maximum of 5 messages per 10 seconds". Only WINDOW names, a
+  // unit from the name's last part, and only when the file has no other limit: a POLL_INTERVAL or a token's PERIOD isn't one.)
+  const windowOf = (t: string, limit: string) => { const ws = [...t.matchAll(/^[ \t]*(?:export\s+)?(?:const|let|var)?\s*(\w*WINDOW\w*)\s*(?::\s*\w+\s*)?=\s*([\d_]+(?:\s*\*\s*[\d_]+)*)\s*;?\s*$/gm)]
+    if (ws.length !== 1) return ''
+    const n = ws[0][1], raw = ws[0][2].split('*').reduce((x, y) => x * Number(y.replace(/[_\s]/g, '')), 1)
+    const sec = /_(?:MS|MILLIS|MILLISECONDS)$/.test(n) ? raw / 1000 : /_(?:S|SEC|SECS|SECONDS)$/.test(n) ? raw : /_(?:MIN|MINS|MINUTES)$/.test(n) ? raw * 60 : /_(?:H|HR|HRS|HOURS)$/.test(n) ? raw * 3600 : /_DAYS?$/.test(n) ? raw * 86400 : NaN
+    if (!(sec > 0)) return ''
+    const lines = t.split('\n'), sub = lines.findIndex(l => new RegExp(String.raw`(?:\b\w*[Nn]ow\b(?:\(\))?|Date\.now\(\)|time\.time\(\)|time\.monotonic\(\)|Time\.(?:now|current))\s*-\s*${n}\b`).test(l))
+    const cmp = lines.findIndex(l => new RegExp(String.raw`[<>]=?\s*${limit}\b|\b${limit}\s*[<>]`).test(l))
+    if (sub < 0 || cmp < 0 || Math.abs(sub - cmp) > 10 || lines.slice(Math.min(sub, cmp) + 1, Math.max(sub, cmp)).some(l => /\bfunction\b|\bdef\s|\bfunc\s|=>\s*\{|\bclass\s/.test(l))) return ''
+    const [k, u] = sec % 86400 === 0 ? [sec / 86400, 'day'] : sec % 3600 === 0 ? [sec / 3600, 'hour'] : sec % 60 === 0 ? [sec / 60, 'minute'] : [sec, 'second']
+    return ` per ${k === 1 ? u : `${nice_(String(k))} ${u}s`}` }
+  const phrase = (n: string, v: string, t = '') => { const parts = n.split('_').filter(Boolean), last = parts.at(-1)!, usd = last === 'USD', unit = UNIT[last]
     if (usd || unit) parts.pop()
     const num = usd ? `$${nice_(v)}` : unit ? `${nice_(v)} ${unit}` : nice_(v)
-    if (parts[0] === 'MAX' && !unit && !usd) return `a maximum of ${num} ${words(parts.slice(1).join('_').toLowerCase().replace(/_/g, ' '))}`
+    if (parts[0] === 'MAX' && !unit && !usd) return `a maximum of ${num} ${words(parts.slice(1).join('_').toLowerCase().replace(/_/g, ' '))}${PERIOD.test(n) || !t ? '' : windowOf(t, n)}`
     const mi = parts.indexOf('MAX'); if (mi > 0) { parts.splice(mi, 1); parts.unshift('MAX') }
     let w = words(parts.join('_').toLowerCase().replace(/_/g, ' ').replace(/^max\b/, 'maximum')); if (unit && !/size|length/.test(w)) w += unit === 'characters' ? ' length' : ' size'
     return `a ${w} of ${num}` }
@@ -2939,7 +2952,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const changed_ = [...b].filter(([n, v]) => a.has(n) && a.get(n) !== v)
     const line: string[] = []
     if (swap) line.push(`The ${nameOf(swap[0][0])} (${valueOf(swap[0][0], swap[0][1])}) is replaced by ${phrase(swap[1][0], swap[1][1])}`)
-    else { if (added.length) line.push(`There's now ${list(added.map(([n, v]) => phrase(n, v)))}`); for (const [n, v] of gone) line.push(`The ${nameOf(n)} (${valueOf(n, v)}) is gone${unlimited(n) ? ' (no limit now)' : ''}`) }
+    else { if (added.length) line.push(`There's now ${list(added.map(([n, v]) => phrase(n, v, added.length === 1 && b.size === 1 ? after.get(p) ?? '' : '')))}`); for (const [n, v] of gone) line.push(`The ${nameOf(n)} (${valueOf(n, v)}) is gone${unlimited(n) ? ' (no limit now)' : ''}`) }
     for (const [n, v] of changed_) line.push(`The ${nameOf(n)} changed from ${valueOf(n, a.get(n)!)} to ${valueOf(n, v)}`)
     if (line.length) changes.push({ group: 'Server', text: `${line.join('. ')}.`, detail: p })
     // (date checks in the function with the comparison and the helpers it calls, in this file or by name in the app)
