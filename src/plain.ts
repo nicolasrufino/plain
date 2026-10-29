@@ -73,10 +73,11 @@ export type FileFacts = {
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
   authStop: boolean; authReturn: boolean   // turns away people who aren't logged in (see loginGroups); authReturn: the same check ending in a return
   exportAuth?: boolean                    // Nuxt: the default-exported handler itself checks login
+  exportEarly?: boolean; exportChain?: boolean; exportG?: FileFacts   // (an early return before that check; next-connect's export default nc().get(...).post(...))
   leadCalls?: string[]   // a function's first, unconditional `await X(...)` calls (see collect)
   socketEvents?: Map<string, FileFacts>; socketRefs?: Map<string, string>; socketAuth?: boolean; socketGuardish?: boolean   // Socket.IO: socket.on('send message', ...) and what each does; io.use(...) turning away connections without a login
   pageFns?: number[]   // Next.js: where the default export (the page or layout itself) and getServerSideProps start
-  authIfs: { g: string; at: number; fn: number; req?: boolean }[]; skipIfs: { c: string; at: number; fn: number }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
+  authIfs: { g: string; at: number; fn: number; req?: boolean; cond?: string; ret?: boolean; noReturn?: boolean }[]; tries?: [number, number][]; skipIfs: { c: string; at: number; fn: number; login?: boolean; rej?: boolean }[]   // where those checks apply (their path tests, '' = everywhere); early returns that let requests through
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
   handlers: { server: string; method: string; path: string; guard: boolean; admin?: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean; unknown?: boolean; nextAction?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
@@ -115,7 +116,35 @@ const LOGIN_REF = /^(?:\(?\s*await\s+)?(?:[\w$]+(?:\??\.[\w$]+|\(\))*\??\.)?(use
 const NOT_LOGIN = /\b(body|data|form|formData|input|params|query|payload|values|args|result|row|record|item|order|req\.body)\??\./
 export const PATH_TEST = /pathname|route\.id|event\.path|to\.path|to\.fullPath|url\.path|getRequestURL/
 const strip = (e: ts.Expression): ts.Expression => ts.isParenthesizedExpression(e) || ts.isAwaitExpression(e) || ts.isNonNullExpression(e) ? strip(e.expression) : e
-const isLoginRef = (e: ts.Expression, sf: ts.SourceFile) => { const t = strip(e).getText(sf).replace(/\s/g, ''); return LOGIN_REF.test(t) && !NOT_LOGIN.test(t) }
+// `const s = await auth()`: s is the session whatever it's called (the nearest declaration of that name, in the blocks around it)
+// Only with nothing or the request passed in: getUser(params.id) looks up someone else's record, not who's logged in.
+// Not a name that's reassigned, or redeclared nearer (a parameter, a loop variable, a catch).
+// (awaited: a Promise is always truthy, so `if (!s)` on one stops nobody; Clerk's auth() / getAuth() may be sync)
+const AUTH_CALL = /^(?:await\s+(?:auth|getServerSession|getSession|currentUser|getCurrentUser|getUser|getAuth|getServerAuthSession|requireUser|requireAdmin)|(?:await\s+)?(?:auth|getAuth))\s*\(([^()]*(?:\(\))?[^()]*)\)$/
+const REQ_ARG = /^(?:req|request|res|response|event|ctx|context|opts|options|\w*[Aa]uth(?:Options|Config)|\{\s*req\b[^}]*\}|(?:await\s+)?(?:headers|cookies)\(\))$/
+const authAlias = (e: ts.Expression, sf: ts.SourceFile): boolean => {
+  const s = strip(e), root = ts.isPropertyAccessExpression(s) ? s.expression : s
+  if (!ts.isIdentifier(root) || ts.isPropertyAccessExpression(s) && !/^(user|session|userId)$/.test(s.name.text)) return false
+  const x = root.text, named = (b: ts.BindingName) => ts.isIdentifier(b) && b.text === x
+  for (let c: ts.Node | undefined = e.parent; c; c = c.parent) {
+    if ((ts.isFunctionDeclaration(c) || ts.isFunctionExpression(c) || ts.isArrowFunction(c) || ts.isMethodDeclaration(c)) && c.parameters.some(q => named(q.name))) return false
+    if ((ts.isForOfStatement(c) || ts.isForInStatement(c) || ts.isForStatement(c)) && c.initializer && ts.isVariableDeclarationList(c.initializer) && c.initializer.declarations.some(d => named(d.name))) return false
+    if (ts.isCatchClause(c) && c.variableDeclaration && named(c.variableDeclaration.name)) return false
+    if (ts.isBlock(c) || ts.isSourceFile(c)) for (const st of c.statements) if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations)
+      if (named(d.name)) {
+        // (not a getSession() imported from a chat store: only from somewhere about auth or users, or written in this file)
+        const callee = d.initializer?.getText(sf).match(/^(?:await\s+)?([\w$]+)/)?.[1]
+        const from = sf.statements.find((st): st is ts.ImportDeclaration => ts.isImportDeclaration(st) && !!st.importClause?.namedBindings && ts.isNamedImports(st.importClause.namedBindings)
+          && st.importClause.namedBindings.elements.some(el => el.name.text === callee))
+        if (from && ts.isStringLiteral(from.moduleSpecifier) && !/auth|session|clerk|supabase|lucia|iron|kinde|user|account|login|firebase|next-auth|better-auth/i.test(from.moduleSpecifier.text)) return false
+        // (assigned again in that scope: not the session anymore)
+        if ((c.getText(sf).match(new RegExp(String.raw`(?<![\w$.])${x.replace(/\$/g, '\\$')}\s*(?:[-+*/|&?]{0,2})=(?![=>])`, 'g')) ?? []).length > 1) return false
+        const m = d.initializer?.getText(sf).match(AUTH_CALL); return !!m && (!m[1].trim() || m[1].split(',').every(a => REQ_ARG.test(a.trim())))
+      }
+  }
+  return false
+}
+const isLoginRef = (e: ts.Expression, sf: ts.SourceFile) => { const t = strip(e).getText(sf).replace(/\s/g, ''); return LOGIN_REF.test(t) && !NOT_LOGIN.test(t) || authAlias(e, sf) }
 const isNegLogin = (e0: ts.Expression, sf: ts.SourceFile): boolean => {
   const e = strip(e0)
   if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) {
@@ -192,7 +221,15 @@ export function fileFacts(path: string, text: string): FileFacts {
       }
   }
   // Nuxt: export default defineEventHandler(async (event) => { ... }): the handler's own check, not a helper elsewhere in the file
-  for (const st of sf.statements) if (ts.isExportAssignment(st)) { const g = collect(sf, st.expression, empty('')); f.exportAuth = handlerChecks(g) }
+  // (exportEarly: an early return lets some requests through before that check)
+  const early = (g: FileFacts) => { const at = Math.min(...g.authIfs.filter(x => !x.g).map(x => x.at), ...g.skipIfs.filter(x => x.login).map(x => x.at), Infinity)
+    return at < Infinity && g.skipIfs.some(sk => !sk.login && !sk.rej && sk.at < at) }
+  for (const st of sf.statements) if (ts.isExportAssignment(st)) {
+    const g = collect(sf, st.expression, empty(printer.printNode(ts.EmitHint.Unspecified, st.expression, sf))); f.exportAuth = handlerChecks(g); f.exportEarly = early(g); f.exportG = g
+    f.exportChain = ts.isCallExpression(st.expression) && ts.isPropertyAccessExpression(st.expression.expression)
+  }
+  // export default async function (req, res) { ... }: no name to look up
+    else if (ts.isFunctionDeclaration(st) && !st.name && st.modifiers?.some(m => m.kind === ts.SyntaxKind.DefaultKeyword)) { const g = collect(sf, st, empty(printer.printNode(ts.EmitHint.Unspecified, st, sf))); f.exportAuth = handlerChecks(g); f.exportEarly = early(g); f.exportG = g }
   if ([...f.binds].some(([k, m]) => k === 'env' && /^\$env\/dynamic\//.test(m))) for (const m of text.matchAll(/\benv\.([A-Z][A-Z0-9_]+)/g)) { f.env.add(m[1]); f.envReq.add(m[1]) }
   for (const st of sf.statements) {
     if (isExported(st) && ts.isVariableStatement(st))   // export const POST = withErrors(async () => ...)
@@ -359,7 +396,11 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   const NOT_AUTH_SOURCE = /\bstripe\b|\bprisma\.|\bdb\.|\bfetch\(|\$fetch\(|\.from\(|\.retrieve\(|\.find(Unique|First|Many)\w*\(|\.select\(|\bquery\(/
   const authSourced = (cond: ts.Expression) => { const roots = [...cond.getText(sf).matchAll(/!?\s*\(?\s*(?:await\s+)?([A-Za-z_$][\w$]*)/g)].map(m => m[1])
     return !roots.some(r => /^(user|session|currentUser|claims|auth)$/.test(r) && NOT_AUTH_SOURCE.test(declOf.get(r) ?? '')) }
+  const frameworkThrow = (name: string) => sf.statements.some(st => ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier) && /^(?:next\/navigation|@sveltejs\/kit)$/.test(st.moduleSpecifier.text)
+    && !!st.importClause?.namedBindings && ts.isNamedImports(st.importClause.namedBindings) && st.importClause.namedBindings.elements.some(el => el.name.text === name))
   const visit = (n: ts.Node) => {
+    // (where the try blocks are: a login check inside one may be caught and swallowed)
+    if (ts.isTryStatement(n)) (f.tries ??= []).push([n.tryBlock.getStart(sf), n.tryBlock.getEnd()])
     // A real login check: an `if` that tests the logged-in user and stops inside that branch, or a require*() helper that does it.
     if (ts.isIfStatement(n)) {
       const groups = authSourced(n.expression) ? loginGroups(n.expression, sf) : []
@@ -367,18 +408,25 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const branchNode = groups.length ? n.thenStatement : positive ? n.elseStatement! : undefined
       const branch = branchNode ? own(branchNode) : '', ctx = branch ? context(n) : null
       // SvelteKit hides admin pages with a 404 too: error(404) under `!locals.user` turns people away
-      const stops = hardStop(branch) || /\berror\s*\(\s*404/.test(branch) && /\blocals\./.test(n.expression.getText(sf))
+      // (and pages/api's documented `{ res.status(401).json(...); return }`: the status, then a return)
+      const stops = hardStop(branch) || /\berror\s*\(\s*404/.test(branch) && /\blocals\./.test(n.expression.getText(sf)) || /\.status\(\s*40[13]\s*\)/.test(branch) && /^\s*return\b/m.test(branch)
       // (Next.js pages router: getServerSideProps turns guests away with `return { redirect: ... }` / `return { notFound: true }`)
-      if (ctx && !stops && /\breturn\s*\{\s*(?:redirect|notFound)\b/.test(branch)) { f.authStop = true; f.authIfs.push(...(groups.length ? groups : ['']).map(g => ({ g: [g, ...ctx.conds].filter(Boolean).join(' && '), at: n.getStart(sf), fn: ctx.fn }))) }
-      else if (ctx && stops) { f.authStop = true; f.authIfs.push(...(groups.length ? groups : ['']).map(g => ({ g: [g, ...ctx.conds].filter(Boolean).join(' && '), at: n.getStart(sf), fn: ctx.fn }))) }
+      if (ctx && !stops && /\breturn\s*\{\s*(?:redirect|notFound)\b/.test(branch)) { f.authStop = true; f.authIfs.push(...(groups.length ? groups : ['']).map(g => ({ g: [g, ...ctx.conds].filter(Boolean).join(' && '), at: n.getStart(sf), fn: ctx.fn, cond: n.expression.getText(sf) }))) }
+      // (ret: it stops by returning a response, which stops a handler but not the caller of a helper)
+      // (redirect(), notFound(), unauthorized(), forbidden(), error(401) throw only when they're Next's or SvelteKit's: an app's own
+      // `const unauthorized = () => NextResponse.json(..., { status: 401 })` returns)
+      else if (ctx && stops) { const ret = !/\bthrow\b/.test(branch) && ![...branch.matchAll(/(?<![.\w$])(redirect|notFound|unauthorized|forbidden|error)\s*\(/g)].some(m => frameworkThrow(m[1]))
+        // (noReturn: `if (!session) NextResponse.redirect(...)` builds a response and goes on)
+        f.authStop = true; f.authIfs.push(...(groups.length ? groups : ['']).map(g => ({ g: [g, ...ctx.conds].filter(Boolean).join(' && '), at: n.getStart(sf), fn: ctx.fn, cond: n.expression.getText(sf), ret, noReturn: ret && !/\breturn\b/.test(branch) }))) }
       else if (ctx && RETURNS.test(branch)) {
         // in a handler a return-style check stops the request; in a hook or middleware it lets anonymous visitors through: a skip for them
-        f.authReturn = true; f.skipIfs.push({ c: groups.length ? groups.join(' || ') || 'true' : 'true', at: n.getStart(sf), fn: ctx.fn })
+        f.authReturn = true; f.skipIfs.push({ c: groups.length ? groups.join(' || ') || 'true' : 'true', at: n.getStart(sf), fn: ctx.fn, login: true })
       }
       // an early return that lets requests through before any check (`if (pathname === '/health') return ...`, `if (!sessionId) return resolve(event)`):
       // those requests skip the check. Nuxt's `if (import.meta.server) return` is no skip: the middleware runs again in the browser.
       else if (!groups.length && !positive && /\breturn\b/.test(n.thenStatement.getText(sf)) && !/import\.meta\.(server|client)/.test(n.expression.getText(sf)) && !hardStop(own(n.thenStatement))) {
-        const c = context(n); if (c) f.skipIfs.push({ c: n.expression.getText(sf), at: n.getStart(sf), fn: c.fn })
+        // (rej: it answers with an error, a 405 or a 400: those requests are turned away, not let through)
+        const c = context(n); if (c) f.skipIfs.push({ c: n.expression.getText(sf), at: n.getStart(sf), fn: c.fn, rej: /^\s*\{?\s*return\b(?![^;]*\?)[^;]*(?:status\(\s*|status\s*:\s*)4\d\d\b[^;]*;?\s*\}?\s*$/.test(own(n.thenStatement)) })
       }
     }
     // locals.user ?? redirect(303, '/login'), user || error(401)
@@ -386,7 +434,8 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn }) }
     }
     // requireUserSession(event): everywhere, or only where the ifs around it say
-    if (ts.isCallExpression(n) && (REQUIRE_LOGIN.test(n.expression.getText(sf).split('.').at(-1)!) || /^auth\.protect$/.test(n.expression.getText(sf)))) {   // (Clerk's auth.protect())
+    if (ts.isCallExpression(n) && (REQUIRE_LOGIN.test(n.expression.getText(sf).split('.').at(-1)!) || /^(?:auth|auth\(\)|\(\s*await\s+auth\(\)\s*\))\.protect$/.test(n.expression.getText(sf).replace(/\s+/g, ' '))
+      || ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'protect' && ts.isIdentifier(n.expression.expression) && authAlias(n.expression.expression, sf))) {   // (Clerk's auth.protect(), v5's auth().protect())
       const ctx = context(n); if (ctx) { f.authStop = true; f.authIfs.push({ g: ctx.conds.join(' && '), at: n.getStart(sf), fn: ctx.fn, req: true }) }   // (req: by name; a server action counts it only as a lead call)
     }
     // Socket.IO (server only: a file importing 'socket.io', not the client): inside io.on('connection', socket => ...), each
@@ -853,6 +902,90 @@ export function appFacts(snap: Snap) {
     // (only the page or layout itself: not a "use server" function or a small component in the same file, not a guest-view return)
     const own = (g?: FileFacts) => !!g && g.authIfs.some(x => !x.g && (g.pageFns ?? []).includes(x.fn))
     files.get(p)!.auth = own(files.get(p)) || layouts.some(l => own(files.get(l)))
+  }
+  // Next.js route handlers and pages/api: logged in when each method that changes something (each method, when none does) checks in
+  // its own code (`if (!session) return 401`, requireUser()). Calling auth() and ignoring the answer stops nobody.
+  // (Before, calling auth() anywhere in the file was a ✓. Where that old ✓ isn't backed by a check plain can read, it now says
+  // neither: no ✓, and no warning it didn't give before. Where it warned before, it still does unless the check is there.)
+  // early: a return that lets requests through before the check (`if (req.method === 'DELETE') return deletePost(req, res)`);
+  // not one that turns them away (`if (req.method !== 'POST') return res.status(405).end()`)
+  const early = (g: FileFacts) => { const at = Math.min(...g.authIfs.filter(x => !x.g).map(x => x.at), ...g.skipIfs.filter(x => x.login).map(x => x.at), Infinity)
+    return at < Infinity && g.skipIfs.some(sk => !sk.login && !sk.rej && sk.at < at) }
+  // A ✓ also needs the session itself: the `if` tests a name that was set from auth(), getServerSession(), supabase.auth.getUser(),
+  // ... (or from one of those names: `const user = session?.user`). An `if (!userId) return 400` on a userId from the body, or
+  // `if (!user) return 404` after a findById, isn't a login, even next to an unrelated getToken() or firebase-admin's getAuth().
+  // (Calls with no receiver, octokit.auth() isn't one; with nothing or the request passed in, getSession(chatId) isn't one.)
+  const AUTHY = /auth|session|clerk|supabase|lucia|iron|kinde|user|account|login|firebase|next-auth|better-auth|@\/auth$|\/auth$/i
+  const SESSION_CALL = /(?<![.\w$])(?:await\s+)?(auth|getServerSession|getSession|currentUser|getCurrentUser|getUser|getAuth|getServerAuthSession|getToken|validateRequest|requireUser|requireAuth|requireSession|requireLogin|requireAdmin)\s*\(([^()]*(?:\([^()]*\))?[^()]*)\)|\.auth\.getUser\s*\(|(?<![.\w$])auth\.api\.getSession\s*\(|(?<![.\w$])(?:await\s+)?getIronSession\s*\(/
+  // (imported from somewhere about auth or users, or written in this file: not getSession() from '@/lib/chat-store')
+  // (the call itself, not `(await getSession()) ?? { user: { id: body.userId } }` or `.catch(() => DEMO_SESSION)`)
+  const sessionCall = (init: string, binds: Map<string, string>) => { const m = init.match(SESSION_CALL); if (!m || /\?\?|\|\||\.catch\s*\(|\s\?\s/.test(init)) return false
+    if (!m[1]) return /^\(?\s*await\b/.test(init)
+    if (binds.has(m[1]) && !AUTHY.test(binds.get(m[1])!)) return false
+    // (awaited: a Promise is always there; Clerk's auth() / getAuth() may be sync)
+    if (!/^(?:auth|getAuth)$/.test(m[1]) && !/^\(?\s*await\b/.test(init)) return false
+    return (!m[2].trim() ? m[1] !== 'getAuth' : m[2].split(',').every(a => REQ_ARG.test(a.trim()))) }
+  // the names, each true when the session object is always there (iron-session: test session.user, not session)
+  // (one hop only as a plain property chain, `const user = session?.user`: not `searchParams.get('userId') || me?.id`;
+  // not a name assigned again, `if (!user) user = await prisma.user.findUnique(...)`; one declarator per statement)
+  const sessionNames = (text: string, binds: Map<string, string>) => {
+    const out = new Map<string, boolean>(), re = (x: string) => x.replace(/\$/g, '\\$')
+    for (let pass = 0; pass < 2; pass++) for (const m of text.matchAll(/\b(?:const|let|var)\s+([\w$]+|\{[^=]*\})\s*(?::\s*[^=;\n]+)?=\s*([^;\n]+)/g)) {
+      if (/,\s*[\w$]+\s*(?::[^=]+)?=(?![=>])/.test(m[2])) continue
+      const from = m[2].trim(), src = pass === 0 && sessionCall(from, binds)
+      const hop = pass === 1 && [...out.keys()].find(x => new RegExp(String.raw`^(?:await\s+)?\(?\s*${re(x)}(?:\s*\??\.\s*[\w$]+)*\s*\)?!?$`).test(from))
+      if (!src && !hop) continue
+      for (const id of m[1].startsWith('{') ? m[1].replace(/[\w$]+\s*:/g, '').match(/[\w$]+/g) ?? [] : [m[1]])
+        if ((text.match(new RegExp(String.raw`(?<![\w$.])${re(id)}\s*(?:[-+*/|&?]{0,2})=(?![=>])`, 'g')) ?? []).length <= 1)
+          out.set(id, src ? /getIronSession/.test(from) && !m[1].startsWith('{') : out.get(hop as string)! && from.trim() === hop)
+    }
+    return out
+  }
+  const testsSession = (g: FileFacts, binds: Map<string, string>) => {
+    const names = sessionNames(g.printed, binds)
+    // (testing that it's there: `!session`, `session?.user == null`, `user.role !== 'admin'`; not `session?.user?.id !== userId`, which a
+    // guest passes by leaving userId out)
+    const uses = (c?: string) => !!c && [...names].some(([x, always]) => { const n = String.raw`(?<![\w$.])${x.replace(/\$/g, '\\$')}${always ? LOGIN_FIELD : '\\b'}`
+      return new RegExp(String.raw`!\s*\(?\s*${n}|${n}[\w$?.\s]*(?:===?\s*(?:null|undefined|false)\b|!==?\s*['"\x60])`).test(c) })
+    const free = (at: number) => !(g.tries ?? []).some(([a, b]) => at > a && at < b)
+    return g.authIfs.some(x => !x.g && !x.req && !x.noReturn && free(x.at) && uses(x.cond)) || g.skipIfs.some(x => x.login && free(x.at) && uses(x.c)) }
+  // (an iron-session object is always there: only its login fields say who's logged in, not session.csrfToken or session.cartId)
+  const LOGIN_FIELD = String.raw`\s*\??\.\s*(?:user|userId|isLoggedIn|loggedIn|uid|account|accountId|email)\b`
+  // a helper's own check stops its caller: it throws or redirects for guests (not a returned 401, not inside a try)
+  const helperStops = (h: FileFacts, binds: Map<string, string>) => { if (h.skipIfs.length || /\btry\b/.test(h.printed)) return false
+    const names = sessionNames(h.printed, binds)
+    return h.authIfs.some(x => !x.g && !x.req && !x.ret && !!x.cond && [...names].some(([n, always]) => new RegExp(String.raw`(?<![\w$.])${n.replace(/\$/g, '\\$')}\b${always ? LOGIN_FIELD : ''}`).test(x.cond!))) }
+  const nextHandlers = new Set<string>()
+  for (const [p, r] of routes) if (r.kind === 'endpoint' && 'next' in deps_ && /^(?:src\/)?(?:app\/(?:.*\/)?route|pages\/api\/.*)\.[jt]sx?$/.test(p)) {
+    nextHandlers.add(p)
+    const f = files.get(p)!, t = snap.get(p) ?? ''
+    // A require*() call counts only when plain finds it (in this file, or the file it's imported from under that name) and its
+    // check stops guests by throwing or redirecting; one it can't find (a barrel, a package, cache(), a rename) or one that returns
+    // a 401 the route ignores doesn't. Clerk's protect() counts. So does a helper in this file awaited first (getUserOrThrow()).
+    const found = (n: string) => { const q = f.locals.has(n) ? p : target(p, n), h = q ? files.get(q)?.locals.get(n) : undefined; return h && helperStops(h, files.get(q!)!.binds) }
+    // (not when the route catches what they throw: a try around them, `.catch(() => null)`; Clerk v6's auth.protect() awaited)
+    const reqOk = (g: FileFacts) => !/\btry\b|\.catch\s*\(/.test(g.printed) && (/\bawait\s+auth\.protect\s*\(|(?<![\w$.])auth\(\)\.protect\s*\(|\(\s*await\s+auth\(\)\s*\)\s*\.protect\s*\(/.test(g.printed) || (() => {
+      const calls = [...g.printed.matchAll(new RegExp(String.raw`(?<![.\w$])(?:await\s+)?${REQUIRE_LOGIN.source.slice(1, -1)}\s*\(`, 'g'))]
+      return calls.length > 0 && calls.every(m => /^await\s/.test(m[0]) && found(m[1])) })())
+    const lead = (g: FileFacts) => (g.leadCalls ?? []).some(n => f.locals.has(n) && helperStops(f.locals.get(n)!, f.binds))
+    // (no switch: a case may hand a method off before the check; a check inside a try may be caught, see testsSession)
+    const checks = (g?: FileFacts) => !!g && !early(g) && !/\bswitch\s*\(/.test(g.printed)
+      && (g.authIfs.some(x => !x.g && x.req) && reqOk(g) || testsSession(g, f.binds) || lead(g))
+    let yes: boolean
+    if (/^(?:src\/)?pages\/api\//.test(p)) {
+      // the default-exported handler: export default function handler(req, res) / export default handler / export default async (req, res) => ...
+      // (read from the printed file: no comments, so a commented-out check is gone). Not next-connect's chain: a check in .get()
+      // says nothing about .delete().
+      const pt = f.printed, name = pt.match(/export\s+default\s+(?:async\s+)?function\s+(\w+)/)?.[1] ?? pt.match(/export\s+default\s+(\w+)\s*;?\s*$/m)?.[1]
+      yes = !f.exportChain && checks(name ? f.locals.get(name) : f.exportG)
+    } else {
+      const ms = METHODS.filter(m => f.fns.has(m)), writes = ms.filter(m => m !== 'GET'), deciding = writes.length ? writes : ms
+      // (a method exported under another name, `export { remove as DELETE }`, `export const DELETE = remove`: plain may not see it)
+      yes = deciding.length > 0 && deciding.every(m => checks(f.locals.get(m)))
+        && !/export\s*\{[^}]*\b(?:GET|POST|PUT|PATCH|DELETE)\b|export\s*\*\s*from|export\s+const\s+(?:GET|POST|PUT|PATCH|DELETE)\s*=\s*[\w$.]+\s*;?\s*$|export\s+const\s+[^;]*,\s*(?:GET|POST|PUT|PATCH|DELETE)\s*=/m.test(t)
+    }
+    if (!yes && (f.auth || f.sbAuth)) (f as FileFacts & { guardUnknown?: boolean }).guardUnknown = true
+    f.auth = yes
   }
   // TanStack Start: route files are pages (or server routes); a login check on a parent layout covers its children.
   const browserPages = new Set<string>()
@@ -1796,7 +1929,8 @@ export function appFacts(snap: Snap) {
             const swallows = [...c.printed.matchAll(/\bcatch\s*(?:\(\s*(\w+)[^)]*\))?\s*\{([^}]*)\}/g)].some(m => { const v = m[1], body = m[2].trim()
               // (each only as the catch's first statement; `if (!isRedirectError(e)) throw e` rethrows everything but the redirect)
               return !v || !new RegExp(String.raw`^(?:throw\s+${v}\b|unstable_rethrow\(\s*${v}\s*\)|if\s*\(\s*isRedirectError\(\s*${v}\s*\)\s*\)\s*\{?\s*throw\s+${v}\b)`).test(body) })
-            return c.authIfs.some(x => !x.g && !x.req) && !c.skipIfs.length && !swallows || depth < 2 && (c.leadCalls ?? []).some(m => stops(q!, m, depth + 1)) }
+            // (and its check throws or redirects: one that returns a 401 Response leaves the action going)
+            return c.authIfs.some(x => !x.g && !x.req) && !c.skipIfs.length && !swallows && (/\bthrow\b|(?<!\.)\bredirect\s*\(|(?<!\.)\bnotFound\s*\(/.test(c.printed) || !/\breturn\b[^;\n]*(?:status\s*:\s*40[13]|\.status\(\s*40[13])/.test(c.printed)) || depth < 2 && (c.leadCalls ?? []).some(m => stops(q!, m, depth + 1)) }
           ;(h as { helperGuard?: boolean }).helperGuard = (hf.leadCalls ?? []).some(n => stops(p, n, 0))
           // "Only the workspace's members": a lead-call helper that stops guests (above) and checks the logged-in user's membership of the
           // value it's given (src/members.ts), directly or through a helper it passes that same value to; and the action keeps every read
@@ -1899,7 +2033,7 @@ export function appFacts(snap: Snap) {
   // <form method="POST"> sends to its own page: SvelteKit's form actions (also from a child component, folded in above); elsewhere it says nothing
   for (const [p, f] of files) for (const x of [...f.fetches]) if (x.endsWith(' @self')) { f.fetches.delete(x); if (svelteUrls.has(p)) f.fetches.add(`POST ${svelteUrls.get(p)}`) }
   // Reading the session in the browser redirects nobody; on a server (edge function, Next.js) it's a real check.
-  for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k) && !(routes.get(k)!.kind === 'page' && /^(?:src\/)?(?:app|pages)\//.test(k))) files.get(k)!.auth = true
+  for (const k of routes.keys()) if (files.get(k)!.sbAuth && !browserPages.has(k) && !(routes.get(k)!.kind === 'page' && /^(?:src\/)?(?:app|pages)\//.test(k)) && !nextHandlers.has(k)) files.get(k)!.auth = true
   // Whether a page or address checks login is part of what it is: losing the check counts as a change.
   for (const k of routes.keys()) files.get(k)!.printed += `\n[login: ${files.get(k)!.auth}${files.get(k)!.admin ? ', admins only' : ''}]`
   const schemaPath = [...snap.keys()].find(p => p.endsWith('schema.prisma') && !p.includes('node_modules/'))
@@ -2233,7 +2367,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     }
     const name = placeName(p)
     // who can use it, when that changed: login, or admins on top of it
-    const lead = !a ? '' : a.auth && !b.auth ? `${cap(name)} no longer requires login.` : !a.auth && b.auth ? `${cap(name)} now ${b.admin ? 'only lets admins in' : 'requires login'} ✓`
+    const lead = !a ? '' : a.auth && !b.auth && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown ? `${cap(name)} no longer requires login.` : !a.auth && b.auth ? `${cap(name)} now ${b.admin ? 'only lets admins in' : 'requires login'} ✓`
       : a.auth && b.auth && a.admin && !b.admin ? `${cap(name)} may no longer be limited to admins.` : a.auth && b.auth && !a.admin && b.admin ? `${cap(name)} is now limited to admins ✓` : ''
     const text = !a
       ? (r.kind === 'page' ? newPage(name, r.url, b, clauses) : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)

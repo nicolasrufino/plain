@@ -4167,3 +4167,3069 @@ const c = report(new Map(Object.entries(before)), new Map(Object.entries(after))
 assert.ok(c.includes("A page's login check only hides the page"), c)
 }
 console.log('ok (review 48)')
+// Next.js route handlers and pages/api: login read from each method's own check, never from calling auth() alone
+{
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}' }
+  const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+  const del = (body: string) => `import { auth } from '@/auth'\nexport async function DELETE(req: Request) {\n${body}\n  await prisma.user.delete({ where: { id: 1 } })\n  return Response.json({})\n}\n`
+  // calls auth() and ignores the answer: no ✓ (it used to get one), and no warning plain can't back either
+  let c = card({ 'app/api/x/route.ts': del('  const session = await auth()\n  console.log(session)') })
+  assert.ok(!c.includes('requires login ✓') && !c.includes('Anyone'), c)
+  // whatever the session is called
+  for (const body of ['  const s = await auth()\n  if (!s) return new Response(null, { status: 401 })', '  const me = await getCurrentUser()\n  if (!me) return Response.json({}, { status: 401 })',
+    '  const s = await auth()\n  if (!s?.user) return new Response(null, { status: 401 })']) {
+    c = card({ 'app/api/x/route.ts': del(body) })
+    assert.ok(c.includes('deletes users and requires login ✓') && !c.includes('Anyone'), c)
+  }
+  // a name from somewhere else isn't a session: `const s = await getStripe()`
+  c = card({ 'app/api/x/route.ts': del('  const s = await getStripe()\n  if (!s) return new Response(null, { status: 401 })') })
+  assert.ok(!c.includes('requires login ✓'), c)
+  // pages/api: the default-exported handler
+  const api = (body: string, exp: string) => `import { getServerSession } from 'next-auth'\n${exp === 'decl' ? 'export default async function handler' : 'async function handler'}(req, res) {\n${body}\n  await prisma.user.delete({ where: { id: 1 } })\n  res.json({})\n}\n${exp === 'name' ? 'export default handler\n' : ''}`
+  for (const exp of ['decl', 'name']) {
+    c = card({ 'pages/api/x.ts': api('  const session = await getServerSession(req, res, opts)\n  if (!session) return res.status(401).end()', exp) })
+    assert.ok(c.includes('requires login ✓') && !c.includes('Anyone'), c)
+    c = card({ 'pages/api/x.ts': api('  const session = await getServerSession(req, res, opts)', exp) })
+    assert.ok(!c.includes('requires login ✓'), c)
+  }
+  console.log('ok (next route handler login)')
+}
+// Review 50: Next route handlers say neither ✓ nor ⚠ when plain can't read them (wrapped exports, next-connect, a check in a switch or
+// helper, middleware); getUser(params.id) is a lookup, not a login; pages/api's `res.status(401).json(); return` is a check
+{
+const outs: string[] = [], log = (...a: unknown[]) => { outs.push(a.join(' ')) }
+// NextAuth docs pattern for pages/api: `res.status(401).json(...); return` inside the if
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log(card({ 'pages/api/posts.ts': `import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+export default async function handler(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) {
+    res.status(401).json({ message: "You must be logged in." })
+    return
+  }
+  await prisma.post.create({ data: { title: req.body.title, authorId: session.user.id } })
+  res.json({ ok: true })
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) assert.ok(/requires login ✓/.test(x) && !/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { outs.push(a.join(' ')) }
+// pages/api: default-export shapes the new name lookup misses, and a check inside switch(req.method). All REALISTIC.
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ').replace(/^.*?(LOOK AT|✓ No problems)/, '$1')
+const body = `  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  await prisma.post.create({ data: { title: req.body.title } })
+  res.json({ ok: true })`
+const imp = `import { getServerSession } from "next-auth/next"\nimport { authOptions } from "@/lib/auth"\n`
+const cases: Record<string, string> = {
+  'export default withSentry(handler)': `${imp}import { withSentry } from "@sentry/nextjs"\nasync function handler(req, res) {\n${body}\n}\nexport default withSentry(handler)\n`,
+  'export default async function (req, res) (anonymous)': `${imp}export default async function (req, res) {\n${body}\n}\n`,
+  'export { handler as default }': `${imp}async function handler(req, res) {\n${body}\n}\nexport { handler as default }\n`,
+  'switch (req.method) { case "POST": if (!session) ... }': `${imp}export default async function handler(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  switch (req.method) {
+    case "POST":
+      if (!session) return res.status(401).end()
+      await prisma.post.create({ data: { title: req.body.title } })
+      return res.json({ ok: true })
+    default:
+      return res.status(405).end()
+  }
+}
+`,
+  'next-connect router.handler()': `${imp}import { createRouter } from "next-connect"
+const router = createRouter()
+router.post(async (req, res) => {
+${body}
+})
+export default router.handler()
+`,
+}
+for (const [k, v] of Object.entries(cases)) log(k, '::', card({ 'pages/api/posts.ts': v }), '\n')
+assert.ok(outs.length >= 1)
+// (these handlers do check: a ✓ is right when plain can read it)
+for (const x of outs) assert.ok(!/Anyone|works without logging in|no longer requires login/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { outs.push(a.join(' ')) }
+// app router: handler shapes with no f.locals entry for the method, or a check in a same-file helper. REALISTIC.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ').replace(/^.*?(LOOK AT|✓ No problems)/, '$1')
+const cases: Record<string, Record<string, string>> = {
+  'NextAuth v5 export const POST = auth(fn) that checks req.auth': { 'app/api/posts/route.ts': `import { auth } from "@/auth"
+import { NextResponse } from "next/server"
+export const POST = auth(async function POST(req) {
+  if (!req.auth) return NextResponse.json({ message: "Not authenticated" }, { status: 401 })
+  await prisma.post.create({ data: { title: "x" } })
+  return NextResponse.json({ ok: true })
+})
+` },
+  'NextAuth v5 GET-only export const GET = auth(fn) that checks req.auth': { 'app/api/me/orders/route.ts': `import { auth } from "@/auth"
+export const GET = auth(async function GET(req) {
+  if (!req.auth) return Response.json({ message: "Not authenticated" }, { status: 401 })
+  const orders = await prisma.order.findMany({ where: { userId: req.auth.user.id } })
+  return Response.json(orders)
+})
+` },
+  'export { handler as GET, handler as POST }': { 'app/api/posts/route.ts': `import { auth } from "@/auth"
+async function handler(req: Request) {
+  const session = await auth()
+  if (!session) return new Response("Unauthorized", { status: 401 })
+  await prisma.post.create({ data: { title: "x" } })
+  return Response.json({ ok: true })
+}
+export { handler as GET, handler as POST }
+` },
+  'check in a same-file helper (getUserOrThrow)': { 'app/api/posts/route.ts': `import { auth } from "@/auth"
+async function getUserOrThrow() {
+  const session = await auth()
+  if (!session?.user) throw new Error("Unauthorized")
+  return session.user
+}
+export async function POST(req: Request) {
+  const user = await getUserOrThrow()
+  await prisma.post.create({ data: { title: "x", authorId: user.id } })
+  return Response.json({ ok: true })
+}
+` },
+}
+for (const [k, v] of Object.entries(cases)) log(k, '::', card(v), '\n')
+// an edit: moving the check into the v5 wrapper now reads as "no longer requires login"
+const before = `import { auth } from "@/auth"
+export async function POST(req: Request) {
+  const session = await auth()
+  if (!session) return new Response("Unauthorized", { status: 401 })
+  await prisma.post.create({ data: { title: "x" } })
+  return Response.json({ ok: true })
+}
+`, after = `import { auth } from "@/auth"
+export const POST = auth(async (req) => {
+  if (!req.auth) return new Response("Unauthorized", { status: 401 })
+  await prisma.post.create({ data: { title: "x" } })
+  return Response.json({ ok: true })
+})
+`
+log('edit to v5 wrapper ::', report(new Map(Object.entries({ ...nx, 'app/api/posts/route.ts': before })), new Map(Object.entries({ ...nx, 'app/api/posts/route.ts': after })), { ref: 'main' }).replace(/\s+/g, ' ').replace(/^.*?(LOOK AT|✓ No problems)/, '$1'))
+assert.ok(outs.length >= 2)
+// (these handlers do check: a ✓ is right when plain can read it)
+for (const x of outs) assert.ok(!/Anyone|works without logging in|no longer requires login/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { outs.push(a.join(' ')) }
+// authAlias: AUTH_CALL matches getUser(id) / getSession(id) lookups by id, and any `if (!x) return/notFound()` then counts as a login check.
+// REALISTIC: getUser(params.id) + notFound()/404 is the standard Next/SvelteKit/Nuxt lookup pattern.
+const run = (pkg: string, files: Record<string, string>) => { const b = { 'package.json': pkg }; return report(new Map(Object.entries(b)), new Map(Object.entries({ ...b, ...files })), { ref: 'main' }).replace(/\s+/g, ' ').replace(/^.*?(LOOK AT|✓ No problems)/, '$1') }
+const sk = '{"dependencies":{"@sveltejs/kit":"2.0.0"}}', nuxt = '{"dependencies":{"nuxt":"3.0.0"}}', next = '{"dependencies":{"next":"15.0.0"}}'
+const cases: [string, string, Record<string, string>][] = [
+  ['Next page: const profile = await getUser(params.id); if (!profile) notFound()', next, { 'app/account/[id]/page.tsx': `import { notFound } from "next/navigation"
+import { getUser } from "@/lib/users"
+export default async function Page({ params }) {
+  const profile = await getUser(params.id)
+  if (!profile) notFound()
+  return <main><h1>{profile.name}</h1><p>{profile.email}</p></main>
+}
+` }],
+  ['Next admin page: const workshop = await getSession(params.id)', next, { 'app/admin/sessions/[id]/page.tsx': `import { notFound } from "next/navigation"
+import { getSession } from "@/lib/sessions"
+export default async function Page({ params }) {
+  const workshop = await getSession(params.id)
+  if (!workshop) notFound()
+  return <main><h1>{workshop.title}</h1></main>
+}
+` }],
+  ['Next route: const chat = await getSession(params.id) -> 404', next, { 'app/api/chat/[id]/route.ts': `import { getSession } from "@/lib/chat-sessions"
+export async function DELETE(req: Request, { params }) {
+  const chat = await getSession(params.id)
+  if (!chat) return Response.json({ error: "Not found" }, { status: 404 })
+  await prisma.message.deleteMany({ where: { chatId: chat.id } })
+  return Response.json({ ok: true })
+}
+` }],
+  ['SvelteKit +server.ts: const target = await getUser(params.id) -> 404', sk, { 'src/routes/api/users/[id]/+server.ts': `import { getUser } from '$lib/server/users'
+import { json } from '@sveltejs/kit'
+export async function DELETE({ params }) {
+  const target = await getUser(params.id)
+  if (!target) return json({ error: 'not found' }, { status: 404 })
+  await db.user.delete({ where: { id: target.id } })
+  return json({ ok: true })
+}
+` }],
+  ['Nuxt server/api: const target = await getUser(id)', nuxt, { 'server/api/users/[id].delete.ts': `export default defineEventHandler(async (event) => {
+  const target = await getUser(getRouterParam(event, 'id'))
+  if (!target) return { error: 'not found' }
+  await db.user.delete({ where: { id: target.id } })
+  return { ok: true }
+})
+` }],
+  ['Next server action: const workshop = await getSession(id)', next, { 'app/actions.ts': `'use server'
+import { getSession } from '@/lib/workshops'
+export async function cancelSession(id: string) {
+  const workshop = await getSession(id)
+  if (!workshop) return { error: 'Not found' }
+  await prisma.booking.deleteMany({ where: { sessionId: id } })
+}
+` }],
+]
+for (const [k, pkg, v] of cases) log(k, '::', run(pkg, v), '\n')
+assert.ok(outs.length >= 1)
+for (const x of outs) assert.ok(!/requires login ✓|log in to open it ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { outs.push(a.join(' ')) }
+// middleware.ts guards /api; the handler reads auth() for the user id without its own check. HEAD: requires login ✓; NEW: flat
+// "works without logging in" / "Anyone can post". REALISTIC, but a trade-off: plain doesn't map Next middleware to routes at all.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ').replace(/^.*?(LOOK AT|✓ No problems)/, '$1')
+const mw = { 'middleware.ts': `import { auth } from "@/auth"
+export default auth((req) => { if (!req.auth) return Response.redirect(new URL("/login", req.url)) })
+export const config = { matcher: ["/api/:path*"] }
+` }
+log('GET ::', card({ ...mw, 'app/api/orders/route.ts': `import { auth } from "@/auth"
+export async function GET() {
+  const session = await auth()
+  const orders = await prisma.order.findMany({ where: { userId: session!.user!.id } })
+  return Response.json(orders)
+}
+` }), '\n')
+log('POST ::', card({ ...mw, 'app/api/posts/route.ts': `import { auth } from "@/auth"
+export async function POST(req: Request) {
+  const session = await auth()
+  await prisma.post.create({ data: { title: "x", authorId: session!.user!.id } })
+  return Response.json({ ok: true })
+}
+` }))
+assert.ok(outs.length >= 2)
+for (const x of outs) assert.ok(!/Anyone|works without logging in|no longer requires login|requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { outs.push(a.join(' ')) }
+// authAlias scope edge cases on SvelteKit (+server.ts uses handlerChecks, so new vs HEAD shows): CONTRIVED
+const b = { 'package.json': '{"dependencies":{"@sveltejs/kit":"2.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(b)), new Map(Object.entries({ ...b, ...files })), { ref: 'main' }).replace(/\s+/g, ' ').replace(/^.*?(LOOK AT|✓ No problems)/, '$1')
+const del = (body: string) => `import { json } from '@sveltejs/kit'\nexport async function DELETE({ request, locals }) {\n${body}\n  await db.user.delete({ where: { id: 1 } })\n  return json({})\n}\n`
+// for-of binding isn't a VariableStatement: the `me` in the loop resolves to the outer auth() alias
+log('for-of shadow ::', card({ 'src/routes/api/x/+server.ts': del(`  const me = await getCurrentUser()
+  for (const me of await request.json()) { if (!me) return json({ error: 'empty row' }, { status: 400 }) }`) }), '\n')
+// let reassigned to something else before the check
+log('let reassigned ::', card({ 'src/routes/api/x/+server.ts': del(`  let me = await getCurrentUser()
+  me = await db.profile.findFirst({ where: { slug: 'x' } })
+  if (!me) return json({}, { status: 404 })`) }), '\n')
+assert.ok(outs.length >= 2)
+for (const x of outs) assert.ok(!/requires login ✓/.test(x), x)
+}
+console.log('ok (review 50)')
+// Review 51: a 403 owner check or words like "forbidden" don't hide the warning; a middleware counts only about login and where its matcher
+// reaches; Clerk's auth().protect(); authorId isn't the request; pages/api read without comments, anonymous default handlers
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// The classic regression: the agent drops the session check and trusts a userId from the body; an ownership 403 stays.
+// HEAD: "no longer requires login" + warning. NEW: the 403 makes the handler "unread" -> guardUnknown -> silence?
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const run = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries({ ...nx, ...a })), new Map(Object.entries({ ...nx, ...b })), { ref: 'main' }).replace(/\s+/g, ' ')
+const before = `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+import { NextResponse } from "next/server"
+export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+  const session = await auth()
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const post = await prisma.post.findUnique({ where: { id: params.id } })
+  if (!post) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  if (post.authorId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  await prisma.post.delete({ where: { id: params.id } })
+  return NextResponse.json({ ok: true })
+}
+`
+const after = `import { prisma } from "@/lib/prisma"
+import { NextResponse } from "next/server"
+export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+  const { userId } = await req.json()
+  const post = await prisma.post.findUnique({ where: { id: params.id } })
+  if (!post) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  if (post.authorId !== userId) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  await prisma.post.delete({ where: { id: params.id } })
+  return NextResponse.json({ ok: true })
+}
+`
+log('swap ::', run({ 'app/api/posts/[id]/route.ts': before }, { 'app/api/posts/[id]/route.ts': after }))
+log()
+// new file, same shape
+log('new ::', run({}, { 'app/api/posts/[id]/route.ts': after }))
+assert.ok(outs.length >= 2)
+for (const x of outs) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// "unread" fires on any 401/403/unauthorized/forbidden/sign in/log in text in the handler: comments, error strings, identifiers.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const h = (body: string) => `import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const body = await req.json()
+${body}
+  const order = await prisma.order.create({ data: body })
+  return Response.json(order)
+}
+`
+log('TODO comment ::', card({ 'app/api/orders/route.ts': h('  // TODO: check the user is signed in before launch') }), '\n')
+log('login comment ::', card({ 'app/api/orders/route.ts': h('  // anyone can order without a login for now') }), '\n')
+log('assignInvoice ::', card({ 'app/api/orders/route.ts': h('  const n = await assignInvoiceNumber(body)') }), '\n')
+log('catalogIndex ::', card({ 'app/api/orders/route.ts': h('  const catalogIndex = body.items.length') }), '\n')
+log('validation forbidden ::', card({ 'app/api/orders/route.ts': h('  if (body.qty > 99) return Response.json({ error: "Quantity forbidden" }, { status: 400 })') }), '\n')
+log('baseline ::', card({ 'app/api/orders/route.ts': h('') }))
+assert.ok(outs.length >= 6)
+for (const x of outs) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// nextMw: any middleware.ts mentioning cookie/token/auth/... silences every unchecked route handler, even when the middleware
+// only does i18n, or its matcher excludes /api (the Next docs default matcher).
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const route = { 'app/api/orders/route.ts': `import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const order = await prisma.order.create({ data: await req.json() })
+  return Response.json(order)
+}
+` }
+const i18n = `import { NextResponse, type NextRequest } from "next/server"
+const locales = ["en", "fr"]
+export function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+  if (locales.some((l) => pathname.startsWith("/" + l))) return
+  const locale = request.cookies.get("NEXT_LOCALE")?.value ?? "en"
+  return NextResponse.redirect(new URL("/" + locale + pathname, request.url))
+}
+export const config = { matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"] }
+`
+const authNoApi = `import { NextResponse, type NextRequest } from "next/server"
+export function middleware(request: NextRequest) {
+  if (!request.cookies.get("session")) return NextResponse.redirect(new URL("/login", request.url))
+}
+export const config = { matcher: ["/((?!api|_next/static|_next/image|favicon.ico|login).*)"] }
+`
+const dashOnly = `export { auth as middleware } from "@/auth"
+export const config = { matcher: ["/dashboard/:path*"] }
+`
+log('i18n cookie mw ::', card({ ...route, 'middleware.ts': i18n }), '\n')
+log('auth mw, matcher excludes api ::', card({ ...route, 'middleware.ts': authNoApi }), '\n')
+log('auth mw, matcher /dashboard only ::', card({ ...route, 'middleware.ts': dashOnly }), '\n')
+log('no mw ::', card(route))
+assert.ok(outs.length >= 4)
+for (const x of outs) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// REQ_ARG's \w*[Aa]uth\w* accepts `authorId`: getUser(authorId) is a lookup of another user, but becomes "the session".
+const run = (pkg: string, files: Record<string, string>) => { const b = { 'package.json': pkg }; return report(new Map(Object.entries(b)), new Map(Object.entries({ ...b, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const sk = '{"dependencies":{"@sveltejs/kit":"2.0.0","@prisma/client":"5.0.0"}}', nuxt = '{"dependencies":{"nuxt":"3.0.0","@prisma/client":"5.0.0"}}', ex = '{"dependencies":{"express":"4.0.0","@prisma/client":"5.0.0"}}', next = '{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0"}}'
+log('express ::', run(ex, { 'server.js': `const express = require('express')
+const { getUser } = require('./users')
+const app = express()
+app.use(express.json())
+app.post('/api/posts', async (req, res) => {
+  const { authorId, title } = req.body
+  const author = await getUser(authorId)
+  if (!author) return res.status(400).json({ error: 'Unknown author' })
+  const post = await prisma.post.create({ data: { title, authorId: author.id } })
+  res.json(post)
+})
+app.listen(3000)
+` }), '\n')
+log('sveltekit ::', run(sk, { 'src/routes/api/posts/+server.ts': `import { json } from '@sveltejs/kit'
+import { getUser } from '$lib/server/users'
+export async function POST({ request }) {
+  const { authorId, title } = await request.json()
+  const author = await getUser(authorId)
+  if (!author) return json({ error: 'Unknown author' }, { status: 400 })
+  const post = await prisma.post.create({ data: { title, authorId: author.id } })
+  return json(post)
+}
+` }), '\n')
+log('nuxt ::', run(nuxt, { 'server/api/posts.post.ts': `export default defineEventHandler(async (event) => {
+  const { authorId, title } = await readBody(event)
+  const author = await getUser(authorId)
+  if (!author) throw createError({ statusCode: 400, statusMessage: 'Unknown author' })
+  return prisma.post.create({ data: { title, authorId: author.id } })
+})
+` }), '\n')
+log('next ::', run(next, { 'app/api/posts/route.ts': `import { getUser } from '@/lib/users'
+export async function POST(req: Request) {
+  const { authorId, title } = await req.json()
+  const author = await getUser(authorId)
+  if (!author) return Response.json({ error: 'Unknown author' }, { status: 400 })
+  const post = await prisma.post.create({ data: { title, authorId: author.id } })
+  return Response.json(post)
+}
+` }))
+assert.ok(outs.length >= 4)
+for (const x of outs) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// Clerk's documented route-handler guards: v5 `auth().protect()`, v6 `await auth.protect()`, and `const { userId } = await auth()`.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@clerk/nextjs":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const h = (head: string) => ({ 'app/api/orders/route.ts': `import { auth } from "@clerk/nextjs/server"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+${head}
+  const order = await prisma.order.create({ data: await req.json() })
+  return Response.json(order)
+}
+` })
+log('v5 auth().protect() ::', card(h('  auth().protect()')), '\n')
+log('v5 const { userId } = auth().protect() ::', card(h('  const { userId } = auth().protect()')), '\n')
+log('v6 await auth.protect() ::', card(h('  await auth.protect()')), '\n')
+log('(await auth()).protect() ::', card(h('  const a = await auth()\n  a.protect()')), '\n')
+log('userId check ::', card(h('  const { userId } = await auth()\n  if (!userId) return new Response("Unauthorized", { status: 401 })')), '\n')
+assert.ok(outs.length >= 5)
+for (const x of outs) assert.ok(!/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// "if (session) { ...protected...; return }  <guest reply>": the guard is the positive branch with no else.
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+// NextAuth v4 docs: pages/api/examples/protected.ts
+log('docs read ::', card({ 'pages/api/examples/protected.ts': `import { getServerSession } from "next-auth/next"
+import { authOptions } from "../auth/[...nextauth]"
+export default async (req, res) => {
+  const session = await getServerSession(req, res, authOptions)
+  if (session) {
+    return res.send({ content: "This is protected content. You can access this content because you are signed in." })
+  }
+  res.send({ error: "You must be signed in to view the protected content on this page." })
+}
+` }), '\n')
+log('write ::', card({ 'pages/api/orders.ts': `import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import { prisma } from "@/lib/prisma"
+export default async function handler(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  if (session) {
+    const order = await prisma.order.create({ data: { ...req.body, userId: session.user.id } })
+    return res.json(order)
+  }
+  res.send({ error: "You must be signed in." })
+}
+` }), '\n')
+log('app write ::', card({ 'app/api/orders/route.ts': `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const session = await auth()
+  if (session?.user) {
+    const order = await prisma.order.create({ data: { ...(await req.json()), userId: session.user.id } })
+    return Response.json(order)
+  }
+  return Response.json({ error: "You must be signed in" })
+}
+` }))
+assert.ok(outs.length >= 3)
+for (const x of outs) assert.ok(!/Anyone|works without logging in/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// The agent "temporarily" comments out the login check. pages/api arrow default: `read` tests the raw file text, comments included.
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const run = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries({ ...nx, ...a })), new Map(Object.entries({ ...nx, ...b })), { ref: 'main' }).replace(/\s+/g, ' ')
+const mk = (open: string, close: string, c: string) => `import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import { prisma } from "@/lib/prisma"
+${open}
+  ${c}const session = await getServerSession(req, res, authOptions)
+  ${c}if (!session) return res.status(401).json({ error: "Unauthorized" })
+  const order = await prisma.order.create({ data: req.body })
+  res.json(order)
+${close}
+`
+for (const [label, open, close] of [['arrow default', 'export default async (req, res) => {', '}'], ['named default', 'export default async function handler(req, res) {', '}']]) {
+  log(label, '::', run({ 'pages/api/orders.ts': mk(open, close, '') }, { 'pages/api/orders.ts': mk(open, close, '// ') }), '\n')
+}
+const app = (c: string) => `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  ${c}const session = await auth()
+  ${c}if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  const order = await prisma.order.create({ data: await req.json() })
+  return Response.json(order)
+}
+`
+log('app router ::', run({ 'app/api/orders/route.ts': app('') }, { 'app/api/orders/route.ts': app('// ') }))
+assert.ok(outs.length >= 2)
+for (const x of outs) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// PATCH checks login (readable), DELETE doesn't. plain can read both, but PATCH's own 401 makes the file "unread".
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log(card({ 'app/api/posts/[id]/route.ts': `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+export async function PATCH(req: Request, { params }) {
+  const session = await auth()
+  if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.post.update({ where: { id: params.id }, data: await req.json() })
+  return Response.json({ ok: true })
+}
+export async function DELETE(req: Request, { params }) {
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// pages/api default-export shapes the name/arrow regexes miss: anonymous function, `export default handler // comment`
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const body = `  const order = await prisma.order.create({ data: req.body })
+  res.json(order)`
+log('anon fn ::', card({ 'pages/api/orders.ts': `import { prisma } from "@/lib/prisma"
+export default async function (req, res) {
+${body}
+}
+` }), '\n')
+log('trailing comment ::', card({ 'pages/api/orders.ts': `import { prisma } from "@/lib/prisma"
+async function handler(req, res) {
+${body}
+}
+export default handler // pages router
+` }), '\n')
+log('arrow, unrelated 403 elsewhere in file ::', card({ 'pages/api/orders.ts': `import { prisma } from "@/lib/prisma"
+export default async (req, res) => {
+  if (req.body.qty > 99) return res.status(400).json({ error: "Quantity forbidden" })
+${body}
+}
+` }))
+assert.ok(outs.length >= 3)
+for (const x of outs) assert.ok(/Anyone/.test(x), x)
+}
+console.log('ok (review 51)')
+// Review 52: Next matchers read like path-to-regexp ('/' is the home page, /(a|b)/:path*, /:locale/...); a same-file helper awaited first
+// is the check; login words only in a branch or a reply demanding it; next-connect chains and an early return before the check aren't ✓
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// nextMw: matcher entries that only reach pages count as reaching every address, so an unchecked POST /api/orders loses its
+// "Anyone can" warning (HEAD warned). '/' in a Next matcher is the home page only, not a prefix of everything; '/(dashboard|account)/:path*'
+// and '/:locale/dashboard/:path*' are page-only too. The middleware itself is a real login middleware.
+// '/' + '/dashboard/:path*' is REALISTIC (protect the home feed and the dashboard); the other two less common.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const route = { 'app/api/orders/route.ts': `import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const order = await prisma.order.create({ data: await req.json() })
+  return Response.json(order)
+}
+` }
+const mw = (matcher: string) => ({ 'middleware.ts': `import { auth } from "@/auth"
+export default auth((req) => {
+  if (!req.auth) return Response.redirect(new URL("/login", req.nextUrl))
+})
+export const config = { matcher: ${matcher} }
+` })
+for (const m of ['["/", "/dashboard/:path*"]', '["/(dashboard|account)/:path*"]', '["/:locale/dashboard/:path*"]', '["/dashboard/:path*"]'])
+  log(m, '::', card({ ...route, ...mw(m) }), '\n')
+// matcher kept in a const and passed by shorthand: no `matcher:` text, so nextMw treats it as "no matcher = everything"
+log('shorthand ::', card({ ...route, 'middleware.ts': `import { auth } from "@/auth"
+const matcher = ["/dashboard/:path*"]
+export default auth((req) => {
+  if (!req.auth) return Response.redirect(new URL("/login", req.nextUrl))
+})
+export const config = { matcher }
+` }))
+assert.ok(outs.length >= 2)
+for (const x of outs) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// A same-file login helper whose stop has none of LOGIN_WORDS (401 / unauthorized / sign in / log in): "Unauthenticated",
+// "Not authenticated", a 403, redirect("/"). HEAD followed the helper and said "requires login ✓"; NEW reads the handler
+// alone (no check), finds no login words, calls it read, and warns "Anyone can". New false alarm. REALISTIC.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const file = (stop: string) => ({ 'app/api/orders/route.ts': `import { auth } from "@/auth"
+import { redirect } from "next/navigation"
+import { prisma } from "@/lib/prisma"
+async function getUserOrThrow() {
+  const session = await auth()
+  if (!session?.user) ${stop}
+  return session.user
+}
+export async function POST(req: Request) {
+  const user = await getUserOrThrow()
+  const order = await prisma.order.create({ data: { ...(await req.json()), userId: user.id } })
+  return Response.json(order)
+}
+` })
+for (const stop of ['throw new Error("Unauthenticated")', 'throw new Error("Not authenticated")', 'throw new Response("Forbidden", { status: 403 })', 'redirect("/")'])
+  log(stop, '::', card(file(stop)), '\n')
+// pages/api, same helper
+const pa = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const pcard = (files: Record<string, string>) => report(new Map(Object.entries(pa)), new Map(Object.entries({ ...pa, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log('pages/api ::', pcard({ 'pages/api/orders.ts': `import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+async function getUserOrThrow(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session?.user) throw new Error("Unauthenticated")
+  return session.user
+}
+export default async function handler(req, res) {
+  const user = await getUserOrThrow(req, res)
+  const order = await prisma.order.create({ data: { ...req.body, userId: user.id } })
+  res.json(order)
+}
+` }))
+assert.ok(outs.length >= 2)
+// (plain doesn't follow helpers: no ✓, but no false alarm either)
+for (const x of outs) assert.ok(!/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// LOGIN_WORDS (round 2: 401 / unauthorized / sign in / log in) still fires on user-facing copy that isn't a check: an open
+// guest-checkout POST whose reply or same-file email helper says "sign in to track it". The handler is fully readable and
+// checks nothing; HEAD warned "Anyone can", NEW is silent. REALISTIC (guest checkout / newsletter / contact copy).
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","resend":"3.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log('reply copy ::', card({ 'app/api/orders/route.ts': `import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const order = await prisma.order.create({ data: await req.json() })
+  return Response.json({ order, message: "Order placed! Sign in to track it." })
+}
+` }), '\n')
+log('email helper copy ::', card({ 'app/api/orders/route.ts': `import { prisma } from "@/lib/prisma"
+import { resend } from "@/lib/resend"
+async function sendConfirmation(email: string, id: string) {
+  await resend.emails.send({ from: "shop@example.com", to: email, subject: "Thanks!", text: "Log in to your account to track order " + id })
+}
+export async function POST(req: Request) {
+  const body = await req.json()
+  const order = await prisma.order.create({ data: body })
+  await sendConfirmation(body.email, order.id)
+  return Response.json(order)
+}
+` }), '\n')
+log('delete with copy ::', card({ 'app/api/orders/[id]/route.ts': `import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+  await prisma.order.delete({ where: { id: params.id } })
+  return Response.json({ ok: true, message: "Order cancelled. Log in to see your other orders." })
+}
+` }))
+assert.ok(outs.length >= 3)
+for (const x of outs) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// PRE-EXISTING false ✓ (HEAD and NEW): pages/api where one method checks login and another that writes does not.
+// A: a next-connect chain inline in `export default`: exportAuth = handlerChecks(collect over the whole chain), so .get's check
+//    covers .delete. B: `if (req.method === "DELETE") return deletePost(req, res)` before the check: WRITE_CALL doesn't see the
+//    write inside the same-file helper, so the later check counts as unconditional. B REALISTIC; A moderately.
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","next-connect":"1.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+// A: next-connect inline chain: GET checks, DELETE doesn't
+log('A nc chain ::', card({ 'pages/api/posts.ts': `import { createRouter } from "next-connect"
+import { getServerSession } from "next-auth/next"
+import { authOptions } from "../auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+export default createRouter()
+  .get(async (req, res) => {
+    const session = await getServerSession(req, res, authOptions)
+    if (!session) return res.status(401).json({ error: "Unauthorized" })
+    res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+  })
+  .delete(async (req, res) => {
+    await prisma.post.delete({ where: { id: req.query.id } })
+    res.json({ ok: true })
+  })
+  .handler()
+` }), '\n')
+// B: dispatch to helper before the check
+log('B dispatch-before-check ::', card({ 'pages/api/posts.ts': `import { getServerSession } from "next-auth/next"
+import { authOptions } from "../auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+async function deletePost(req, res) {
+  await prisma.post.delete({ where: { id: req.query.id } })
+  res.json({ ok: true })
+}
+export default async function handler(req, res) {
+  if (req.method === "DELETE") return deletePost(req, res)
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+}
+` }), '\n')
+assert.ok(outs.length >= 2)
+for (const x of outs) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// PRE-EXISTING false alarm (HEAD and NEW) that the new nextMw was meant to cover but misses: Clerk's documented middleware.
+// Its matcher contains `[^?]` so `\[[^\]]*\]` stops mid-pattern (no closed string -> no entries), and its "/(api|trpc)(.*)"
+// entry is a `/(`-pattern that mentions api, which nextMw reads as "excludes api" when it means "always run for API routes".
+// The middleware protects /api/(.*) with auth.protect(); plain still says "Anyone can". REALISTIC (Clerk's quickstart).
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@clerk/nextjs":"6.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const open = { 'app/api/orders/route.ts': `import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const order = await prisma.order.create({ data: await req.json() })
+  return Response.json(order)
+}
+` }
+// D: Clerk canonical middleware protecting /api
+log('D clerk mw ::', card({ ...open, 'middleware.ts': `import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server"
+const isProtectedRoute = createRouteMatcher(["/dashboard(.*)", "/api/(.*)"])
+export default clerkMiddleware(async (auth, req) => {
+  if (isProtectedRoute(req)) await auth.protect()
+})
+export const config = {
+  matcher: [
+    "/((?!_next|[^?]*\\\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    "/(api|trpc)(.*)",
+  ],
+}
+` }), '\n')
+assert.ok(outs.length >= 1)
+// (plain doesn't read middleware for Next route handlers: it warns as before, and never gives a ✓ it can't back)
+for (const x of outs) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// PRE-EXISTING false alarm (HEAD and NEW), not fixed by the alias rule: GET and POST in one route.ts each do
+// `const me = await getCurrentUser(); if (!me) <stop>`. The "assigned more than once in the file" count sees two `me =` and drops
+// the alias in both. With a 401 the file goes quiet (unread); with a 403 / "Not authenticated" throw it warns "Anyone can".
+// F4 (POST alone) shows the alias itself works. REALISTIC layout; the 403/throw stop is less common than 401.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@clerk/nextjs":"6.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+// F: same alias name in two methods
+const two = (stop: string) => `import { getCurrentUser } from "@/lib/session"
+import { prisma } from "@/lib/prisma"
+export async function GET() {
+  const me = await getCurrentUser()
+  if (!me) ${stop}
+  return Response.json(await prisma.order.findMany({ where: { userId: me.id } }))
+}
+export async function POST(req: Request) {
+  const me = await getCurrentUser()
+  if (!me) ${stop}
+  const order = await prisma.order.create({ data: { ...(await req.json()), userId: me.id } })
+  return Response.json(order)
+}
+`
+log('F1 two aliases 401 ::', card({ 'app/api/orders/route.ts': two('return new Response(null, { status: 401 })') }), '\n')
+log('F2 two aliases 403 ::', card({ 'app/api/orders/route.ts': two('return Response.json({ error: "Forbidden" }, { status: 403 })') }), '\n')
+log('F3 two aliases throw ::', card({ 'app/api/orders/route.ts': two('throw new Error("Not authenticated")') }), '\n')
+log('F4 one alias 403 ::', card({ 'app/api/orders/route.ts': two('return Response.json({ error: "Forbidden" }, { status: 403 })').replace(/export async function GET[\s\S]*?\n}\n/, '') }), '\n')
+assert.ok(outs.length >= 4)
+for (const x of outs) assert.ok(!/Anyone/.test(x), x)
+}
+console.log('ok (review 52)')
+// Review 53: Next route handlers only lose an old ✓ plain can't back (saying neither), never gain a warning they didn't have; a same-file
+// helper counts only when it throws or redirects (not a returned 401 the caller ignores); next-connect chains, an early return before the check
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// PATCH checks login with a library HEAD's AUTH set doesn't know (better-auth / T3 / Lucia), DELETE checks nothing.
+// HEAD: no ✓ -> "Anyone can" warning (true for DELETE). NEW: PATCH's own 401 makes the whole file "unread" -> guardUnknown -> silent.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","better-auth":"1.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+for (const [lib, get] of [['better-auth', 'auth.api.getSession({ headers: await headers() })'], ['t3', 'getServerAuthSession()'], ['lucia', 'validateRequest()']])
+log(lib, '::', card({ 'app/api/posts/[id]/route.ts': `import { auth } from "@/lib/auth"
+import { headers } from "next/headers"
+import { getServerAuthSession } from "@/server/auth"
+import { validateRequest } from "@/lib/lucia"
+import { prisma } from "@/lib/prisma"
+export async function PATCH(req: Request, { params }) {
+  const session = await ${get}
+  if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.post.update({ where: { id: params.id }, data: await req.json() })
+  return Response.json({ ok: true })
+}
+export async function DELETE(req: Request, { params }) {
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }), '\n')
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// Same-file login helper (its stop has no 401/"unauthorized"/"sign in" words), called NOT as the first statement:
+// after `await req.json()`, or inside try { }. leadCalls is empty, so the helper isn't followed; loginWords finds nothing;
+// NEW calls the handler read and warns "Anyone can". HEAD: ✓ (auth() in the file). New false alarm. REALISTIC.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const helper = `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+async function getUserOrThrow() {
+  const session = await auth()
+  if (!session?.user) throw new Error("Not authenticated")
+  return session.user
+}
+`
+log('after req.json ::', card({ 'app/api/orders/route.ts': helper + `export async function POST(req: Request) {
+  const body = await req.json()
+  const user = await getUserOrThrow()
+  const order = await prisma.order.create({ data: { ...body, userId: user.id } })
+  return Response.json(order)
+}
+` }), '\n')
+log('in try ::', card({ 'app/api/orders/route.ts': helper + `export async function POST(req: Request) {
+  try {
+    const user = await getUserOrThrow()
+    const order = await prisma.order.create({ data: { ...(await req.json()), userId: user.id } })
+    return Response.json(order)
+  } catch (e) {
+    return Response.json({ error: (e as Error).message }, { status: 500 })
+  }
+}
+` }), '\n')
+log('not awaited-statement (user.id) ::', card({ 'app/api/orders/route.ts': helper + `export async function POST(req: Request) {
+  const { items } = await req.json()
+  const order = await prisma.order.create({ data: { items, userId: (await getUserOrThrow()).id } })
+  return Response.json(order)
+}
+` }), '\n')
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// A same-file helper whose login check RETURNS a 401 Response (doesn't throw), awaited first by the handler, which ignores
+// what it returns and goes on to write. Guests get through. NEW follows the helper (leadCalls + handlerChecks) and says
+// "requires login ✓": a return in the helper stops the helper, not the caller. With a session getter HEAD's AUTH set doesn't
+// know (T3's getServerAuthSession, better-auth), HEAD warned "Anyone can"; NEW claims ✓. FALSE REASSURANCE. REALISTIC: the
+// helper is meant for `const r = await checkAuth(); if (r instanceof Response) return r`, and the second line gets forgotten.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+for (const getter of ['getServerAuthSession()', 'auth()'])
+log(getter, '::', card({ 'app/api/posts/route.ts': `import { getServerAuthSession } from "@/server/auth"
+import { auth } from "@/auth"
+import { NextResponse } from "next/server"
+import { prisma } from "@/lib/prisma"
+async function checkAuth() {
+  const session = await ${getter}
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  return null
+}
+export async function POST(req: Request) {
+  await checkAuth()
+  const post = await prisma.post.create({ data: await req.json() })
+  return NextResponse.json(post)
+}
+` }), '\n')
+// pages/api: same thing
+const pa = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const pcard = (files: Record<string, string>) => report(new Map(Object.entries(pa)), new Map(Object.entries({ ...pa, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log('pages/api ::', pcard({ 'pages/api/posts.ts': `import { getServerAuthSession } from "@/server/auth"
+import prisma from "@/lib/prisma"
+async function checkAuth(req, res) {
+  const session = await getServerAuthSession({ req, res })
+  if (!session) { res.status(401).json({ error: "Unauthorized" }); return }
+  return session
+}
+export default async function handler(req, res) {
+  await checkAuth(req, res)
+  const post = await prisma.post.create({ data: req.body })
+  res.json(post)
+}
+` }))
+// Variant: the helper throws, but its own try/catch swallows the throw and returns null (the common getCurrentUser shape);
+// the caller ignores the result. The server-action path has a `swallows` test for exactly this; the route-handler path doesn't.
+log('helper swallows its throw ::', card({ 'app/api/posts/[id]/route.ts': `import { getServerAuthSession } from "@/server/auth"
+import { prisma } from "@/lib/prisma"
+async function ensureSignedIn() {
+  try {
+    const session = await getServerAuthSession()
+    if (!session?.user) throw new Error("Unauthorized")
+    return session.user
+  } catch (error) {
+    console.error(error)
+    return null
+  }
+}
+export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+  await ensureSignedIn()
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }))
+// Variant: the helper is NAMED like a guard (requireAuth: REQUIRE_LOGIN), same file, readable, and returns the 401 instead of
+// throwing; the caller drops the result. NEW credits it by name (an authIf with req: true counts in handlerChecks) -> ✓.
+log('requireAuth by name, returns ::', card({ 'app/api/posts/route.ts': `import { getServerAuthSession } from "@/server/auth"
+import { NextResponse } from "next/server"
+import { prisma } from "@/lib/prisma"
+function requireAuth(session: unknown) {
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+}
+export async function POST(req: Request) {
+  const session = await getServerAuthSession()
+  requireAuth(session)
+  const post = await prisma.post.create({ data: await req.json() })
+  return NextResponse.json(post)
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// nextMw: "a middleware about login whose matcher reaches the address" silences every unchecked route handler, without
+// asking whether the middleware turns anyone away. Clerk's quickstart middleware is `export default clerkMiddleware()` with
+// that exact matcher: since Clerk v5 it protects NOTHING (all routes public unless auth.protect() is called). Every Clerk app
+// has this file. HEAD warned "Anyone can" on an unchecked POST; NEW is silent. Same for NextAuth's `export default auth((req) => ...)`
+// that only redirects /dashboard pages (no matcher). LOST WARNING. REALISTIC (Clerk quickstart verbatim).
+const run = (deps: string, files: Record<string, string>) => { const nx = { 'package.json': `{"dependencies":{"next":"15.0.0",${deps},"@prisma/client":"5.0.0"}}` }
+  return report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const route = { 'app/api/orders/route.ts': `import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const order = await prisma.order.create({ data: await req.json() })
+  return Response.json(order)
+}
+` }
+log('clerk quickstart ::', run('"@clerk/nextjs":"6.0.0"', { ...route, 'middleware.ts': `import { clerkMiddleware } from "@clerk/nextjs/server";
+
+export default clerkMiddleware();
+
+export const config = {
+  matcher: [
+    // Skip Next.js internals and all static files, unless found in search params
+    '/((?!_next|[^?]*\\\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    // Always run for API routes
+    '/(api|trpc)(.*)',
+  ],
+};
+` }), '\n')
+log('clerk public-by-default, protects only /dashboard ::', run('"@clerk/nextjs":"6.0.0"', { ...route, 'middleware.ts': `import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+const isProtectedRoute = createRouteMatcher(["/dashboard(.*)"]);
+export default clerkMiddleware(async (auth, req) => {
+  if (isProtectedRoute(req)) await auth.protect();
+});
+export const config = { matcher: ["/((?!_next|[^?]*\\\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)", "/(api|trpc)(.*)"] };
+` }), '\n')
+log('next-auth, pages only, no matcher ::', run('"next-auth":"5.0.0"', { ...route, 'middleware.ts': `import { auth } from "@/auth"
+export default auth((req) => {
+  if (!req.auth && req.nextUrl.pathname.startsWith("/dashboard")) {
+    return Response.redirect(new URL("/login", req.nextUrl.origin))
+  }
+})
+` }), '\n')
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// nextMw's path-to-regexp conversion rewrites every `:word` into `[^/]+`, including the `?:` of a regex non-capturing group
+// inside a matcher (`(?:svg|png)`). The pattern becomes invalid, the catch says "covers", and a login middleware whose matcher
+// EXCLUDES /api (the Next docs' `(?!api|...)`) is taken to cover /api/orders. HEAD warned "Anyone can"; NEW is silent.
+// LOST WARNING. REALISTIC: the docs' api exclusion plus the Supabase/Clerk-style static-file exclusion `.*\\.(?:svg|png|...)$`.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const route = { 'app/api/orders/route.ts': `import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const order = await prisma.order.create({ data: await req.json() })
+  return Response.json(order)
+}
+` }
+const mw = (matcher: string) => ({ 'middleware.ts': `import { auth } from "@/auth"
+export default auth((req) => {
+  if (!req.auth) return Response.redirect(new URL("/login", req.nextUrl.origin))
+})
+export const config = { matcher: [${matcher}] }
+` })
+log('excludes api, no group ::', card({ ...route, ...mw(`"/((?!api|_next/static|_next/image|favicon.ico|login).*)"`) }), '\n')
+log('excludes api, (?:png|svg) ::', card({ ...route, ...mw(`"/((?!api|_next/static|_next/image|favicon.ico|login|.*\\\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"`) }), '\n')
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// Method dispatch to same-file helpers that each check login, with a 403 / "Not authenticated" stop (no 401 / "unauthorized" /
+// "sign in" words). The handler itself checks nothing; the helpers aren't lead calls (`return createPost(...)` in a switch, or
+// `return handleCreate(req)` without await), so `checks` doesn't follow them and loginWords finds nothing -> "read" -> warning.
+// HEAD: ✓ (getServerSession / auth() in the file). NEW: "Anyone can". New false alarm. REALISTIC (switch(req.method) dispatch is
+// a very common pages/api layout; 403 for "not logged in" is common in hobby code).
+const pa = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(pa)), new Map(Object.entries({ ...pa, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log('pages/api switch ::', card({ 'pages/api/posts.ts': `import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+export default async function handler(req, res) {
+  switch (req.method) {
+    case "POST":
+      return createPost(req, res)
+    case "DELETE":
+      return deletePost(req, res)
+    default:
+      return res.status(405).end()
+  }
+}
+async function createPost(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(403).json({ message: "Not authenticated" })
+  const post = await prisma.post.create({ data: { ...req.body, authorId: session.user.id } })
+  return res.json(post)
+}
+async function deletePost(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(403).json({ message: "Not authenticated" })
+  await prisma.post.delete({ where: { id: req.query.id, authorId: session.user.id } })
+  return res.status(204).end()
+}
+` }), '\n')
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card2 = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log('app route, return helper(req) ::', card2({ 'app/api/posts/route.ts': `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+async function handleCreate(req: Request) {
+  const session = await auth()
+  if (!session?.user) return Response.json({ error: "Not authenticated" }, { status: 403 })
+  const post = await prisma.post.create({ data: { ...(await req.json()), authorId: session.user.id } })
+  return Response.json(post)
+}
+export async function POST(req: Request) {
+  return handleCreate(req)
+}
+` }))
+// Variant: the inline if / else-if on req.method, each branch checking login itself (checks sit under a non-path condition or an
+// else, so none is "unconditional"); 403 + "Not authenticated" -> no login words -> warning.
+log('pages/api if/else-if per method ::', card({ 'pages/api/posts.ts': `import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+export default async function handler(req, res) {
+  if (req.method === "POST") {
+    const session = await getServerSession(req, res, authOptions)
+    if (!session) return res.status(403).json({ message: "Not authenticated" })
+    const post = await prisma.post.create({ data: { ...req.body, authorId: session.user.id } })
+    return res.json(post)
+  } else if (req.method === "DELETE") {
+    const session = await getServerSession(req, res, authOptions)
+    if (!session) return res.status(403).json({ message: "Not authenticated" })
+    await prisma.post.delete({ where: { id: String(req.query.id), authorId: session.user.id } })
+    return res.status(204).end()
+  }
+  res.status(405).end()
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// Same as p07 but with next-auth/react getSession({ req }) (not in HEAD's AUTH set): HEAD warned "Anyone can", NEW says ✓ -> NEW false reassurance.
+// Gaps in the round-3 fixes for review52/p01 (false ✓, same as HEAD, so not a regression, but the fix doesn't hold):
+// A: next-connect chain written with type arguments `nc<NextApiRequest, NextApiResponse>()` (the usual TS form) or with an
+//    inline onError arrow `nc({ onError: (err, req, res) => ... })`: the `chain` regex `[\w$.]+\([^)]*\)\s*\.` misses both, so
+//    .get's check covers .delete again -> ✓. REALISTIC.
+// B: dispatch-before-check whose check is return-style without a 401/403 status (`return res.json({ error: ... })`): it lands
+//    in authReturn, not authIfs, so `early` (which only looks for an authIf after the skip) finds nothing -> ✓. Less common.
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","next-connect":"0.13.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const chain = (mk: string) => ({ 'pages/api/posts.ts': `import nc from "next-connect"
+import type { NextApiRequest, NextApiResponse } from "next"
+import { getSession } from "next-auth/react"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+export default ${mk}
+  .get(async (req, res) => {
+    const session = await getSession({ req })
+    if (!session) return res.status(403).json({ error: "Not authenticated" })
+    res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+  })
+  .delete(async (req, res) => {
+    await prisma.post.delete({ where: { id: String(req.query.id) } })
+    res.json({ ok: true })
+  })
+` })
+log('A0 nc() (fixed) ::', card(chain('nc()')), '\n')
+log('A1 nc<Req, Res>() ::', card(chain('nc<NextApiRequest, NextApiResponse>()')), '\n')
+log('A2 nc({ onError: arrow }) ::', card(chain('nc({ onError: (err, req, res) => res.status(500).end(err.message) })')), '\n')
+log('B early + return-style check ::', card({ 'pages/api/posts.ts': `import { getSession } from "next-auth/react"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+async function deletePost(req, res) {
+  await prisma.post.delete({ where: { id: String(req.query.id) } })
+  res.json({ ok: true })
+}
+export default async function handler(req, res) {
+  if (req.method === "DELETE") return deletePost(req, res)
+  const session = await getSession({ req })
+  if (!session) return res.json({ error: "Not authenticated" })
+  res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// Inline login checks plain doesn't credit, whose stop has none of the login words (401 / unauthorized / must..sign in /
+// sign in inside an if). NEW reads the handler as "read", finds no check, warns "Anyone can". HEAD: ✓ (auth() in the file).
+// New false alarms. A (positive if, no else, 403) and B (session field copied to a local) REALISTIC-ish; C (throw with a
+// message lacking auth/login words) less common.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const r = (body: string) => card({ 'app/api/orders/route.ts': `import { auth } from "@/auth"
+import { NextResponse } from "next/server"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+${body}
+}
+` })
+log('A positive if, 403 after ::', r(`  const session = await auth()
+  if (session?.user) {
+    const order = await prisma.order.create({ data: { ...(await req.json()), userId: session.user.id } })
+    return NextResponse.json(order)
+  }
+  return NextResponse.json({ error: "Not authenticated" }, { status: 403 })`), '\n')
+log('B email local ::', r(`  const session = await auth()
+  const email = session?.user?.email
+  if (!email) return NextResponse.json({ error: "Not authenticated" }, { status: 403 })
+  const order = await prisma.order.create({ data: { ...(await req.json()), email } })
+  return NextResponse.json(order)`), '\n')
+log('C throw "No session" ::', r(`  const session = await auth()
+  if (!session) throw new Error("No session")
+  const order = await prisma.order.create({ data: { ...(await req.json()), userId: session.user.id } })
+  return NextResponse.json(order)`), '\n')
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// loginWords' bare `\b401\b|unauthori[sz]ed` fires on 401s that aren't this app's login: an upstream API (OpenAI, GitHub)
+// rejecting the server's own key. The handler checks nobody's login and is fully readable; HEAD warned "Anyone can",
+// NEW is silent. LOST WARNING. REALISTIC (AI-wrapper chat routes map OpenAI's 401 to "invalid API key" all the time; this is
+// exactly the route where "anyone can use it" costs the owner money).
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","openai":"4.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log('openai 401 ::', card({ 'app/api/chat/route.ts': `import OpenAI from "openai"
+import { prisma } from "@/lib/prisma"
+const openai = new OpenAI()
+export async function POST(req: Request) {
+  const { messages } = await req.json()
+  try {
+    const completion = await openai.chat.completions.create({ model: "gpt-4o", messages })
+    await prisma.message.create({ data: { content: completion.choices[0].message.content ?? "" } })
+    return Response.json(completion.choices[0].message)
+  } catch (err: any) {
+    if (err.status === 401) return Response.json({ error: "Invalid OpenAI API key" }, { status: 500 })
+    return Response.json({ error: "Something went wrong" }, { status: 500 })
+  }
+}
+` }), '\n')
+log('upstream Unauthorized ::', card({ 'app/api/orders/route.ts': `import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const body = await req.json()
+  const r = await fetch("https://api.example-erp.com/orders", { method: "POST", headers: { Authorization: \`Bearer \${process.env.ERP_KEY}\` }, body: JSON.stringify(body) })
+  if (r.status === 401) throw new Error("ERP rejected our key (Unauthorized)")
+  const order = await prisma.order.create({ data: body })
+  return Response.json(order)
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// pages/api with an inline / anonymous default export (`export default async (req, res) => ...`, `export default async function (req, res)`):
+// yes = exportAuth (the export's own check) only. The round-3 lead-call rule (`checks(g)`: a same-file helper awaited first) is
+// applied only to a NAMED handler, so the same helper awaited first is ignored here. Its stop (403 / "Not authenticated") has
+// no login words -> "read" -> "Anyone can". Named handler (control) -> ✓. HEAD: ✓ for all three. New false alarm. REALISTIC.
+const pa = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(pa)), new Map(Object.entries({ ...pa, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const helper = `import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+async function getUserOrThrow(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session?.user) throw new Error("Not authenticated")
+  return session.user
+}
+`
+const body = `
+  const user = await getUserOrThrow(req, res)
+  const post = await prisma.post.create({ data: { ...req.body, authorId: user.id } })
+  res.json(post)
+}
+`
+log('named (control) ::', card({ 'pages/api/posts.ts': helper + 'export default async function handler(req, res) {' + body }), '\n')
+log('arrow default ::', card({ 'pages/api/posts.ts': helper + 'export default async (req, res) => {' + body }), '\n')
+log('anonymous function ::', card({ 'pages/api/posts.ts': helper + 'export default async function (req, res) {' + body }), '\n')
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ')) }
+// Gaps in the round-3 fixes for review52/p01 (false ✓, same as HEAD, so not a regression, but the fix doesn't hold):
+// A: next-connect chain written with type arguments `nc<NextApiRequest, NextApiResponse>()` (the usual TS form) or with an
+//    inline onError arrow `nc({ onError: (err, req, res) => ... })`: the `chain` regex `[\w$.]+\([^)]*\)\s*\.` misses both, so
+//    .get's check covers .delete again -> ✓. REALISTIC.
+// B: dispatch-before-check whose check is return-style without a 401/403 status (`return res.json({ error: ... })`): it lands
+//    in authReturn, not authIfs, so `early` (which only looks for an authIf after the skip) finds nothing -> ✓. Less common.
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","next-connect":"0.13.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const chain = (mk: string) => ({ 'pages/api/posts.ts': `import nc from "next-connect"
+import type { NextApiRequest, NextApiResponse } from "next"
+import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+export default ${mk}
+  .get(async (req, res) => {
+    const session = await getServerSession(req, res, authOptions)
+    if (!session) return res.status(403).json({ error: "Not authenticated" })
+    res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+  })
+  .delete(async (req, res) => {
+    await prisma.post.delete({ where: { id: String(req.query.id) } })
+    res.json({ ok: true })
+  })
+` })
+log('A0 nc() (fixed) ::', card(chain('nc()')), '\n')
+log('A1 nc<Req, Res>() ::', card(chain('nc<NextApiRequest, NextApiResponse>()')), '\n')
+log('A2 nc({ onError: arrow }) ::', card(chain('nc({ onError: (err, req, res) => res.status(500).end(err.message) })')), '\n')
+log('B early + return-style check ::', card({ 'pages/api/posts.ts': `import { getServerSession } from "next-auth/next"
+import { authOptions } from "./auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+async function deletePost(req, res) {
+  await prisma.post.delete({ where: { id: String(req.query.id) } })
+  res.json({ ok: true })
+}
+export default async function handler(req, res) {
+  if (req.method === "DELETE") return deletePost(req, res)
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.json({ error: "Not authenticated" })
+  res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/requires login ✓/.test(x), x)
+}
+console.log('ok (review 53)')
+// Review 54: a Next ✓ needs the session itself (a userId from the body, a findById 404 isn't a login); a helper's returned
+// NextResponse.redirect doesn't stop the caller; an alias must be awaited; methods exported by another name, switch hand-offs; Supabase
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// Next route handlers: false ✓ attempts against invariant (a)
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const R = 'app/api/posts/[id]/route.ts'
+// A: lead helper that RETURNS NextResponse.redirect (not a throw); result ignored
+log('A lead helper returns NextResponse.redirect ::', card({ [R]: `import { auth } from "@/auth"
+import { NextResponse } from "next/server"
+import { prisma } from "@/lib/prisma"
+async function getUserOrRedirect(req: Request) {
+  const session = await auth()
+  if (!session) return NextResponse.redirect(new URL("/login", req.url))
+  return session.user
+}
+export async function DELETE(req: Request, { params }) {
+  await getUserOrRedirect(req)
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }))
+// A2: same, Response.redirect
+log('A2 lead helper returns Response.redirect ::', card({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+async function getUserOrRedirect(req: Request) {
+  const session = await auth()
+  if (!session) return Response.redirect(new URL("/login", req.url))
+  return session.user
+}
+export async function DELETE(req: Request, { params }) {
+  const user = await getUserOrRedirect(req)
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }))
+// B: return-style check nested under a non-path condition (authReturn is a boolean, ignores conds)
+log('B conditional return-style check ::', card({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request, { params }) {
+  const session = await auth()
+  const { action } = await req.json()
+  if (action === "archive") {
+    if (!session) return Response.json({ error: "Login required" })
+  }
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }))
+// C: export { handler as DELETE } unchecked, POST checked
+log('C export-as DELETE unchecked ::', card({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request, { params }) {
+  const session = await auth()
+  if (!session) return Response.json({ error: "no" }, { status: 401 })
+  await prisma.post.update({ where: { id: params.id }, data: await req.json() })
+  return Response.json({ ok: true })
+}
+async function remove(req: Request, { params }) {
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+export { remove as DELETE }
+` }))
+// D: alias without await (NextAuth v5 auth() is async -> Promise always truthy)
+log('D alias no await ::', card({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request, { params }) {
+  const s = auth()
+  if (!s) return Response.json({ error: "no" }, { status: 401 })
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }))
+// E: check after a raw sql write (WRITE_CALL misses sql``)
+log('E check after sql write ::', card({ [R]: `import { auth } from "@/auth"
+import { sql } from "@vercel/postgres"
+export async function DELETE(req: Request, { params }) {
+  await sql\`DELETE FROM posts WHERE id = \${params.id}\`
+  const session = await auth()
+  if (!session) return Response.json({ error: "no" }, { status: 401 })
+  return Response.json({ ok: true })
+}
+` }))
+// F: lead helper throws but helper itself catches nothing; handler has the lead call but via a local whose check is require* by name
+log('F local requireUser returns null, called by name ::', card({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+import { requireUser } from "@/lib/guards"
+export async function DELETE(req: Request, { params }) {
+  await requireUser()
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }))
+// G: imported getter renamed to requireUser
+log('G import { getSession as requireUser } ::', card({ [R]: `import { getSession as requireUser } from "@/lib/session"
+import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request, { params }) {
+  await requireUser()
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+` }))
+log('C2 export const DELETE = remove (unchecked) ::', card({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request, { params }) {
+  const session = await auth()
+  if (!session) return Response.json({ error: "no" }, { status: 401 })
+  await prisma.post.update({ where: { id: params.id }, data: await req.json() })
+  return Response.json({ ok: true })
+}
+async function remove(req: Request, { params }) {
+  await prisma.post.delete({ where: { id: params.id } })
+  return Response.json({ ok: true })
+}
+export const DELETE = remove
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) if (new RegExp(String.raw`^(A |A2 |C |C2 |SB1|SB2|S1 |S2 |S3 |S5 |S6 |SA3|SA4|SA6|PG2|SK2|NU2)`).test(x)) assert.ok(!/requires login ✓|log in to open it ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: false ✓ attempts
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const P = 'pages/api/posts/[id].ts'
+const H = `import { getServerSession } from "next-auth/next"
+import { authOptions } from "../auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+`
+// A: write pass-through whose own text happens to contain a 404 (rej misfires)
+log('A DELETE pass-through w/ ternary 404 ::', card({ [P]: H + `export default async function handler(req, res) {
+  const id = String(req.query.id)
+  if (req.method === "DELETE") {
+    const { count } = await prisma.post.deleteMany({ where: { id } })
+    return count ? res.status(204).end() : res.status(404).json({ error: "Not found" })
+  }
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  await prisma.post.update({ where: { id }, data: req.body })
+  res.json({ ok: true })
+}
+` }))
+// B: same with control (no 404)
+log('B DELETE pass-through control ::', card({ [P]: H + `export default async function handler(req, res) {
+  const id = String(req.query.id)
+  if (req.method === "DELETE") {
+    await prisma.post.delete({ where: { id } })
+    return res.status(204).end()
+  }
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  await prisma.post.update({ where: { id }, data: req.body })
+  res.json({ ok: true })
+}
+` }))
+// C: export default allowCors(handler) wrapper (common Vercel pattern) where handler checks nothing
+log('C allowCors(handler) unchecked ::', card({ [P]: H + `const allowCors = (fn) => async (req, res) => { res.setHeader("Access-Control-Allow-Origin", "*"); return fn(req, res) }
+async function handler(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  log(session?.user?.email)
+  await prisma.post.delete({ where: { id: String(req.query.id) } })
+  res.json({ ok: true })
+}
+export default allowCors(handler)
+` }))
+// D: wrapper whose argument is an inline function that checks, but wrapper is a method-router: withMethods({ GET: fn, DELETE: fn2 })
+log('D wrapper with object of methods ::', card({ [P]: H + `import { withMethods } from "@/lib/api"
+export default withMethods({
+  GET: async (req, res) => {
+    const session = await getServerSession(req, res, authOptions)
+    if (!session) return res.status(401).json({ error: "Unauthorized" })
+    res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+  },
+  DELETE: async (req, res) => {
+    await prisma.post.delete({ where: { id: String(req.query.id) } })
+    res.json({ ok: true })
+  },
+})
+` }))
+// E: two inline arrows passed to a wrapper: withAuthOptional(getHandler, deleteHandler)-ish
+log('E wrapper with two inline fns ::', card({ [P]: H + `import { route } from "@/lib/api"
+export default route(
+  async (req, res) => {
+    const session = await getServerSession(req, res, authOptions)
+    if (!session) return res.status(401).json({ error: "Unauthorized" })
+    res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+  },
+  async (req, res) => {
+    await prisma.post.delete({ where: { id: String(req.query.id) } })
+    res.json({ ok: true })
+  },
+)
+` }))
+// F: named handler, check inside nested helper function declared inside handler (shouldn't count)
+log('F alias via arrow param shadow ::', card({ [P]: H + `export default async function handler(req, res) {
+  const s = await getServerSession(req, res, authOptions)
+  const run = async ({ s }) => {
+    if (!s) return res.status(401).json({ error: "Unauthorized" })
+  }
+  await run({ s: true })
+  await prisma.post.delete({ where: { id: String(req.query.id) } })
+  res.json({ ok: true })
+}
+` }))
+// G: res.status(401) branch, then `return` only inside an inner callback line
+log('G status401 + return inside callback ::', card({ [P]: H + `export default async function handler(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) {
+    res.status(401).json({ error: "Unauthorized" })
+    log.flush(() => {
+      return true
+    })
+  }
+  await prisma.post.delete({ where: { id: String(req.query.id) } })
+  res.json({ ok: true })
+}
+` }))
+// H: default export is a const arrow defined via let and reassigned
+log('H export default handler; handler = other ::', card({ [P]: H + `let handler = async (req, res) => {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  res.json({})
+}
+if (process.env.OPEN) handler = async (req, res) => { await prisma.post.delete({ where: { id: String(req.query.id) } }); res.json({}) }
+export default handler
+` }))
+// I: switch on method, check only in one case (control)
+log('I export default handler; but also export default via function name collision ::', card({ [P]: H + `async function handler(req, res) {
+  await prisma.post.delete({ where: { id: String(req.query.id) } })
+  res.json({ ok: true })
+}
+async function checked(req, res) {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  return handler(req, res)
+}
+export const config = { api: { bodyParser: true } }
+export default handler
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) if (new RegExp(String.raw`^(A |A2 |C |C2 |SB1|SB2|S1 |S2 |S3 |S5 |S6 |SA3|SA4|SA6|PG2|SK2|NU2)`).test(x)) assert.ok(!/requires login ✓|log in to open it ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// The shared authAlias across stacks: false ✓ attempts (NEW=Y where HEAD=W or -)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const next = mk('{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}')
+const act = (body: string, extra = '') => next({ 'app/posts/actions.ts': `'use server'
+import { auth, getCurrentUser } from "@/lib/auth"
+import { getServerSession } from "next-auth"
+import { prisma } from "@/lib/prisma"
+${extra}export async function deletePost(id: string) {
+${body}  await prisma.post.delete({ where: { id } })
+}
+` })
+log('SA1 control named session awaited ::', act(`  const session = await auth()\n  if (!session) throw new Error("Unauthorized")\n`))
+log('SA2 alias awaited ::', act(`  const s = await auth()\n  if (!s) throw new Error("Unauthorized")\n`))
+log('SA3 alias NOT awaited getServerSession ::', act(`  const s = getServerSession()\n  if (!s) throw new Error("Unauthorized")\n`))
+log('SA4 alias NOT awaited getCurrentUser ::', act(`  const me = getCurrentUser()\n  if (!me) throw new Error("Unauthorized")\n`))
+// helper in lib returning a 401 Response, alias name
+const lib = (name: string) => `import { NextResponse } from "next/server"
+import { getCurrentUser } from "@/lib/session"
+export async function getAuthedUser() {
+  const ${name} = await getCurrentUser()
+  if (!${name}) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  return ${name}
+}
+`
+const act2 = (name: string) => next({ 'lib/guard.ts': lib(name), 'app/posts/actions.ts': `'use server'
+import { getAuthedUser } from "@/lib/guard"
+import { prisma } from "@/lib/prisma"
+export async function deletePost(id: string) {
+  const me = await getAuthedUser()
+  await prisma.post.delete({ where: { id } })
+}
+` })
+log('SA5 lead helper returns 401 Response (name user) ::', act2('user'))
+log('SA6 lead helper returns 401 Response (alias me) ::', act2('me'))
+// alias from getUser(request) inside a server action? (no request) -> getUser(id) control
+log('SA7 getUser(id) not alias (control) ::', act(`  const owner = await getUser(id)\n  if (!owner) throw new Error("Unauthorized")\n`, 'import { getUser } from "@/lib/users"\n'))
+// Next page (app router) with alias not awaited
+const page = (body: string) => next({ 'app/admin/page.tsx': `import { getServerSession } from "next-auth"
+import { redirect } from "next/navigation"
+import { prisma } from "@/lib/prisma"
+export default async function AdminPage() {
+${body}  const users = await prisma.user.findMany()
+  return <ul>{users.map(u => <li key={u.id}>{u.email}</li>)}</ul>
+}
+` })
+log('PG1 page alias awaited ::', page(`  const s = await getServerSession()\n  if (!s) redirect("/login")\n`))
+log('PG2 page alias NOT awaited ::', page(`  const s = getServerSession()\n  if (!s) redirect("/login")\n`))
+// SvelteKit +server.ts / actions with alias
+const sk = mk('{"devDependencies":{"@sveltejs/kit":"^2.8.0","svelte":"^5.0.0"},"dependencies":{"@prisma/client":"5"}}')
+log('SK1 +server alias getUser(event) ::', sk({ 'src/routes/api/posts/+server.ts': `import { error, json } from '@sveltejs/kit'
+import { getUser } from '$lib/server/auth'
+import { prisma } from '$lib/server/prisma'
+export const DELETE = async (event) => {
+  const me = await getUser(event)
+  if (!me) error(401, 'Unauthorized')
+  await prisma.post.deleteMany()
+  return json({ ok: true })
+}
+` }))
+log('SK2 +server alias getUser(event) NOT awaited ::', sk({ 'src/routes/api/posts/+server.ts': `import { error, json } from '@sveltejs/kit'
+import { getUser } from '$lib/server/auth'
+import { prisma } from '$lib/server/prisma'
+export const DELETE = async (event) => {
+  const me = getUser(event)
+  if (!me) error(401, 'Unauthorized')
+  await prisma.post.deleteMany()
+  return json({ ok: true })
+}
+` }))
+log('SK3 action alias via getSession(event) reassigned via destructuring ::', sk({ 'src/routes/posts/+page.server.ts': `import { fail, error } from '@sveltejs/kit'
+import { getSession } from '$lib/server/auth'
+import { prisma } from '$lib/server/prisma'
+export const actions = {
+  delete: async (event) => {
+    let s = await getSession(event)
+    ;({ s } = { s: { anon: true } })
+    if (!s) error(401, 'no')
+    await prisma.post.deleteMany()
+  },
+}
+` }))
+// Nuxt
+const nu = mk('{"dependencies":{"nuxt":"^3.13.0","@prisma/client":"5"}}')
+log('NU1 alias awaited ::', nu({ 'server/api/posts.delete.ts': `export default defineEventHandler(async (event) => {
+  const me = await getUser(event)
+  if (!me) throw createError({ statusCode: 401 })
+  await prisma.post.deleteMany()
+  return { ok: true }
+})
+` }))
+log('NU2 alias NOT awaited ::', nu({ 'server/api/posts.delete.ts': `export default defineEventHandler(async (event) => {
+  const me = getUser(event)
+  if (!me) throw createError({ statusCode: 401 })
+  await prisma.post.deleteMany()
+  return { ok: true }
+})
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) if (new RegExp(String.raw`^(A |A2 |C |C2 |SB1|SB2|S1 |S2 |S3 |S5 |S6 |SA3|SA4|SA6|PG2|SK2|NU2)`).test(x)) assert.ok(!/requires login ✓|log in to open it ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const sb = mk('{"dependencies":{"next":"15.0.0","@supabase/ssr":"0.5.0"}}')
+log('SB1 route calls supabase.auth.getUser, ignores it ::', sb({ 'app/api/posts/route.ts': `import { createClient } from "@/lib/supabase/server"
+export async function DELETE(req: Request) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  log(user?.email)
+  await supabase.from("posts").delete().eq("id", new URL(req.url).searchParams.get("id"))
+  return Response.json({ ok: true })
+}
+` }))
+log('SB2 pages/api supabase ignored ::', sb({ 'pages/api/posts.ts': `import { createClient } from "@/lib/supabase/api"
+export default async function handler(req, res) {
+  const supabase = createClient(req, res)
+  const { data: { user } } = await supabase.auth.getUser()
+  await supabase.from("posts").delete().eq("id", req.query.id)
+  res.json({ ok: true })
+}
+` }))
+const ck = mk('{"dependencies":{"next":"15.0.0","@clerk/nextjs":"6.0.0","@prisma/client":"5.0.0"}}')
+const R = 'app/api/posts/route.ts'
+log('CK1 Clerk auth.protect() ::', ck({ [R]: `import { auth } from "@clerk/nextjs/server"
+import { prisma } from "@/lib/prisma"
+export async function DELETE() {
+  await auth.protect()
+  await prisma.post.deleteMany()
+  return Response.json({ ok: true })
+}
+` }))
+log('CK2 Clerk (await auth()).protect() conditional ::', ck({ [R]: `import { auth } from "@clerk/nextjs/server"
+import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request) {
+  if (req.headers.get("x-internal")) (await auth()).protect()
+  await prisma.post.deleteMany()
+  return Response.json({ ok: true })
+}
+` }))
+log('CK3 Clerk const a = await auth(); destructured protect in arrow ::', ck({ [R]: `import { auth } from "@clerk/nextjs/server"
+import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request) {
+  const a = await auth()
+  const check = () => a.protect()
+  await prisma.post.deleteMany()
+  return Response.json({ ok: true })
+}
+` }))
+log('CK4 Clerk const a = await auth(); if (!a) return 401 (always truthy object) ::', ck({ [R]: `import { auth } from "@clerk/nextjs/server"
+import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request) {
+  const a = await auth()
+  if (!a) return new Response("Unauthorized", { status: 401 })
+  await prisma.post.deleteMany()
+  return Response.json({ ok: true })
+}
+` }))
+// local require* that throws + another local require* that returns: byName false. Lead helper path still OK?
+const na = mk('{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}')
+log('BN1 only GET exported, GET has return-style check w/o status in cond ::', na({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+export async function GET(req: Request) {
+  const session = await auth()
+  const mine = new URL(req.url).searchParams.get("mine")
+  if (mine) {
+    if (!session) return Response.json([])
+  }
+  return Response.json(await prisma.post.findMany())
+}
+` }))
+log('BN2 handler checks after a pass-through that awaits nothing but returns stored data ::', na({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+async function getUserOrThrow() {
+  const session = await auth()
+  if (!session) throw new Error("Unauthorized")
+  return session.user
+}
+export async function DELETE(req: Request) {
+  const id = new URL(req.url).searchParams.get("id")
+  if (id === "all") return Response.json(await prisma.post.deleteMany())
+  await getUserOrThrow()
+  await prisma.post.delete({ where: { id } })
+  return Response.json({ ok: true })
+}
+` }))
+log('BN3 lead helper whose throw is in a different branch than its check ::', na({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+async function loadUser() {
+  const session = await auth()
+  if (!session) return null
+  if (session.user.banned) throw new Error("banned")
+  return session.user
+}
+export async function DELETE(req: Request) {
+  await loadUser()
+  await prisma.post.deleteMany()
+  return Response.json({ ok: true })
+}
+` }))
+log('BN4 lead helper check via unauthorized() custom returning Response + other throw ::', na({ [R]: `import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
+const unauthorized = () => Response.json({ error: "Unauthorized" }, { status: 401 })
+async function getSessionOrFail() {
+  const session = await auth()
+  if (!session) return unauthorized()
+  if (!session.user.email) throw new Error("no email on account")
+  return session
+}
+export async function DELETE(req: Request) {
+  await getSessionOrFail()
+  await prisma.post.deleteMany()
+  return Response.json({ ok: true })
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) if (new RegExp(String.raw`^(A |A2 |C |C2 |SB1|SB2|S1 |S2 |S3 |S5 |S6 |SA3|SA4|SA6|PG2|SK2|NU2)`).test(x)) assert.ok(!/requires login ✓|log in to open it ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api + route handlers: pass-through before the check written without an `if`
+const nx = { 'package.json': '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+const H = `import { getServerSession } from "next-auth/next"
+import { authOptions } from "../auth/[...nextauth]"
+import prisma from "@/lib/prisma"
+async function deletePost(req, res) {
+  await prisma.post.delete({ where: { id: String(req.query.id) } })
+  res.json({ ok: true })
+}
+`
+log('S1 switch dispatch before check ::', card({ 'pages/api/posts.ts': H + `export default async function handler(req, res) {
+  switch (req.method) {
+    case "DELETE":
+      return deletePost(req, res)
+  }
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+}
+` }))
+log('S2 if-dispatch before check (control, fixed in r52) ::', card({ 'pages/api/posts.ts': H + `export default async function handler(req, res) {
+  if (req.method === "DELETE") return deletePost(req, res)
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+}
+` }))
+log('S3 && dispatch before check ::', card({ 'pages/api/posts.ts': H + `export default async function handler(req, res) {
+  if (req.method === "DELETE") { await deletePost(req, res) } else {
+    const session = await getServerSession(req, res, authOptions)
+    if (!session) return res.status(401).json({ error: "Unauthorized" })
+    res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+  }
+}
+` }))
+log('S4 dispatch then check (no return: write then 401) ::', card({ 'pages/api/posts.ts': H + `export default async function handler(req, res) {
+  if (req.method === "DELETE") await deletePost(req, res)
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+}
+` }))
+log('S5 try { dispatch } ::', card({ 'pages/api/posts.ts': H + `export default async function handler(req, res) {
+  try {
+    if (req.method === "DELETE") return await deletePost(req, res)
+    const session = await getServerSession(req, res, authOptions)
+    if (!session) return res.status(401).json({ error: "Unauthorized" })
+    res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+  } catch (e) { res.status(500).end() }
+}
+` }))
+log('S6 rej misfire: dispatch whose branch also 404s ::', card({ 'pages/api/posts.ts': H + `export default async function handler(req, res) {
+  if (req.method === "DELETE") return req.query.id ? deletePost(req, res) : res.status(400).json({ error: "id required" })
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await prisma.post.findMany({ where: { authorId: session.user.id } }))
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) if (new RegExp(String.raw`^(A |A2 |C |C2 |SB1|SB2|S1 |S2 |S3 |S5 |S6 |SA3|SA4|SA6|PG2|SK2|NU2)`).test(x)) assert.ok(!/requires login ✓|log in to open it ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// Next route handlers / pages/api with NO login at all: the client sends userId, the handler validates it's present.
+// HEAD: no auth() call -> "Anyone can ..." warning. NEW: `if (!userId) return ...` reads as a return-style login check -> ✓
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log('U1 route: userId from body, 400 ::', card({ 'app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const { userId, title } = await req.json()
+  if (!userId || !title) return NextResponse.json({ error: "userId and title are required" }, { status: 400 })
+  const post = await prisma.post.create({ data: { title, authorId: userId } })
+  return NextResponse.json(post)
+}
+` }))
+log('U2 route: userId from query string, DELETE ::', card({ 'app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url)
+  const userId = searchParams.get("userId")
+  if (!userId) return NextResponse.json({ error: "Missing userId" }, { status: 400 })
+  await prisma.post.deleteMany({ where: { authorId: userId } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('U3 pages/api: userId from body ::', card({ 'pages/api/posts.ts': `import prisma from "@/lib/prisma"
+export default async function handler(req, res) {
+  const { userId, title } = req.body
+  if (!userId) return res.status(400).json({ error: "userId is required" })
+  const post = await prisma.post.create({ data: { title, authorId: userId } })
+  res.json(post)
+}
+` }))
+log('U4 pages/api: user from body ::', card({ 'pages/api/delete-account.ts': `import prisma from "@/lib/prisma"
+export default async function handler(req, res) {
+  const { user } = req.body
+  if (!user) return res.status(400).json({ error: "user required" })
+  await prisma.user.delete({ where: { id: user.id } })
+  res.json({ ok: true })
+}
+` }))
+log('U5 route: params.userId ::', card({ 'app/api/users/[userId]/route.ts': `import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request, { params }) {
+  const { userId } = await params
+  if (!userId) return Response.json({ error: "bad request" }, { status: 400 })
+  await prisma.user.delete({ where: { id: userId } })
+  return Response.json({ ok: true })
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(/Anyone/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// No login at all: the handler looks a record up and 404s when it's missing. `user` / `session` named records read as the login.
+const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","mongoose":"8.0.0","@prisma/client":"5.0.0"}}' }
+const card = (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ')
+log('L1 mongoose findById 404 ::', card({ 'app/api/users/[id]/route.ts': `import { NextResponse } from "next/server"
+import { connectDB } from "@/lib/db"
+import User from "@/models/User"
+export async function DELETE(req: Request, { params }) {
+  await connectDB()
+  const user = await User.findById(params.id)
+  if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 })
+  await User.findByIdAndDelete(params.id)
+  return NextResponse.json({ message: "User deleted" })
+}
+` }))
+log('L2 helper getUserById 404 ::', card({ 'app/api/users/[id]/route.ts': `import { NextResponse } from "next/server"
+import { getUserById, deleteUser } from "@/lib/users"
+export async function DELETE(req: Request, { params }) {
+  const user = await getUserById(params.id)
+  if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  await deleteUser(user.id)
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('L3 pages/api mongoose findOne 404 ::', card({ 'pages/api/users/[id].ts': `import dbConnect from "@/lib/dbConnect"
+import User from "@/models/User"
+export default async function handler(req, res) {
+  await dbConnect()
+  const user = await User.findOne({ _id: req.query.id })
+  if (!user) return res.status(404).json({ success: false })
+  if (req.method === "DELETE") { await User.deleteOne({ _id: req.query.id }); return res.json({ success: true }) }
+  res.json({ success: true, data: user })
+}
+` }))
+log('L4 prisma 404 (control: excluded by NOT_AUTH_SOURCE) ::', card({ 'app/api/users/[id]/route.ts': `import { NextResponse } from "next/server"
+import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request, { params }) {
+  const user = await prisma.user.findUnique({ where: { id: params.id } })
+  if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  await prisma.user.delete({ where: { id: user.id } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(/Anyone/.test(x), x)
+}
+console.log('ok (review 54)')
+// Review 55: the login `if` must test a name set from a session call (one hop), so a firebase-admin getAuth() or an unrelated getToken()
+// next to a body userId or a findById 404 isn't a ✓
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// Next route handlers: the if tests a looked-up record / body value; a session-source call that isn't the login is also in the code
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","mongoose":"8.0.0","firebase-admin":"12.0.0"}}')
+// T1: lookup 404 + third-party token helper getToken() (Spotify client credentials)
+log('T1 findById 404 + spotify getToken() ::', nx({ 'app/api/users/[id]/playlist/route.ts': `import { NextResponse } from "next/server"
+import { connectDB } from "@/lib/db"
+import User from "@/models/User"
+import { getToken } from "@/lib/spotify"
+export async function POST(req: Request, { params }) {
+  await connectDB()
+  const user = await User.findById(params.id)
+  if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 })
+  const token = await getToken()
+  const r = await fetch("https://api.spotify.com/v1/users/" + user.spotifyId + "/playlists", { method: "POST", headers: { Authorization: "Bearer " + token } })
+  user.playlistId = (await r.json()).id
+  await user.save()
+  return NextResponse.json({ ok: true })
+}
+` }))
+// T1c: control without getToken
+log('T1c control no getToken ::', nx({ 'app/api/users/[id]/playlist/route.ts': `import { NextResponse } from "next/server"
+import { connectDB } from "@/lib/db"
+import User from "@/models/User"
+export async function POST(req: Request, { params }) {
+  await connectDB()
+  const user = await User.findById(params.id)
+  if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 })
+  user.playlistId = "x"
+  await user.save()
+  return NextResponse.json({ ok: true })
+}
+` }))
+// T2: firebase-admin getAuth() (an Auth instance, not a session); sets an admin claim for any uid
+log('T2 firebase-admin getAuth().getUser(uid) + setCustomUserClaims ::', nx({ 'app/api/admin/make-admin/route.ts': `import { NextResponse } from "next/server"
+import { getAuth } from "firebase-admin/auth"
+import "@/lib/firebase-admin"
+export async function POST(req: Request) {
+  const { uid } = await req.json()
+  const user = await getAuth().getUser(uid)
+  if (!user) return NextResponse.json({ error: "No such user" }, { status: 404 })
+  await getAuth().setCustomUserClaims(uid, { admin: true })
+  return NextResponse.json({ ok: true })
+}
+` }))
+// T3: firebase-admin const auth = getAuth() then lookup by email
+log('T3 firebase-admin const adminAuth = getAuth(); getUserByEmail ::', nx({ 'app/api/users/disable/route.ts': `import { NextResponse } from "next/server"
+import { getAuth } from "firebase-admin/auth"
+export async function POST(req: Request) {
+  const { email } = await req.json()
+  const adminAuth = getAuth()
+  const user = await adminAuth.getUserByEmail(email)
+  if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  await adminAuth.updateUser(user.uid, { disabled: true })
+  return NextResponse.json({ ok: true })
+}
+` }))
+// T4: octokit.auth() (GitHub app installation token) + record lookup 404
+log('T4 octokit.auth() + findById 404 ::', nx({ 'app/api/repos/[id]/route.ts': `import { NextResponse } from "next/server"
+import { Octokit } from "@octokit/rest"
+import User from "@/models/User"
+const octokit = new Octokit({ auth: process.env.GH_TOKEN })
+export async function DELETE(req: Request, { params }) {
+  const user = await User.findById(params.id)
+  if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  const { token } = await octokit.auth()
+  await fetch("https://api.github.com/repos/" + user.repo, { method: "DELETE", headers: { Authorization: "token " + token } })
+  await User.findByIdAndDelete(params.id)
+  return NextResponse.json({ ok: true })
+}
+` }))
+// T5: pages/api: lookup 404 + getToken() third-party
+log('T5 pages/api findOne 404 + getToken() ::', nx({ 'pages/api/users/[id].ts': `import dbConnect from "@/lib/dbConnect"
+import User from "@/models/User"
+import { getToken } from "@/lib/mux"
+export default async function handler(req, res) {
+  await dbConnect()
+  const user = await User.findOne({ _id: req.query.id })
+  if (!user) return res.status(404).json({ success: false })
+  const token = await getToken()
+  await User.deleteOne({ _id: req.query.id })
+  res.json({ success: true, token })
+}
+` }))
+// T6: userId from body + chat getSession() (AI chat memory)
+log('T6 route userId from body 400 + chat getSession() ::', nx({ 'app/api/chat/route.ts': `import { NextResponse } from "next/server"
+import { getSession } from "@/lib/chat-store"
+import Message from "@/models/Message"
+export async function POST(req: Request) {
+  const { userId, text } = await req.json()
+  if (!userId) return NextResponse.json({ error: "userId required" }, { status: 400 })
+  const chat = await getSession()
+  await Message.create({ chat: chat.id, userId, text })
+  return NextResponse.json({ ok: true })
+}
+` }))
+// T7: Stripe checkout getSession(req) helper (from the success redirect) + user lookup
+log('T7 stripe getSession(request) + findById ::', nx({ 'app/api/checkout/success/route.ts': `import { NextResponse } from "next/server"
+import { getSession } from "@/lib/stripe"
+import User from "@/models/User"
+export async function POST(request: Request) {
+  const checkout = await getSession(request)
+  const user = await User.findById(checkout.client_reference_id)
+  if (!user) return NextResponse.json({ error: "No user" }, { status: 404 })
+  user.plan = "pro"
+  await user.save()
+  return NextResponse.json({ ok: true })
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(/Anyone/.test(x) || !/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// Next route handlers, firebase-admin: getAuth() (an admin SDK instance) satisfies the session-source test; the if tests a body value
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","firebase-admin":"12.0.0"}}')
+log('F1 delete any user by body userId ::', nx({ 'app/api/users/delete/route.ts': `import { NextResponse } from "next/server"
+import { getAuth } from "firebase-admin/auth"
+export async function POST(req: Request) {
+  const { userId } = await req.json()
+  if (!userId) return NextResponse.json({ error: "userId is required" }, { status: 400 })
+  await getAuth().deleteUser(userId)
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('F1c control: same with adminAuth from lib ::', nx({ 'app/api/users/delete/route.ts': `import { NextResponse } from "next/server"
+import { adminAuth } from "@/lib/firebase-admin"
+export async function POST(req: Request) {
+  const { userId } = await req.json()
+  if (!userId) return NextResponse.json({ error: "userId is required" }, { status: 400 })
+  await adminAuth.deleteUser(userId)
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('F2 pages/api delete by body userId + getAuth() ::', nx({ 'pages/api/users/delete.ts': `import { getAuth } from "firebase-admin/auth"
+export default async function handler(req, res) {
+  const { userId } = req.body
+  if (!userId) return res.status(400).json({ error: "userId is required" })
+  await getAuth().deleteUser(userId)
+  res.json({ ok: true })
+}
+` }))
+assert.ok(outs.length >= 1)
+for (const x of outs) if (x.trim()) assert.ok(!/requires login ✓/.test(x), x)
+}
+console.log('ok (review 55)')
+// Review 56: a hop off the session is only a property chain (not `searchParams.get('userId') || me?.id`); reassigned and comma-joined
+// names don't count; iron-session's object is always there; an imported requireAuth() that returns a 401, or isn't awaited; getSession() from a chat store
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// One hop letting a body/query value through: session source NOT in HEAD's AUTH set (so HEAD warned)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"14.2.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+log('B1 app route getToken({req}) ?? body.userId ::', nx({ 'app/api/notes/route.ts': `import { NextResponse } from "next/server"
+import { getToken } from "next-auth/jwt"
+import { prisma } from "@/lib/prisma"
+export async function POST(req) {
+  const body = await req.json()
+  const token = await getToken({ req })
+  const userId = token?.sub ?? body.userId
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.note.create({ data: { text: body.text, userId } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('B2 pages/api getSession({req}) || req.body.userId ::', nx({ 'pages/api/notes/delete.ts': `import { getSession } from "next-auth/react"
+import { prisma } from "@/lib/prisma"
+export default async function handler(req, res) {
+  const session = await getSession({ req })
+  const userId = session?.user?.id || req.body.userId
+  if (!userId) return res.status(401).json({ error: "Unauthorized" })
+  await prisma.note.deleteMany({ where: { userId } })
+  res.json({ ok: true })
+}
+` }))
+log('B3 pages/api getServerAuthSession + query email fallback ::', nx({ 'pages/api/account/delete.ts': `import { getServerAuthSession } from "@/server/auth"
+import { prisma } from "@/server/db"
+export default async function handler(req, res) {
+  const session = await getServerAuthSession({ req, res })
+  const email = session?.user?.email ?? (req.query.email as string)
+  const user = await prisma.user.findUnique({ where: { email } })
+  if (!user) return res.status(401).json({ error: "Unauthorized" })
+  await prisma.user.delete({ where: { id: user.id } })
+  res.json({ ok: true })
+}
+` }))
+log('B4 control: same as B2 without fallback ::', nx({ 'pages/api/notes/delete.ts': `import { getSession } from "next-auth/react"
+import { prisma } from "@/lib/prisma"
+export default async function handler(req, res) {
+  const session = await getSession({ req })
+  const userId = session?.user?.id
+  if (!userId) return res.status(401).json({ error: "Unauthorized" })
+  await prisma.note.deleteMany({ where: { userId } })
+  res.json({ ok: true })
+}
+` }))
+log('B5 app route getCurrentUser() ternary admin-acting ::', nx({ 'app/api/notes/route.ts': `import { NextResponse } from "next/server"
+import { getCurrentUser } from "@/lib/session"
+import { prisma } from "@/lib/prisma"
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url)
+  const me = await getCurrentUser()
+  const userId = searchParams.get("userId") || me?.id
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.note.deleteMany({ where: { userId } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+assert.ok(outs.some(x => new RegExp(String.raw`^(B1|B2|B5|S1|S4|S6|A1r|Q1|Q2)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(B1|B2|B5|S1|S4|S6|A1r|Q1|Q2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// sessionNames ignores reassignment and scope
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"14.2.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+log('S1 let user = getCurrentUser(); fallback reassigned from body ::', nx({ 'app/api/orders/route.ts': `import { NextResponse } from "next/server"
+import { getCurrentUser } from "@/lib/session"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const body = await req.json()
+  let user = await getCurrentUser()
+  if (!user && body.userId) user = await prisma.user.findUnique({ where: { id: body.userId } })
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.order.create({ data: { userId: user.id, items: body.items } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('S2 inner callback declares session-named user; outer user from body ::', nx({ 'app/api/orders/route.ts': `import { NextResponse } from "next/server"
+import { getCurrentUser } from "@/lib/session"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const { user, items } = await req.json()
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.order.create({ data: { userId: user.id, items } })
+  const log = async () => { const user = await getCurrentUser(); log(user) }
+  await log()
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('S3 two methods, POST checks, DELETE reuses name from body ::', nx({ 'app/api/orders/route.ts': `import { NextResponse } from "next/server"
+import { getCurrentUser } from "@/lib/session"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.order.create({ data: { userId: user.id } })
+  return NextResponse.json({ ok: true })
+}
+export async function DELETE(req: Request) {
+  const { user } = await req.json()
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.order.deleteMany({ where: { userId: user } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('S4 multi-declarator: body first, session second ::', nx({ 'app/api/orders/route.ts': `import { NextResponse } from "next/server"
+import { getCurrentUser } from "@/lib/session"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  const body = await req.json()
+  const userId = body.userId, me = await getCurrentUser()
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.order.create({ data: { userId, note: me?.name } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('S5 object key mentions session name (token:) ::', nx({ 'app/api/verify/route.ts': `import { NextResponse } from "next/server"
+import { getToken } from "next-auth/jwt"
+import { prisma } from "@/lib/prisma"
+export async function POST(req) {
+  const body = await req.json()
+  const token = await getToken({ req })
+  const user = await prisma.user.findFirst({ where: { token: body.token } })
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  await prisma.user.update({ where: { id: user.id }, data: { verified: true, by: token?.sub } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('S6 pages/api iron-session if (!session) (always truthy) ::', nx({ 'pages/api/cart/clear.ts': `import { getIronSession } from "iron-session"
+import { sessionOptions } from "@/lib/session"
+import { prisma } from "@/lib/prisma"
+export default async function handler(req, res) {
+  const session = await getIronSession(req, res, sessionOptions)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  await prisma.cartItem.deleteMany({ where: { cartId: req.body.cartId } })
+  res.json({ ok: true })
+}
+` }))
+assert.ok(outs.some(x => new RegExp(String.raw`^(B1|B2|B5|S1|S4|S6|A1r|Q1|Q2)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(B1|B2|B5|S1|S4|S6|A1r|Q1|Q2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// carried over from review55/r03 A1 (still NEW ✓, HEAD neither): authAlias on a no-arg getSession() in a server action
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const next = mk('{"dependencies":{"next":"15.0.0","next-auth":"5.0.0","@prisma/client":"5.0.0"}}')
+log('A1 action alias chat getSession() ::', next({ 'app/chat/actions.ts': `'use server'
+import { getSession } from "@/lib/chat-store"
+import { prisma } from "@/lib/prisma"
+export async function clearHistory() {
+  const chat = await getSession()
+  if (!chat) throw new Error("No chat")
+  await prisma.message.deleteMany({ where: { chatId: chat.id } })
+}
+` }))
+log('A2 action alias getUser(request-less) cart ::', next({ 'app/cart/actions.ts': `'use server'
+import { getUser } from "@/lib/cart"
+import { prisma } from "@/lib/prisma"
+export async function emptyCart() {
+  const cart = await getUser()
+  if (!cart) throw new Error("No cart")
+  await prisma.cartItem.deleteMany({ where: { cartId: cart.id } })
+}
+` }))
+log('A1r review55 original (return {error}) ::', next({ 'app/chat/actions.ts': `'use server'
+import { getSession } from "@/lib/chat-store"
+import { prisma } from "@/lib/prisma"
+export async function clearHistory() {
+  const chat = await getSession()
+  if (!chat) return { error: "No chat" }
+  await prisma.message.deleteMany({ where: { chatId: chat.id } })
+}
+` }))
+assert.ok(outs.some(x => new RegExp(String.raw`^(B1|B2|B5|S1|S4|S6|A1r|Q1|Q2)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(B1|B2|B5|S1|S4|S6|A1r|Q1|Q2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// require*() from another file that returns a 401 Response instead of throwing; caller ignores the result
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","@supabase/ssr":"0.5.0"}}')
+const lib = `import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { getSessionFromCookie } from "./jwt"
+export async function requireAuth() {
+  const session = await getSessionFromCookie(cookies())
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  return session
+}
+`
+const route = (call: string) => ({ 'lib/auth.ts': lib, 'app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { requireAuth } from "@/lib/auth"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+${call}
+  const body = await req.json()
+  await prisma.post.create({ data: { title: body.title } })
+  return NextResponse.json({ ok: true })
+}
+` })
+log('Q1 await requireAuth() ignored, lib returns 401 ::', nx(route('  await requireAuth()')))
+log('Q2 requireAuth() not awaited ::', nx(route('  requireAuth()')))
+log('Q3 const s = await requireAuth(); if (s instanceof NextResponse) return s ::', nx(route('  const s = await requireAuth()\n  if (s instanceof NextResponse) return s')))
+assert.ok(outs.some(x => new RegExp(String.raw`^(B1|B2|B5|S1|S4|S6|A1r|Q1|Q2)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(B1|B2|B5|S1|S4|S6|A1r|Q1|Q2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+console.log('ok (review 56)')
+// Review 57: a require*() counts only when plain finds its definition and its check throws or redirects for guests (not a barrel,
+// cache(), a rename, a package; not a throw guests never reach; not a returned 401); a zod validateRequest(req, schema) isn't a session
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// require*() whose definition plain can't find (barrel re-export, cache()-wrapped, default export) and which returns a 401 instead of throwing
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0"}}')
+const body401 = `{
+  const session = await getSessionFromCookie(cookies())
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  return session
+}`
+const head = `import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { cache } from "react"
+import { getSessionFromCookie } from "./jwt"
+`
+const route = (imp: string) => `import { NextResponse } from "next/server"
+${imp}
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  await requireAuth()
+  const body = await req.json()
+  await prisma.post.create({ data: { title: body.title } })
+  return NextResponse.json({ ok: true })
+}
+`
+// B1 barrel: lib/auth/index.ts re-exports from ./guard
+log('B1 barrel re-export, helper returns 401 ::', nx({
+  'lib/auth/guard.ts': head + `export async function requireAuth() ${body401}\n`,
+  'lib/auth/index.ts': `export { requireAuth } from "./guard"\n`,
+  'app/api/posts/route.ts': route('import { requireAuth } from "@/lib/auth"') }))
+log('B2 export * barrel ::', nx({
+  'lib/auth/guard.ts': head + `export async function requireAuth() ${body401}\n`,
+  'lib/auth/index.ts': `export * from "./guard"\n`,
+  'app/api/posts/route.ts': route('import { requireAuth } from "@/lib/auth"') }))
+log('B3 cache()-wrapped, returns 401 ::', nx({
+  'lib/auth.ts': head + `export const requireAuth = cache(async () => ${body401})\n`,
+  'app/api/posts/route.ts': route('import { requireAuth } from "@/lib/auth"') }))
+log('B4 renamed import { checkAuth as requireAuth } ::', nx({
+  'lib/auth.ts': head + `export async function checkAuth() ${body401}\n`,
+  'app/api/posts/route.ts': route('import { checkAuth as requireAuth } from "@/lib/auth"') }))
+log('B5 default import ::', nx({
+  'lib/require-auth.ts': head + `export default async function requireAuth() ${body401}\n`,
+  'app/api/posts/route.ts': route('import requireAuth from "@/lib/require-auth"') }))
+log('B6 namespace auth.requireAuth() ::', nx({
+  'lib/auth.ts': head + `export async function requireAuth() ${body401}\n`,
+  'app/api/posts/route.ts': route('import * as authLib from "@/lib/auth"').replace('await requireAuth()', 'await authLib.requireAuth()') }))
+log('B7 control: direct import (should not be Y) ::', nx({
+  'lib/auth.ts': head + `export async function requireAuth() ${body401}\n`,
+  'app/api/posts/route.ts': route('import { requireAuth } from "@/lib/auth"') }))
+log('B8 helper in package not repo ::', nx({
+  'app/api/posts/route.ts': route('import { requireAuth } from "@acme/auth"') }))
+assert.ok(outs.some(x => new RegExp(String.raw`^(B1|B2|B3|B4|B6|B8|E1|E2|E4|V3)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(B1|B2|B3|B4|B6|B8|E1|E2|E4|V3)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// require*() found in the repo, has a `throw`, but its guest path returns instead (throw is about something else)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","next-auth":"5.0.0"}}')
+const route = `import { NextResponse } from "next/server"
+import { requireAuth } from "@/lib/guard"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  await requireAuth()
+  const body = await req.json()
+  await prisma.post.create({ data: { title: body.title } })
+  return NextResponse.json({ ok: true })
+}
+`
+log('E1 throws only for unverified email; guests get undefined ::', nx({ 'lib/guard.ts': `import { auth } from "@/auth"
+export async function requireAuth() {
+  const session = await auth()
+  const user = session?.user
+  if (user && !user.emailVerified) throw new Error("Verify your email first")
+  return user
+}
+`, 'app/api/posts/route.ts': route }))
+log('E2 throws only on missing env ::', nx({ 'lib/guard.ts': `import { auth } from "@/auth"
+export async function requireAuth() {
+  if (!process.env.AUTH_SECRET) throw new Error("AUTH_SECRET missing")
+  return auth()
+}
+`, 'app/api/posts/route.ts': route }))
+log('E3 control: throws for guests ::', nx({ 'lib/guard.ts': `import { auth } from "@/auth"
+export async function requireAuth() {
+  const session = await auth()
+  if (!session) throw new Error("Unauthorized")
+  return session
+}
+`, 'app/api/posts/route.ts': route }))
+// pages/api with a barrel
+log('E4 pages/api, barrel re-export, helper ends response with 401 and returns ::', nx({
+  'lib/auth/guard.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { getServerSession } from "next-auth/next"
+import { authOptions } from "./options"
+export async function requireAuth(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getServerSession(req, res, authOptions)
+  if (!session) { res.status(401).json({ error: "Unauthorized" }); return null }
+  return session
+}
+`, 'lib/auth/index.ts': `export * from "./guard"\n`,
+  'pages/api/posts.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { requireAuth } from "@/lib/auth"
+import { prisma } from "@/lib/prisma"
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  await requireAuth(req, res)
+  await prisma.post.create({ data: { title: req.body.title } })
+  res.json({ ok: true })
+}
+` }))
+assert.ok(outs.some(x => new RegExp(String.raw`^(B1|B2|B3|B4|B6|B8|E1|E2|E4|V3)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(B1|B2|B3|B4|B6|B8|E1|E2|E4|V3)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// validateRequest() from a validation helper (not Lucia): bypasses the AUTHY import filter and the argument check
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","zod":"3.0.0"}}')
+const lib = `import { z } from "zod"
+export async function validateRequest<T>(req: Request, schema: z.ZodType<T>) {
+  const r = schema.safeParse(await req.json())
+  return r.success ? r.data : null
+}
+`
+const route = (st: number) => `import { NextResponse } from "next/server"
+import { z } from "zod"
+import { validateRequest } from "@/lib/validation"
+import { prisma } from "@/lib/prisma"
+const UserSchema = z.object({ email: z.string().email(), name: z.string() })
+export async function POST(req: Request) {
+  const user = await validateRequest(req, UserSchema)
+  if (!user) return NextResponse.json({ error: "Invalid user" }, { status: ${st} })
+  await prisma.user.create({ data: user })
+  return NextResponse.json({ ok: true })
+}
+`
+log('V1 validateRequest(req, schema) 422 ::', nx({ 'lib/validation.ts': lib, 'app/api/users/route.ts': route(422) }))
+log('V2 validateRequest(req, schema) 400 ::', nx({ 'lib/validation.ts': lib, 'app/api/users/route.ts': route(400) }))
+log('V3 validateRequest(req, schema) 401 ::', nx({ 'lib/validation.ts': lib, 'app/api/users/route.ts': route(401) }))
+assert.ok(outs.some(x => new RegExp(String.raw`^(B1|B2|B3|B4|B6|B8|E1|E2|E4|V3)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(B1|B2|B3|B4|B6|B8|E1|E2|E4|V3)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+console.log('ok (review 57)')
+// Review 58: an app's own unauthorized() that returns a Response isn't Next's that throws; a route that catches its require*()
+// or protect() throw gets no credit; Clerk v6's auth.protect() and session calls need await
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// requireAuth() whose definition throws, but the route swallows the throw (try/catch, .catch), or Clerk v6 auth.protect() not awaited
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","next-auth":"5.0.0"}}')
+const ck = mk('{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","@clerk/nextjs":"6.0.0"}}')
+const lib = `import { auth } from "@/auth"
+export async function requireAuth() {
+  const session = await auth()
+  if (!session) throw new Error("Unauthorized")
+  return session
+}
+export async function requireSession() {
+  const session = await auth()
+  if (!session?.user) throw new Error("Unauthorized")
+  return session
+}
+`
+const route = (pre: string) => ({ 'lib/guard.ts': lib, 'app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { requireAuth, requireSession } from "@/lib/guard"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+${pre}
+  const body = await req.json()
+  await prisma.post.create({ data: { title: body.title } })
+  return NextResponse.json({ ok: true })
+}
+` })
+log('C0 control await requireAuth() ::', nx(route('  await requireAuth()')))
+log('C1 try { await requireAuth() } catch (e) { console.error(e) } ::', nx(route('  try {\n    await requireAuth()\n  } catch (e) {\n    console.error(e)\n  }')))
+log('C2 const s = await requireSession().catch(() => null) ::', nx(route('  const s = await requireSession().catch(() => null)')))
+log('C3 await requireAuth().catch(console.error) ::', nx(route('  await requireAuth().catch(console.error)')))
+log('C4 let s; try { s = await requireSession() } catch {} ::', nx(route('  let s = null\n  try { s = await requireSession() } catch {}')))
+const ckRoute = (pre: string) => ({ 'app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { auth } from "@clerk/nextjs/server"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+${pre}
+  const body = await req.json()
+  await prisma.post.create({ data: { title: body.title } })
+  return NextResponse.json({ ok: true })
+}
+` })
+log('K0 control await auth.protect() ::', ck(ckRoute('  await auth.protect()')))
+log('K1 auth.protect() not awaited (Clerk v6, async) ::', ck(ckRoute('  auth.protect()')))
+log('K2 try { await auth.protect() } catch {} ::', ck(ckRoute('  try { await auth.protect() } catch {}')))
+log('K3 await auth.protect().catch(() => null) ::', ck(ckRoute('  await auth.protect().catch(() => null)')))
+assert.ok(outs.some(x => new RegExp(String.raw`^(C1|C2|C3|C4|K1|K2|K3|U1|U2|U4|R1|R2|R3)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(C1|C2|C3|C4|K1|K2|K3|U1|U2|U4|R1|R2|R3)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// app route: the session call is not awaited (a Promise is always truthy, so `if (!session)` stops nobody)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","next-auth":"4.0.0","lucia":"3.0.0"}}')
+const route = (imp: string, decl: string, v = 'session') => ({ 'app/api/posts/route.ts': `import { NextResponse } from "next/server"
+${imp}
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  ${decl}
+  if (!${v}) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const body = await req.json()
+  await prisma.post.create({ data: { title: body.title } })
+  return NextResponse.json({ ok: true })
+}
+` })
+log('U0 control await getServerAuthSession() ::', nx(route('import { getServerAuthSession } from "@/server/auth"', 'const session = await getServerAuthSession()')))
+log('U1 getServerAuthSession() not awaited ::', nx(route('import { getServerAuthSession } from "@/server/auth"', 'const session = getServerAuthSession()')))
+log('U2 getCurrentUser() not awaited ::', nx(route('import { getCurrentUser } from "@/lib/session"', 'const user = getCurrentUser()', 'user')))
+log('U3 validateRequest() not awaited, destructured promise ::', nx(route('import { validateRequest } from "@/lib/auth"', 'const result = validateRequest()', 'result')))
+log('U4 getSession() not awaited ::', nx(route('import { getSession } from "@/lib/auth"', 'const session = getSession()')))
+assert.ok(outs.some(x => new RegExp(String.raw`^(C1|C2|C3|C4|K1|K2|K3|U1|U2|U4|R1|R2|R3)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(C1|C2|C3|C4|K1|K2|K3|U1|U2|U4|R1|R2|R3)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// requireAuth() whose guest branch returns a custom unauthorized()/forbidden()/error(401) helper that builds a Response (does not throw);
+// the route ignores the result, so guests go on to the write
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const nx = mk('{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","next-auth":"5.0.0"}}')
+const responses = `import { NextResponse } from "next/server"
+export const unauthorized = (message = "Unauthorized") => NextResponse.json({ error: message }, { status: 401 })
+export const forbidden = (message = "Forbidden") => NextResponse.json({ error: message }, { status: 403 })
+export function error(status: number, message: string) { return NextResponse.json({ error: message }, { status }) }
+`
+const guard = (branch: string, imp = 'import { unauthorized, forbidden, error } from "@/lib/api-response"') => `import { auth } from "@/auth"
+${imp}
+export async function requireAuth() {
+  const session = await auth()
+  if (!session?.user) ${branch}
+  return session
+}
+`
+const route = { 'app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { requireAuth } from "@/lib/guard"
+import { prisma } from "@/lib/prisma"
+export async function POST(req: Request) {
+  await requireAuth()
+  const body = await req.json()
+  await prisma.post.create({ data: { title: body.title } })
+  return NextResponse.json({ ok: true })
+}
+` }
+log('R1 helper: return unauthorized() (custom, returns a Response) ::', nx({ 'lib/api-response.ts': responses, 'lib/guard.ts': guard('return unauthorized()'), ...route }))
+log('R2 helper: return forbidden() (custom) ::', nx({ 'lib/api-response.ts': responses, 'lib/guard.ts': guard('return forbidden()'), ...route }))
+log('R3 helper: return error(401, "Unauthorized") (custom) ::', nx({ 'lib/api-response.ts': responses, 'lib/guard.ts': guard('return error(401, "Unauthorized")'), ...route }))
+log('R4 control: return NextResponse.json 401 ::', nx({ 'lib/api-response.ts': responses, 'lib/guard.ts': guard('return NextResponse.json({ error: "Unauthorized" }, { status: 401 })', 'import { NextResponse } from "next/server"'), ...route }))
+log('R5 control: next/navigation unauthorized() (throws) ::', nx({ 'lib/guard.ts': guard('unauthorized()', 'import { unauthorized } from "next/navigation"'), ...route }))
+// same-file lead helper variant
+log('R6 same-file lead helper returning unauthorized() ::', nx({ 'lib/api-response.ts': responses, 'app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { auth } from "@/auth"
+import { unauthorized } from "@/lib/api-response"
+import { prisma } from "@/lib/prisma"
+async function getUserOrFail() {
+  const session = await auth()
+  if (!session?.user) return unauthorized()
+  return session.user
+}
+export async function POST(req: Request) {
+  await getUserOrFail()
+  const body = await req.json()
+  await prisma.post.create({ data: { title: body.title } })
+  return NextResponse.json({ ok: true })
+}
+` }))
+assert.ok(outs.some(x => new RegExp(String.raw`^(C1|C2|C3|C4|K1|K2|K3|U1|U2|U4|R1|R2|R3)\b`).test(x)))
+for (const x of outs) if (new RegExp(String.raw`^(C1|C2|C3|C4|K1|K2|K3|U1|U2|U4|R1|R2|R3)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+console.log('ok (review 58)')
+// Review 59: no ✓ with a switch (a case may hand off first), a stop without return, Arcjet's .protect(req), a session with a fallback,
+// an iron-session field that isn't a login, methods exported where plain can't see them, a catch that swallows the check, an unawaited
+// better-auth session, or `session?.user?.id !== userId` (a guest leaves userId out)
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const t3 = mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+const T3AUTH = { 'src/server/auth.ts': `import { getServerSession, type NextAuthOptions } from "next-auth"
+const authOptions: NextAuthOptions = { providers: [] }
+const getServerAuthSession = (ctx?: any) => ctx ? getServerSession(ctx.req, ctx.res, authOptions) : getServerSession(authOptions)
+`, 'src/server/posts.ts': `import { prisma } from "~/server/db"
+const deletePost = (id: string) => prisma.post.delete({ where: { id } })
+const createPost = (title: string, authorId: string) => prisma.post.create({ data: { title, authorId } })
+const listPosts = () => prisma.post.findMany()
+` }
+const head = `import type { NextApiRequest, NextApiResponse } from "next"
+import { getSession } from "next-auth/react"
+import { deletePost, createPost, listPosts } from "~/server/posts"
+`
+const tail = `  const session = await getSession({ req })
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  const post = await createPost(req.body.title, session.user.id)
+  return res.status(201).json(post)
+}
+`
+const sw = (cases: string) => ({ ...T3AUTH, 'src/pages/api/posts.ts': head + `export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  switch (req.method) {
+${cases}
+  }
+${tail}` })
+log('W0 control: no dispatch ::', t3(sw('')))
+log('W1 case DELETE: await then return ::', t3(sw(`    case "DELETE":
+      await deletePost(String(req.query.id))
+      return res.status(204).end()`)))
+log('W2 braced case DELETE { const id; await; return } ::', t3(sw(`    case "DELETE": {
+      const id = String(req.query.id)
+      await deletePost(id)
+      return res.status(204).end()
+    }`)))
+log('W3 braced case GET + DELETE ::', t3(sw(`    case "GET": {
+      const posts = await listPosts()
+      return res.json(posts)
+    }
+    case "DELETE": {
+      await deletePost(String(req.query.id))
+      return res.status(204).end()
+    }`)))
+log('W4 case DELETE: return deletePost (control, caught by r53) ::', t3(sw(`    case "DELETE":
+      return res.json(await deletePost(String(req.query.id)))`)))
+log('W5 case DELETE: res.json(await ...); break (no return, falls to check after the write) ::', t3(sw(`    case "DELETE":
+      res.json(await deletePost(String(req.query.id)))
+      return`)))
+log('W6 braced case GET only (public read, then the check) ::', t3(sw(`    case "GET": {
+      const posts = await listPosts()
+      return res.json(posts)
+    }`)))
+log('W7 if DELETE without return (falls into the check after the write) ::', t3({ ...T3AUTH, 'src/pages/api/posts.ts': head + `export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method === "DELETE") await deletePost(String(req.query.id))
+${tail}` }))
+const appHead = `import { NextResponse } from "next/server"
+import { getSession } from "next-auth/react"
+import { deletePost, createPost } from "~/server/posts"
+`
+log('W8 app route POST: switch on body.action before the check ::', t3({ ...T3AUTH, 'src/app/api/posts/route.ts': appHead + `export async function POST(req: Request) {
+  const body = await req.json()
+  switch (body.action) {
+    case "delete": {
+      await deletePost(body.id)
+      return NextResponse.json({ ok: true })
+    }
+  }
+  const session = await getSession({ req })
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  return NextResponse.json(await createPost(body.title, session.user.id))
+}
+` }))
+log('W9 app route POST: same with if (control) ::', t3({ ...T3AUTH, 'src/app/api/posts/route.ts': appHead + `export async function POST(req: Request) {
+  const body = await req.json()
+  if (body.action === "delete") {
+    await deletePost(body.id)
+    return NextResponse.json({ ok: true })
+  }
+  const session = await getSession({ req })
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  return NextResponse.json(await createPost(body.title, session.user.id))
+}
+` }))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const t3 = mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+// reqOk passes on any `).protect(` in the method (meant for Clerk's (await auth()).protect()), skipping the check that
+// the require*() helper is found and stops guests. Arcjet's documented chain `aj.withRule(...).protect(req)` has that text.
+const lib = (body: string) => ({ 'src/lib/guard.ts': `import { NextResponse } from "next/server"
+import { getSession } from "next-auth/react"
+export async function requireAuth(req: Request) {
+  const session = await getSession({ req: req as any })
+  ${body}
+  return session
+}
+`, 'src/lib/arcjet.ts': `import arcjet, { shield } from "@arcjet/next"
+export const aj = arcjet({ key: process.env.ARCJET_KEY!, rules: [shield({ mode: "LIVE" })] })
+`, 'src/server/posts.ts': `import { prisma } from "~/server/db"
+export const createPost = (title: string) => prisma.post.create({ data: { title } })
+` })
+const route = (pre: string) => ({ 'src/app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { requireAuth } from "@/lib/guard"
+import { aj } from "@/lib/arcjet"
+import { slidingWindow } from "@arcjet/next"
+import { createPost } from "~/server/posts"
+export async function POST(req: Request) {
+${pre}
+  await requireAuth(req)
+  const body = await req.json()
+  return NextResponse.json(await createPost(body.title))
+}
+` })
+const ret401 = 'if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })'
+const arc = `  const decision = await aj.withRule(slidingWindow({ mode: "LIVE", interval: "1m", max: 5 })).protect(req)
+  if (decision.isDenied()) return NextResponse.json({ error: "Too many requests" }, { status: 429 })`
+const p = '{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0","@arcjet/next":"1.0.0"}}'
+const ax = mk(p)
+log('P0 control: helper returns 401 (ignored), no arcjet ::', ax({ ...lib(ret401), ...route('') }))
+log('P1 helper returns 401 (ignored) + arcjet withRule().protect(req) ::', ax({ ...lib(ret401), ...route(arc) }))
+log('P2 helper throws (true) + arcjet ::', ax({ ...lib('if (!session) throw new Error("Unauthorized")'), ...route(arc) }))
+log('P3 helper never checks + arcjet ::', ax({ ...lib(''), ...route(arc) }))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const t3 = mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+// The guest branch "stops" by name (hardStop: redirect( / unauthorized( / forbidden( / notFound() but builds a response
+// without returning it, so the write below still runs for guests.
+const posts = { 'src/server/posts.ts': `import { prisma } from "~/server/db"
+export const createPost = (title: string) => prisma.post.create({ data: { title } })
+`, 'src/lib/http.ts': `import { NextResponse } from "next/server"
+export const unauthorized = () => NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+` }
+const app = (branch: string, extra = '') => ({ ...posts, 'src/app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { getSession } from "next-auth/react"
+import { createPost } from "~/server/posts"
+${extra}
+export async function POST(req: Request) {
+  const session = await getSession({ req: req as any })
+  if (!session) ${branch}
+  const body = await req.json()
+  return NextResponse.json(await createPost(body.title))
+}
+` })
+const api = (branch: string) => ({ ...posts, 'src/pages/api/posts.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { getSession } from "next-auth/react"
+import { createPost } from "~/server/posts"
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getSession({ req })
+  if (!session) ${branch}
+  res.json(await createPost(req.body.title))
+}
+` })
+log('N0 control: return NextResponse.json 401 ::', t3(app('return NextResponse.json({ error: "Unauthorized" }, { status: 401 })')))
+log('N1 NextResponse.redirect(...) without return ::', t3(app('NextResponse.redirect(new URL("/login", req.url))')))
+log('N2 { NextResponse.redirect(...) } without return, braces ::', t3(app('{\n    NextResponse.redirect(new URL("/login", req.url))\n  }')))
+log('N3 own unauthorized() helper without return ::', t3(app('unauthorized()', 'import { unauthorized } from "@/lib/http"')))
+log('N4 Response.redirect without return ::', t3(app('Response.redirect(new URL("/login", req.url))')))
+log('N5 next/navigation redirect (throws, control) ::', t3(app('redirect("/login")', 'import { redirect } from "next/navigation"')))
+log('A0 control: pages/api return res.status(401) ::', t3(api('return res.status(401).json({ error: "Unauthorized" })')))
+log('A1 pages/api { res.redirect("/login") } no return ::', t3(api('{\n    res.redirect("/login")\n  }')))
+log('A2 pages/api res.redirect(307, "/api/auth/signin") no return ::', t3(api('res.redirect(307, "/api/auth/signin")')))
+log('A3 pages/api res.status(401).json no return (P7, control) ::', t3(api('res.status(401).json({ error: "Unauthorized" })')))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+// The session name is tested for existence where the value is always there (Clerk's getAuth(req) object, an un-awaited
+// better-auth auth.api.getSession() Promise) or compared to undefined where guests get null.
+const posts = { 'src/server/posts.ts': `import { prisma } from "~/server/db"
+export const createPost = (title: string) => prisma.post.create({ data: { title } })
+` }
+const ck = mk('{"dependencies":{"next":"14.0.0","@clerk/nextjs":"5.0.0","@prisma/client":"5.0.0"}}')
+const ba = mk('{"dependencies":{"next":"15.0.0","better-auth":"1.0.0","@prisma/client":"5.0.0"}}')
+const na = mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+log('C1 pages/api const auth = getAuth(req); if (!auth) 401 (always an object) ::', ck({ ...posts, 'src/pages/api/posts.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { getAuth } from "@clerk/nextjs/server"
+import { createPost } from "~/server/posts"
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = getAuth(req)
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await createPost(req.body.title))
+}
+` }))
+log('C2 control: const { userId } = getAuth(req); if (!userId) ::', ck({ ...posts, 'src/pages/api/posts.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { getAuth } from "@clerk/nextjs/server"
+import { createPost } from "~/server/posts"
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const { userId } = getAuth(req)
+  if (!userId) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await createPost(req.body.title))
+}
+` }))
+const baRoute = (decl: string, cond = '!session') => ({ ...posts, 'src/lib/auth.ts': `import { betterAuth } from "better-auth"
+export const auth = betterAuth({})
+`, 'src/app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { headers } from "next/headers"
+import { auth } from "@/lib/auth"
+import { createPost } from "~/server/posts"
+export async function POST(req: Request) {
+  ${decl}
+  if (${cond}) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const body = await req.json()
+  return NextResponse.json(await createPost(body.title))
+}
+` })
+log('B0 control: await auth.api.getSession ::', ba(baRoute('const session = await auth.api.getSession({ headers: await headers() })')))
+log('B1 auth.api.getSession NOT awaited, if (!session) ::', ba(baRoute('const session = auth.api.getSession({ headers: await headers() })')))
+log('B2 auth.api.getSession({ headers: req.headers }) NOT awaited ::', ba(baRoute('const session = auth.api.getSession({ headers: req.headers })')))
+const naRoute = (cond: string) => ({ ...posts, 'src/pages/api/posts.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { getSession } from "next-auth/react"
+import { createPost } from "~/server/posts"
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getSession({ req })
+  if (${cond}) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await createPost(req.body.title))
+}
+` })
+log('U1 session === undefined (guests get null) ::', na(naRoute('session === undefined')))
+log('U2 session === false ::', na(naRoute('session === false')))
+log('U3 control session === null ::', na(naRoute('session === null')))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const t3 = mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+// App route: POST checks; another write method is exported in a shape plain may not count (wrapped, re-exported, destructured)
+const posts = { 'src/server/posts.ts': `import { prisma } from "~/server/db"
+export const createPost = (title: string) => prisma.post.create({ data: { title } })
+export const deletePost = (id: string) => prisma.post.delete({ where: { id } })
+`, 'src/lib/api.ts': `import { NextResponse } from "next/server"
+export const withErrors = (h: (req: Request) => Promise<Response>) => async (req: Request) => { try { return await h(req) } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }) } }
+`, 'src/app/api/posts/delete.ts': `import { NextResponse } from "next/server"
+import { deletePost } from "~/server/posts"
+export async function DELETE(req: Request) {
+  const id = new URL(req.url).searchParams.get("id")!
+  await deletePost(id)
+  return NextResponse.json({ ok: true })
+}
+` }
+const route = (extra: string) => ({ ...posts, 'src/app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { getSession } from "next-auth/react"
+import { createPost, deletePost } from "~/server/posts"
+import { withErrors } from "@/lib/api"
+export async function POST(req: Request) {
+  const session = await getSession({ req: req as any })
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const body = await req.json()
+  return NextResponse.json(await createPost(body.title))
+}
+${extra}
+` })
+log('M0 control: POST only ::', t3(route('')))
+log('M1 export const DELETE = withErrors(async (req) => ...) unchecked ::', t3(route(`export const DELETE = withErrors(async (req: Request) => {
+  const id = new URL(req.url).searchParams.get("id")!
+  await deletePost(id)
+  return NextResponse.json({ ok: true })
+})`)))
+log('M2 export { DELETE } from "./delete" ::', t3(route('export { DELETE } from "./delete"')))
+log('M3 export * from "./delete" ::', t3(route('export * from "./delete"')))
+log('M4 export const DELETE = async (req) => unchecked ::', t3(route(`export const DELETE = async (req: Request) => {
+  const id = new URL(req.url).searchParams.get("id")!
+  await deletePost(id)
+  return NextResponse.json({ ok: true })
+}`)))
+log('M5 const handler = ...; export { handler as DELETE } (control r56) ::', t3(route(`const remove = async (req: Request) => { await deletePost(new URL(req.url).searchParams.get("id")!); return NextResponse.json({ ok: true }) }
+export { remove as DELETE }`)))
+log('M6 export const DELETE = withErrors(remove) ::', t3(route(`async function remove(req: Request) { await deletePost(new URL(req.url).searchParams.get("id")!); return NextResponse.json({ ok: true }) }
+export const DELETE = withErrors(remove)`)))
+log('M7 export const PUT = POST, DELETE = remove (multi-declarator) ::', t3(route(`async function remove(req: Request) { await deletePost(new URL(req.url).searchParams.get("id")!); return NextResponse.json({ ok: true }) }
+export const PUT = POST, DELETE = remove`)))
+log('M8 export { remove as "DELETE" }? / export { DELETE } local after decl ::', t3(route(`async function DELETE(req: Request) { await deletePost(new URL(req.url).searchParams.get("id")!); return NextResponse.json({ ok: true }) }
+export { DELETE }`)))
+const bottom = (exp: string) => ({ ...posts, 'src/app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { getSession } from "next-auth/react"
+import { createPost, deletePost } from "~/server/posts"
+async function POST(req: Request) {
+  const session = await getSession({ req: req as any })
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const body = await req.json()
+  return NextResponse.json(await createPost(body.title))
+}
+async function DELETE(req: Request) {
+  await deletePost(new URL(req.url).searchParams.get("id")!)
+  return NextResponse.json({ ok: true })
+}
+${exp}
+` })
+log('M9 all declared, export { POST, DELETE } at the bottom ::', t3(bottom('export { POST, DELETE }')))
+log('M10 export { POST }; export { DELETE } ::', t3(bottom('export { POST }\nexport { DELETE }')))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const t3 = mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+// The session's own declaration falls back to something that's always there (a demo session, a body-built user)
+const posts = { 'src/server/posts.ts': `import { prisma } from "~/server/db"
+export const createPost = (title: string, authorId: string) => prisma.post.create({ data: { title, authorId } })
+`, 'src/lib/demo.ts': `export const DEMO_SESSION = { user: { id: "demo", name: "Demo user" } }
+` }
+const api = (decl: string) => ({ ...posts, 'src/pages/api/posts.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { getSession } from "next-auth/react"
+import { DEMO_SESSION } from "@/lib/demo"
+import { createPost } from "~/server/posts"
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  ${decl}
+  if (!session) return res.status(401).json({ error: "Unauthorized" })
+  res.json(await createPost(req.body.title, session.user.id))
+}
+` })
+log('F0 control ::', t3(api('const session = await getSession({ req })')))
+log('F1 (await getSession({ req })) ?? { user: { id: req.body.userId } } ::', t3(api('const session = (await getSession({ req })) ?? { user: { id: req.body.userId } }')))
+log('F2 (await getSession({ req })) || DEMO_SESSION ::', t3(api('const session = (await getSession({ req })) || DEMO_SESSION')))
+log('F3 process.env.DEMO_MODE ? DEMO_SESSION : await getSession({ req }) ::', t3(api('const session = process.env.DEMO_MODE ? DEMO_SESSION : await getSession({ req })')))
+log('F4 await getSession({ req }) ?? DEMO_SESSION (no parens) ::', t3(api('const session = await getSession({ req }) ?? DEMO_SESSION')))
+log('F5 const session = await getSession({ req }).catch(() => DEMO_SESSION) ::', t3(api('const session = await getSession({ req }).catch(() => DEMO_SESSION)')))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const t3 = mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+// review54 Q5 (inline check thrown inside a try whose catch logs and carries on) was known because HEAD gave the same ✓;
+// with a session call HEAD doesn't know (getSession, getServerAuthSession, getToken) HEAD warns and NEW gives the ✓
+const posts = { 'src/server/posts.ts': `import { prisma } from "~/server/db"
+export const deletePosts = () => prisma.post.deleteMany()
+` }
+log('T1 app route: try { getSession; if (!s) throw } catch { log } then write ::', t3({ ...posts, 'src/app/api/posts/route.ts': `import { getSession } from "next-auth/react"
+import { deletePosts } from "~/server/posts"
+export async function DELETE(req: Request) {
+  try {
+    const session = await getSession({ req: req as any })
+    if (!session) throw new Error("Unauthorized")
+  } catch (e) {
+    console.error(e)
+  }
+  await deletePosts()
+  return Response.json({ ok: true })
+}
+` }))
+log('T2 pages/api: same with getToken ::', t3({ ...posts, 'src/pages/api/posts.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { getToken } from "next-auth/jwt"
+import { deletePosts } from "~/server/posts"
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  try {
+    const token = await getToken({ req })
+    if (!token) throw new Error("Unauthorized")
+  } catch (e) {
+    console.error(e)
+  }
+  await deletePosts()
+  res.json({ ok: true })
+}
+` }))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+const t3 = mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')
+// `if (session?.user?.id !== userId) return 403` with userId from the request: a guest who leaves userId out
+// passes (undefined !== undefined is false). isNegLogin reads `!==` on session?.x as a login check.
+const posts = { 'src/server/posts.ts': `import { prisma } from "~/server/db"
+export const deleteUserPosts = (authorId: string) => prisma.post.deleteMany({ where: { authorId } })
+`, 'src/lib/session.ts': `import { getServerSession } from "next-auth"
+import { authOptions } from "@/lib/auth"
+export async function getCurrentUser() { const s = await getServerSession(authOptions); return s?.user }
+` }
+log('O1 app route: getSession, session?.user?.id !== body.userId -> 403 ::', t3({ ...posts, 'src/app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { getSession } from "next-auth/react"
+import { deleteUserPosts } from "~/server/posts"
+export async function DELETE(req: Request) {
+  const { userId } = await req.json()
+  const session = await getSession({ req: req as any })
+  if (session?.user?.id !== userId) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  await deleteUserPosts(userId)
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('O2 app route: getCurrentUser, user?.id !== searchParams userId ::', t3({ ...posts, 'src/app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { getCurrentUser } from "@/lib/session"
+import { deleteUserPosts } from "~/server/posts"
+export async function DELETE(req: Request) {
+  const userId = new URL(req.url).searchParams.get("userId")
+  const user = await getCurrentUser()
+  if (user?.id !== userId) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  await deleteUserPosts(userId!)
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('O3 control: if (!session || session.user.id !== userId) ::', t3({ ...posts, 'src/app/api/posts/route.ts': `import { NextResponse } from "next/server"
+import { getSession } from "next-auth/react"
+import { deleteUserPosts } from "~/server/posts"
+export async function DELETE(req: Request) {
+  const { userId } = await req.json()
+  const session = await getSession({ req: req as any })
+  if (!session || session.user.id !== userId) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  await deleteUserPosts(userId)
+  return NextResponse.json({ ok: true })
+}
+` }))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+{
+const outs: string[] = [], log = (...a: unknown[]) => { if (a.length) outs.push(a.join(' ').replace(/\s+/g, ' ')) }
+// pages/api: switch dispatch before the login check, where the case does something before returning (or is braced, as no-case-declarations wants)
+const mk = (pkg: string) => { const nx = { 'package.json': pkg }
+  return (files: Record<string, string>) => report(new Map(Object.entries(nx)), new Map(Object.entries({ ...nx, ...files })), { ref: 'main' }).replace(/\s+/g, ' ') }
+// iron-session's session object is always there and also holds things that aren't a login (an anonymous cart, OAuth state).
+// `if (!session.cartId) return ...` reads as a login check (`!session.x`, like `!user?.isAdmin`), and the "always there" rule
+// only asks that some property of session be tested.
+const ir = mk('{"dependencies":{"next":"14.0.0","iron-session":"8.0.0","@prisma/client":"5.0.0"}}')
+const lib = { 'src/lib/session.ts': `export type SessionData = { cartId?: string; userId?: string }
+export const sessionOptions = { password: process.env.SECRET!, cookieName: "shop" }
+`, 'src/server/cart.ts': `import { prisma } from "~/server/db"
+export const addItem = (cartId: string, productId: string) => prisma.cartItem.create({ data: { cartId, productId } })
+export const clearCart = (cartId: string) => prisma.cartItem.deleteMany({ where: { cartId } })
+` }
+const route = (body: string) => ({ ...lib, 'src/app/api/cart/route.ts': `import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { getIronSession } from "iron-session"
+import { sessionOptions, type SessionData } from "@/lib/session"
+import { addItem, clearCart } from "~/server/cart"
+${body}
+` })
+log('I1 DELETE: if (!session.cartId) return NextResponse.json({ ok: true }) (nothing to clear) ::', ir(route(`export async function DELETE() {
+  const session = await getIronSession(cookies(), sessionOptions)
+  if (!session.cartId) return NextResponse.json({ ok: true })
+  await clearCart(session.cartId)
+  return NextResponse.json({ ok: true })
+}`)))
+log('I2 POST: if (!session.cartId) return 400 ::', ir(route(`export async function POST(req: Request) {
+  const session = await getIronSession(cookies(), sessionOptions)
+  if (!session.cartId) return NextResponse.json({ error: "No cart yet" }, { status: 400 })
+  const { productId } = await req.json()
+  await addItem(session.cartId, productId)
+  return NextResponse.json({ ok: true })
+}`)))
+log('I3 control: if (!session.userId) return 401 ::', ir(route(`export async function POST(req: Request) {
+  const session = await getIronSession(cookies(), sessionOptions)
+  if (!session.userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const { productId } = await req.json()
+  await addItem(session.userId, productId)
+  return NextResponse.json({ ok: true })
+}`)))
+log('I4 pages/api: if (!req.session.cartId)-style via getIronSession(req, res) ::', ir({ ...lib, 'src/pages/api/cart.ts': `import type { NextApiRequest, NextApiResponse } from "next"
+import { getIronSession } from "iron-session"
+import { sessionOptions, type SessionData } from "@/lib/session"
+import { clearCart } from "~/server/cart"
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getIronSession(req, res, sessionOptions)
+  if (!session.cartId) return res.json({ ok: true })
+  await clearCart(session.cartId)
+  res.json({ ok: true })
+}
+` }))
+log('I5 OAuth callback GET: if (!session.oauthState || session.oauthState !== state) throw Error("Invalid OAuth state") ::', ir({ ...lib, 'src/server/users.ts': `import { prisma } from "~/server/db"
+export const upsertGithubUser = (login: string) => prisma.user.upsert({ where: { login }, create: { login }, update: {} })
+`, 'src/app/api/auth/github/callback/route.ts': `import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { getIronSession } from "iron-session"
+import { sessionOptions } from "@/lib/session"
+import { upsertGithubUser } from "~/server/users"
+export async function GET(req: Request) {
+  const url = new URL(req.url)
+  const state = url.searchParams.get("state")
+  const session = await getIronSession(cookies(), sessionOptions)
+  if (!session.oauthState || session.oauthState !== state) throw new Error("Invalid OAuth state")
+  const login = await exchangeCode(url.searchParams.get("code")!)
+  const user = await upsertGithubUser(login)
+  session.userId = user.id
+  await session.save()
+  return NextResponse.redirect(new URL("/", req.url))
+}
+async function exchangeCode(code: string) { return code }
+` }))
+log('I6 POST: if (!session.cartId) redirect("/cart") (next/navigation) ::', ir(route(`import { redirect } from "next/navigation"
+export async function POST(req: Request) {
+  const session = await getIronSession(cookies(), sessionOptions)
+  if (!session.cartId) redirect("/cart")
+  const { productId } = await req.json()
+  await addItem(session.cartId, productId)
+  return NextResponse.json({ ok: true })
+}`)))
+log('I7 contact form POST: CSRF token kept in iron-session, mismatch -> 403 ::', ir({ ...lib, 'src/server/messages.ts': `import { prisma } from "~/server/db"
+export const saveMessage = (email: string, text: string) => prisma.message.create({ data: { email, text } })
+`, 'src/app/api/contact/route.ts': `import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { getIronSession } from "iron-session"
+import { sessionOptions } from "@/lib/session"
+import { saveMessage } from "~/server/messages"
+export async function POST(req: Request) {
+  const session = await getIronSession(cookies(), sessionOptions)
+  const { email, message, csrf } = await req.json()
+  if (!session.csrfToken || session.csrfToken !== csrf) return NextResponse.json({ error: "Invalid CSRF token" }, { status: 403 })
+  await saveMessage(email, message)
+  return NextResponse.json({ ok: true })
+}
+` }))
+log('I8 same with next-auth getToken + 403 on csrf (control: guests stopped since token null) ::', mk('{"dependencies":{"next":"14.0.0","next-auth":"4.24.0","@prisma/client":"5.0.0"}}')({ ...lib, 'src/server/messages.ts': `import { prisma } from "~/server/db"
+export const saveMessage = (email: string, text: string) => prisma.message.create({ data: { email, text } })
+`, 'src/app/api/contact/route.ts': `import { NextResponse } from "next/server"
+import { getToken } from "next-auth/jwt"
+import { saveMessage } from "~/server/messages"
+export async function POST(req: Request) {
+  const token = await getToken({ req: req as any })
+  const { email, message } = await req.json()
+  if (token?.email !== email) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  await saveMessage(email, message)
+  return NextResponse.json({ ok: true })
+}
+` }))
+for (const x of outs) if (new RegExp(String.raw`^(W1|W2|W3|W5|W8|N1|N2|N3|N4|A1|A2|P1|P3|F1|F2|F4|F5|I6|I7|M2|M3|M7|M8|O1|O2|T1|B1|B2)\b`).test(x)) assert.ok(!/requires login ✓/.test(x), x)
+}
+console.log('ok (review 59)')
