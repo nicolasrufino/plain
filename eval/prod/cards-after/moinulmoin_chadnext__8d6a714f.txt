@@ -25,3 +25,7 @@ WHAT CHANGED
       project by id, update project by id, delete project by id, update user and remove user
       old image from cdn parts of your server in ways plain can't describe yet. Ask the
       agent what they do differently.
+  Other files
+    • The agent also changed src/app/[locale]/dashboard/settings/settings-form.tsx,
+      src/app/api/uploadthing/core.ts and src/components/sections/pricing.tsx, in ways plain
+      can't describe yet.

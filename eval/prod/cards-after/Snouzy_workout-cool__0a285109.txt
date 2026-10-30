@@ -13,6 +13,9 @@ WHAT CHANGED
       server in ways plain can't describe yet. Ask the agent what they do differently.
   Database
     • Users now also store the onboarding preferences.
+  Other files
+    • The agent also changed src/features/workout-session/ui/workout-session-sets.tsx, in a
+      way plain can't describe yet.
 
 BEFORE YOU SHIP
   1. Update your database: run `npx prisma migrate dev` (on your live site: `npx prisma

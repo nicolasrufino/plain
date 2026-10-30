@@ -17,6 +17,9 @@ WHAT CHANGED
     • The agent changed mobile/test/screens/phone_viewport_test.dart.
     • The agent changed mobile/test/unit/lead_alerts_models_test.dart.
     • The agent changed mobile/test/unit/notifications_provider_test.dart.
+    • The agent also changed frontend/src/lib/server/v2/custom-objects.ts,
+      frontend/src/lib/server/v2/notifications.ts and
+      frontend/src/lib/server/v2/related-records.ts, in ways plain can't describe yet.
 
 LOOSE ENDS
   ◐ Type checking is turned off in 1 spot in

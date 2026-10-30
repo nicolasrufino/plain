@@ -8,3 +8,7 @@ WHAT CHANGED
   Server
     • The agent changed the views dataroom and views parts of your server in ways plain
       can't describe yet. Ask the agent what they do differently.
+  Other files
+    • The agent also changed components/links/link-sheet/password-section.tsx,
+      components/view/access-form/password-section.tsx and lib/utils.ts, in ways plain can't
+      describe yet.

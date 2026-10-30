@@ -9,3 +9,5 @@ WHAT CHANGED
     + The agent added public/manifest.json.
     + The agent added public/touch-icon-512.png.
     • The agent changed app/views/layouts/application.html.erb.
+    • The agent also changed app/javascript/application.js and
+      config/initializers/content_security_policy.rb, in ways plain can't describe yet.

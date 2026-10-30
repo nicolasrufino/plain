@@ -7,7 +7,7 @@ You asked: "准备细化权限控制"
 WHAT CHANGED
   Other files
     • The agent changed server/db.sqlite3.
-    • The agent also changed server/apps/system/models.py and server/server/settings_dev.py,
-      in ways plain can't describe yet.
+    • The agent also changed client/src/utils/request.js, server/apps/system/models.py and
+      server/server/settings_dev.py, in ways plain can't describe yet.
 
 (Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

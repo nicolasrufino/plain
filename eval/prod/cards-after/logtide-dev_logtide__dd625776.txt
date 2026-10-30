@@ -7,6 +7,8 @@ You asked: "add metrics datapoint quota"
 WHAT CHANGED
   Other files
     • The agent changed CHANGELOG.md, a notes file (not code).
+    • The agent also changed packages/backend/src/capabilities/registry.ts, in a way plain
+      can't describe yet.
 
 LOOSE ENDS
   ◐ Type checking is turned off in 1 spot in

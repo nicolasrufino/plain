@@ -37,6 +37,7 @@ WHAT CHANGED
     + The agent added prisma/schema/redaction.prisma.
     • The agent changed prisma/schema/document.prisma.
     • The agent changed prisma/schema/team.prisma.
+    • The agent also changed lib/trigger/queues.ts, in a way plain can't describe yet.
 
 BEFORE YOU SHIP
   1. Apply prisma/migrations/20260424000000_add_redactions_model to your live database

@@ -361,7 +361,7 @@ console.log('ok (routes that start changing data)')
     'The my bookings page is new, titled "My bookings".', 'You have to log in to open it ✓ /my-bookings', 'It has a "Book a spot" button and starts a payment 💰. /classes/[classId]',
     'New server code that saves new bookings, charges customers 💰 and requires login ✓. (server action) bookClass', 'lists classes and works without logging in'])
     assert.ok(c.includes(e), `tanstack missing: "${e}"\n${c}`)
-  for (const e of ['stripe webhook part', 'Card', 'root']) assert.ok(!c.includes(e), `tanstack should not say "${e}"\n${c}`)
+  for (const e of ['stripe webhook part', 'card page', 'Card page', 'root']) assert.ok(!c.includes(e), `tanstack should not say "${e}"\n${c}`)   // (Card.tsx isn't a page; listing it as an added file is fine)
   // App-wide middleware can't block logged-out people (signing in would break), so it isn't a login check.
   const g = card(tsBefore, { ...tsAfter, 'src/start.ts': 'export const startInstance = createStart(() => ({ functionMiddleware: [authMiddleware] }))\n' })
   assert.ok(g.includes('⚠ Anyone can use the "save class" action on your server without logging in.'), g)
@@ -7714,3 +7714,20 @@ console.log('ok (review 73)')
   assert.ok(!c(sv, { ...sv, 'src/lib/stores.ts': 'export const doubled = derived(count, ($count) => $count * 2)\n' }).includes('Nothing about the app changed'), 'svelte derived')
 }
 console.log('ok (review 74)')
+// Every stack: an existing code file that changed and that the card doesn't cover another way is named ("also changed")
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/about/page.tsx': 'export default function A() { return <main /> }\n',
+    'app/pricing/page.tsx': 'import { PriceCard } from "@/components/PriceCard"\nimport Plans from "@/components/PlanList"\nexport default function P() { return <main><Plans /></main> }\n',
+    'components/PriceCard.tsx': 'export function PriceCard() { return <b>Basic</b> }\n', 'components/PlanList.tsx': 'export default function PlanList() { return <ul /> }\n', 'lib/format.ts': 'export const money = (n: number) => "$" + n\n' }
+  // a helper an unchanged page uses still changed: named
+  const util = c(nx, { ...nx, 'app/about/page.tsx': 'export default function A() { return <main><h1>About us</h1></main> }\n', 'lib/format.ts': 'export const money = (n: number) => "€" + n\n' })
+  assert.ok(util.includes('The agent also changed lib/format.ts, in a way plain can\'t describe yet.'), util)
+  // a component the page now shows, imported under another name: the page line covers it
+  const shown = c(nx, { ...nx, 'app/pricing/page.tsx': nx['app/pricing/page.tsx'].replace('<Plans />', '<Plans /><PriceCard />'), 'components/PriceCard.tsx': 'export function PriceCard() { return <b>Pro</b> }\n', 'components/PlanList.tsx': 'export default function PlanList() { return <ol /> }\n' })
+  assert.ok(shown.includes('now shows the price card') && !shown.includes('also changed components/PriceCard.tsx') && !shown.includes('PlanList'), shown)
+  // Ruby: a comment added at the top isn't a change
+  const rb = { 'Gemfile': 'gem "rails"\n', 'lib/thing.rb': 'class Thing\n  def x; end\nend\n', 'app/models/post.rb': 'class Post < ApplicationRecord\nend\n' }
+  assert.ok(!c(rb, { ...rb, 'lib/thing.rb': '# doc\n' + rb['lib/thing.rb'] }).includes('thing.rb'), 'ruby comment')
+}
+console.log('ok (also changed)')

@@ -8,3 +8,5 @@ WHAT CHANGED
   Other files
     • The agent changed public/css/style.css.
     • The agent changed resources/views/conversations/partials/conv_list.blade.php.
+    • The agent also changed app/Conversation.php and
+      app/Http/Controllers/ConversationsController.php, in ways plain can't describe yet.

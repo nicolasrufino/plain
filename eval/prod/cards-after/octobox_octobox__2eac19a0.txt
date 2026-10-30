@@ -8,3 +8,5 @@ WHAT CHANGED
   Other files
     • The agent changed README.md, a notes file (not code).
     • The agent changed app/views/shared/_keyboard_mappings.html.erb.
+    • The agent also changed app/assets/javascripts/octobox.js, in a way plain can't
+      describe yet.

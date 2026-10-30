@@ -146,6 +146,12 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   (`where: { id: session.user.id }`, behind a login check) "shows and updates the logged-in person's own account".
   A function that was a helper and moved into a `"use server"` file isn't called new: the card says the browser can now
   call it directly.
+- **Files the card doesn't explain.** When the card says something else, existing code files that changed but that it
+  doesn't cover another way get one line: "The agent also changed X and Y, in ways plain can't describe yet." Covered:
+  routes and files that declare them, models, schemas, migrations, types, config, seeds, tests, and files a route or page
+  the card describes uses (by name, by the file an import comes from, or by a component's file name). Go, Ruby, PHP, C# and
+  Java files are skipped when a route in that language changed: plain doesn't follow what those routes call, and the route
+  line already says that part changed. A card with nothing else to say lists every changed file instead.
 - **Before you ship.** Data that will be deleted, and migrations to run (with the folder, the
   live-site command and what fails until then). Also new env vars without a default, new
   packages, a test payment when payment code changed, and "the agent says it didn't run or

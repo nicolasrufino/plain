@@ -9,6 +9,8 @@ WHAT CHANGED
     • The auth login github callback part of your server changed in a way plain can't
       describe yet. Ask the agent what it does differently.
       /api/auth/login/github/callback
+  Other files
+    • The agent also changed src/lib/resend.ts, in a way plain can't describe yet.
 
 BEFORE YOU SHIP
   1. A new package was added: @tailwindcss/line-clamp (^0.4.4). Make sure you actually need

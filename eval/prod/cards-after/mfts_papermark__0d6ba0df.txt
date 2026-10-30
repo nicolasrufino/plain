@@ -19,6 +19,10 @@ WHAT CHANGED
     • The views part of your server changed in a way plain can't describe yet. Ask the agent
       what it does differently.
       /api/views
+  Other files
+    • The agent also changed components/links/embed-code-modal.tsx,
+      components/links/links-table.tsx, lib/auth/link-session.ts and
+      lib/middleware/domain.ts, in ways plain can't describe yet.
 
 LOOSE ENDS
   ◐ Type checking is turned off in 2 spots in pages/view/domains/[domain]/[slug]/embed.tsx

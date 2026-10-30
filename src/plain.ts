@@ -2238,7 +2238,9 @@ const shape = (t0: string, p: string) => {
   let out = t; for (const [x, y] of cuts.sort((a, b) => b[0] - a[0])) out = out.slice(0, x) + out.slice(y); return out + tail
 }
 // (JavaScript and TypeScript only, Vue and Svelte read as TypeScript; never PHP, Go or Python text)
-const same = (p: string, a?: string, b?: string) => a === b || a !== undefined && b !== undefined && /\.(?:[cm]?[jt]sx?|vue|svelte)$/.test(p.split('#')[0]) && shape(a, p.split('#')[0]) === shape(b, p.split('#')[0])
+// (Ruby, C#, Python... keep their code without comments and with spaces squeezed: a comment removed at the very top leaves a space)
+const same = (p: string, a?: string, b?: string) => a === b || a !== undefined && b !== undefined && (a.trim() === b.trim()
+  || /\.(?:[cm]?[jt]sx?|vue|svelte)$/.test(p.split('#')[0]) && shape(a, p.split('#')[0]) === shape(b, p.split('#')[0]))
 
 export type Analysis = ReturnType<typeof analyze>
 type Opts = { ref: string; asked?: string; color?: boolean; agentSaid?: string }   // agentSaid: the agent's last message, if known
@@ -3598,7 +3600,27 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // only when the card has nothing else to say (below); listing them all named files the card had described.
   const shown = [...changes.map(c => `${c.text} ${c.detail ?? ''}`), ...problems.map(x => x.text), ...ship, ...unfinished].join('\n')
   const wiring = (f?: FileFacts) => { const x = f as PyFacts | undefined; return !!x?.models && (x.models.size > 0 || x.mounts.length > 0 || x.servers.size > 0 || x.dj.urls.length > 0 || x.dj.routers.size > 0) }
-  const quiet = real.filter(p => !p.includes('#') && p.endsWith('.py') && !route(p) && ![...B.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
+  // Other languages, when the card says something else (an empty card lists them below, worded for that): existing code files that
+  // changed and that the card doesn't cover another way (a new helper is what a new route or page uses). Covered: routes and files that declare them, models, schemas, migrations, types, config, seeds,
+  // tests, and any file whose functions a route or page uses (a controller, a service, a component: the card describes them
+  // through that route or page).
+  // (and what those use in turn, a few levels down: a route calls handlers.go, which calls store.go; `prisma` from lib/prisma.ts)
+  const names = (f?: FileFacts) => f ? [...f.fns.keys(), ...f.exports] : [], stem = (q: string) => q.split('#')[0].split('/').pop()!.replace(/\..*$/, '')   // (PriceCard.vue is <PriceCard>)
+  // (seeded only from routes and pages the card describes, not from every route: a helper an unchanged page uses still changed)
+  const described = new Set(changes.filter(c => !c.vague && c.detail).map(c => c.detail))
+  // (with the files it imports: `import Plans from './PlanList'` covers PlanList.tsx)
+  // (an Express route `file#/api/x` takes its imports from its file: require('../controllers/userController'))
+  const seed = (f?: FileFacts) => f ? [...f.used, ...f.jsx, ...[...f.binds.values()].map(m => m.split('/').pop()!.replace(/^py:/, '').split('.').pop()!)] : []   // (and every module its file imports)
+  const usedByRoutes = new Set([...B.routes.keys()].filter(q => real.includes(q) && described.has(route(q)!.url)).flatMap(q => [...seed(B.files.get(q)), ...q.includes('#') ? seed(B.files.get(q.split('#')[0])) : []]))
+  for (let i = 0; i < 3; i++) for (const [q, f] of B.files) if ([...names(f), stem(q)].some(n => usedByRoutes.has(n))) for (const n of [...f.used, ...f.jsx]) usedByRoutes.add(n)
+  const otherCode = (p: string) => changes.length > 0 && before.has(p) && after.has(p) && CODE.test(p) && !p.endsWith('.py') && !TESTS.test(p)
+    && !/(^|\/)(models?|schemas?|entities|migrations?|db\/migrate|database\/migrations|types?|dtos?|seeds?|seeders|routes)(\/|\.)|\.d\.ts$|(^|\/)[\w.-]+\.config\.[cm]?[jt]s$|(^|\/)(seed|main|server|app|index|DbContext|AppDbContext|Contracts|Program|Startup)\.\w+$|DbContext\.cs$|(^|\/)\+(page|layout|server|error)(\.server)?\.[jt]s$/i.test(p)
+    && ![...names(B.files.get(p) ?? A.files.get(p)), stem(p)].some(n => usedByRoutes.has(n))
+    // (Go, Ruby, PHP, C#, Java: plain doesn't follow what their routes call, and a changed route in the same language already says
+    // that part changed)
+    && !(/\.(?:go|rb|php|cs|java|kt)$/.test(p) && real.some(q => route(q) && q.split('#')[0].split('.').pop() === p.split('.').pop()))
+    && !((f?: FileFacts) => !!f && (f.pages.length > 0 || f.mounts.length > 0 || f.handlers.length > 0))(B.files.get(p) ?? A.files.get(p))   // (declares routes: React Router's <Route>, app.use(...))
+  const quiet = real.filter(p => !p.includes('#') && (p.endsWith('.py') || otherCode(p)) && !route(p) && ![...B.routes.keys(), ...A.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
     && !/(^|\/)(migrations|alembic)\/|(^|\/)__init__\.py$|(^|\/)(apps|asgi|wsgi|manage)\.py$/.test(p))
   for (const tests of [false, true]) for (const [verb, xs] of [['added', quiet.filter(q => !before.has(q))], ['changed', quiet.filter(q => before.has(q) && after.has(q))], ['deleted', quiet.filter(q => !after.has(q))]] as const) {
     const ys = xs.filter(q => TESTS.test(q) === tests), names = ys.length > 6 ? [...ys.slice(0, 5), `${ys.length - 5} more files`] : ys

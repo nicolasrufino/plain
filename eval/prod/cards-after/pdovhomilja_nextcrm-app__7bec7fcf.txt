@@ -11,6 +11,9 @@ WHAT CHANGED
       /[locale]/crm/orders/[orderId]
   Database
     • Crm orders now also store the order date.
+  Other files
+    • The agent also changed app/[locale]/(routes)/crm/orders/components/OrdersTable.tsx and
+      lib/orders/serialize.ts, in ways plain can't describe yet.
 
 BEFORE YOU SHIP
   1. Apply prisma/migrations/20261013000000_order_date to your live database before the new

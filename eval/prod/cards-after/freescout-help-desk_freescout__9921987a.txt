@@ -12,3 +12,5 @@ WHAT CHANGED
     • The agent changed resources/views/modules/modules.blade.php.
     • The agent changed resources/views/secure/logs.blade.php.
     • The agent changed resources/views/users/subscriptions_table.blade.php.
+    • The agent also changed app/Http/Controllers/CustomersController.php,
+      app/Misc/Helper.php and app/Thread.php, in ways plain can't describe yet.

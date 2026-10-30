@@ -7,3 +7,5 @@ You asked: "feat: add minimum app version support"
 WHAT CHANGED
   Other files
     • The agent changed app/views/api/v1/systems/show.json.jbuilder.
+    • The agent also changed config/application.rb and lib/black_candy/version.rb, in ways
+      plain can't describe yet.

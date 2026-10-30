@@ -24,7 +24,8 @@ cards (46%) said nothing useful. The descriptions it does give are mostly right 
   [eval/prod/grades/](../eval/prod/grades), and [score.ts](../eval/prod/score.ts) adds them up.
 
 To rerun it, clone the repos (`--depth 300`) into `eval/prod/repos/` and run `node eval/prod/run.ts`. It keeps
-`picks.json`.
+`picks.json`. On a Mac with 8 GB of memory, give Node more room (`node --max-old-space-size=4096 eval/prod/run.ts`): the
+biggest repos pass Node's default limit there.
 
 ## Results
 

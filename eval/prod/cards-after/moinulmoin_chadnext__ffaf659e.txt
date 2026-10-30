@@ -19,6 +19,8 @@ WHAT CHANGED
       /api/webhooks/stripe
   Other files
     + The agent added .cursor/mcp.json.
+    • The agent also changed src/components/billing-form.tsx, in a way plain can't describe
+      yet.
 
 BEFORE YOU SHIP
   1. In Stripe (Workbench → Webhooks, your endpoint), make sure it receives

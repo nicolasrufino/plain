@@ -9,3 +9,6 @@ WHAT CHANGED
     • The agent changed the open form PDF template submission download and open form PDF
       template preview parts of your server in ways plain can't describe yet. Ask the agent
       what they do differently.
+  Other files
+    • The agent also changed client/components/open/pdf-editor/PdfRightSidebar.vue and
+      client/stores/working_pdf.js, in ways plain can't describe yet.
