@@ -8337,3 +8337,15 @@ console.log('ok (style settings)')
   assert.ok(!c(code, { ...code, 'src/messages/en.ts': 'export function send() { return fetch("/api/send", { method: "POST", mode: "cors" }) }\n' }).includes('wording'), 'code in messages/')
 }
 console.log('ok (translations)')
+// The biggest part of a change, when nothing on the card says what it is: where it is and how big (workout-cool's new modal)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/page.tsx': 'export default function P() { return <main><h1>Home</h1><p>Hi</p></main> }\n', 'lib/a.ts': 'export const a = 1\n' }
+  const modal = Array.from({ length: 40 }, (_, i) => `  const v${i} = useState(${i})`).join('\n')
+  const x = c(base, { ...base, 'lib/a.ts': 'export const a = 2\n', 'components/picker.tsx': `export function Picker() {\n${modal}\n  return null\n}\n` })
+  assert.ok(x.includes('Most of this change is in a new file, components/picker.tsx (43 lines added).'), x)
+  // (not on a card that already says something specific: a page line; nor for a small change)
+  assert.ok(!c(base, { ...base, 'app/page.tsx': base['app/page.tsx'].replace('Hi', 'Hello there'), 'components/picker.tsx': `export function Picker() {\n${modal}\n  return null\n}\n` }).includes('Most of this change'), 'a page line')
+  assert.ok(!c(base, { ...base, 'app/page.tsx': base['app/page.tsx'].replace('Hi', 'Hello there'), 'lib/a.ts': 'export const a = 2\n' }).includes('Most of this change'), 'small')
+}
+console.log('ok (biggest part)')

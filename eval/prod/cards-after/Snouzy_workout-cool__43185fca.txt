@@ -6,6 +6,8 @@ You asked: "feat: add exercise selection during workout creation (step 3)"
 
 WHAT CHANGED
   Other files
+    + Most of this change is in a new file,
+      src/features/workout-builder/ui/add-exercise-modal.tsx (219 lines added).
     • The agent added wording in the app (in locales/en.ts): "Add exercise", "{name} added
       to workout" and "Close", and the same in 3 other languages.
     • The agent changed how the app looks, on every screen size and on small screens like

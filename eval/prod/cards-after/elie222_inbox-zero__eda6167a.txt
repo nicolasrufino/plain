@@ -6,6 +6,7 @@ You asked: "integrations: Add a test connection action for MCP integrations (#42
 
 WHAT CHANGED
   Other files
+    • Most of this change is in apps/web/utils/actions/mcp.ts (52 lines added).
     • The agent changed apps/web/app/(app)/[emailAccountId]/integrations/IntegrationRow.tsx:
       it now shows "Test connection".
     • The agent also changed apps/web/utils/actions/mcp.ts,

@@ -8,9 +8,10 @@
 import { adminCond, adminPos, FROM_REQUEST } from './admin.ts'
 import { memberCheck, keepsTo, scan, topLevel, roleGate, roomOnly, free, boundAll, aroundNames, inside } from './members.ts'
 import ts from 'typescript'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { builtinModules } from 'node:module'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, normalize } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, djClassRoutes, pySwallows, dbWrite, FAILS, type PyFacts, type DjClass } from './python.ts'
@@ -27,13 +28,26 @@ export type Snap = Map<string, string>
 const git = (args: string[], cwd: string) =>
   execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 1 << 28 })
 
-// ponytail: one `git show` per file, fine for app-sized repos; use `git archive` if it gets slow
+// Binary and very large files (screenshots, fonts, a 14 MB generated API client) stand in as `\0blob <git object id>`: plain
+// never reads them, and two snapshots of a repo full of images ran out of memory (Infisical: 1.4 GB of files). The id still
+// tells a changed file from an unchanged one. Text files at a commit are read in one `git cat-file --batch`.
+const BIG = 2 << 20, BINARY = /\.(?:png|jpe?g|gif|webp|avif|ico|icns|bmp|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|7z|rar|jar|war|woff2?|ttf|otf|eot|mp[34]|m4a|mov|webm|wav|ogg|flac|exe|dll|so|dylib|bin|wasm|sqlite3?|db)$/i
+const blobId = (b: Buffer) => createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex')
 export function snapshot(cwd: string, ref: string | null): Snap {
-  const list = ref ? git(['ls-tree', '-r', '--name-only', ref], cwd) : git(['ls-files', '-co', '--exclude-standard'], cwd)
   const snap: Snap = new Map()
-  for (const f of list.split('\n').filter(Boolean)) {
-    if (ref) snap.set(f, git(['show', `${ref}:${f}`], cwd))
-    else if (existsSync(join(cwd, f))) snap.set(f, readFileSync(join(cwd, f), 'utf8'))
+  if (ref) {
+    const rows = git(['ls-tree', '-r', '-l', '-z', ref], cwd).split('\0').filter(Boolean).map(l => { const [meta, path] = l.split('\t'), [, type, id, size] = meta.split(/\s+/); return { type, id, size: +size, path } })
+      .filter(r => r.type === 'blob')
+    const text = rows.filter(r => r.size <= BIG && !BINARY.test(r.path)), isText = new Set(text)
+    for (const r of rows) if (!isText.has(r)) snap.set(r.path, `\0blob ${r.id}`)
+    const out = spawnSync('git', ['cat-file', '--batch'], { cwd, input: text.map(r => r.id).join('\n') + '\n', maxBuffer: 2 ** 31 - 1 }).stdout
+    let i = 0
+    for (const r of text) { const nl = out.indexOf(10, i), size = +out.subarray(i, nl).toString().split(' ')[2], b = out.subarray(nl + 1, nl + 1 + size)
+      snap.set(r.path, b.includes(0) ? `\0blob ${r.id}` : b.toString('utf8')); i = nl + 1 + size + 1 }
+  } else for (const f of git(['ls-files', '-co', '--exclude-standard', '-z'], cwd).split('\0').filter(Boolean)) {
+    const at = join(cwd, f); if (!existsSync(at) || !statSync(at).isFile()) continue
+    const b = readFileSync(at)
+    snap.set(f, b.length > BIG || BINARY.test(f) || b.includes(0) ? `\0blob ${blobId(b)}` : b.toString('utf8'))
   }
   return snap
 }
@@ -4147,6 +4161,21 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         ? `The agent changed ${list(names)} in ${xs.length > 1 ? 'ways' : 'a way'} plain can't describe yet. Ask the agent what ${xs.length > 1 ? 'they do' : 'it does'} differently.`
         : `The agent ${verb} ${list(names)}. plain can't describe ${xs.length > 1 ? 'them' : 'it'} yet.` })
     }
+  // The biggest part of the change, when nothing on the card says what it is (workout-cool's new 240-line add-exercise-modal.tsx):
+  // where it is and how big, which is always true. Only when one code file (not tests) holds 40% or more of the changed lines.
+  const sizeOf = (p: string) => { const left = new Map<string, number>(); for (const l of (before.get(p) ?? '').split('\n')) if (l.trim()) left.set(l, (left.get(l) ?? 0) + 1)
+    let add = 0; for (const l of (after.get(p) ?? '').split('\n')) if (l.trim()) { const k = left.get(l); if (k) left.set(l, k - 1); else add++ }
+    return { p, add, del: [...left.values()].reduce((x, y) => x + y, 0) } }
+  const sized = real.filter(p => !p.includes('#') && CODE.test(p) && !TESTS.test(p) && !STYLE.test(p) && !localeSaid.has(p)).map(sizeOf)
+  const changedLines = sized.reduce((x, f) => x + f.add + f.del, 0), big = sized.sort((x, y) => y.add + y.del - x.add - x.del)[0]
+  const saidOf = (p: string) => changes.some(c => !c.vague && (c.text.includes(p) && !/can't describe/.test(c.text) || !!route(p) && c.detail === route(p)!.url))
+  // (and only on a card that says nothing specific about pages, the server, the database or outside services: elsewhere the
+  // file's work is usually what a route or table line already says)
+  const specific = changes.some(c => c.group !== 'Other files' && !c.vague)
+  if (big && !specific && changedLines >= 30 && (big.add + big.del) / changedLines >= 0.4 && !saidOf(big.p)) {
+    const at = changes.findIndex(c => c.group === 'Other files')
+    changes.splice(at < 0 ? changes.length : at, 0, { group: 'Other files', isNew: !before.has(big.p), text: !after.has(big.p) ? `Most of this change is deleting ${big.p} (${big.del} lines).`
+      : `Most of this change is in ${before.has(big.p) ? '' : 'a new file, '}${big.p} (${big.add} line${big.add === 1 ? '' : 's'} added${big.del ? `, ${big.del} removed` : ''}).` }) }
   if (NOT_RUN.test(said(opts.agentSaid)))
     ship.unshift("The agent says it didn't run or test this. Try it yourself before you ship.")
 

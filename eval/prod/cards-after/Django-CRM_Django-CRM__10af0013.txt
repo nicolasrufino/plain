@@ -6,6 +6,7 @@ You asked: "feat(import): handle archived tags as row errors in CSV imports"
 
 WHAT CHANGED
   Other files
+    • Most of this change is in backend/leads/csv_import.py (9 lines added, 17 removed).
     • The agent changed backend/uv.lock.
     • The agent changed docs/integrations/csv-import.md, a notes file (not code).
     • The agent also changed backend/cases/services/csv_import.py,

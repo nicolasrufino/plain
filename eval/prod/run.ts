@@ -1,7 +1,7 @@
 // Production pilot: for each cloned repo, pick 3 real commits that change server code, and write plain's card for each.
 // Usage: clone each repo in repos.txt to repos/<owner>_<name> (git clone --depth 300), then
 //   node run.ts   -> picks commits (picks.json, kept if present) and writes cards/<repo>__<sha>.txt + diffs/<repo>__<sha>.diff
-import { report, type Snap } from '../../src/plain.ts'
+import { report, snapshot, type Snap } from '../../src/plain.ts'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 
@@ -9,19 +9,8 @@ const P = import.meta.dirname   // repos/, cards/, diffs/ and grades/ live next 
 const git = (cwd: string, args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 1 << 30 })
 const SERVER = /(^|\/)(api|app\/api|pages\/api|routes?|controllers?|server|actions?|views\.py|views|serializers\.py|models?|migrations?|middleware|policies|handlers?|services?)(\/|\.|$)|route\.[jt]s$|schema\.prisma$|\+server\.[jt]s$|\+page\.server\.[jt]s$|urls\.py$|routes\.rb$|web\.php$|api\.php$/
 
-// all files of a commit, read in one `git cat-file --batch` (plain's own snapshot shells out per file)
-function snap(cwd: string, ref: string): Snap {
-  // every file, like plain's own snapshot (git ls-tree + git show): an earlier filter by extension hid deploy scripts and lockfiles
-  const files = git(cwd, ['ls-tree', '-r', '--name-only', ref]).split('\n').filter(Boolean)
-  const out = spawnSync('git', ['cat-file', '--batch'], { cwd, input: files.map(f => `${ref}:${f}`).join('\n') + '\n', maxBuffer: 1 << 30 }).stdout
-  const s: Snap = new Map(); let i = 0
-  for (const f of files) {
-    const nl = out.indexOf(10, i), head = out.subarray(i, nl).toString(), size = +head.split(' ')[2]
-    if (!Number.isFinite(size)) { i = nl + 1; continue }
-    s.set(f, out.subarray(nl + 1, nl + 1 + size).toString('utf8')); i = nl + 1 + size + 1
-  }
-  return s
-}
+// all files of a commit, the way plain reads them (binary and very large files stand in as their git object id)
+const snap = (cwd: string, ref: string): Snap => snapshot(cwd, ref)
 
 const OUT = process.argv[2] ?? 'cards'
 const repos = readFileSync(`${P}/repos.txt`, 'utf8').trim().split('\n').map(l => { const [stack, name] = l.split(' '); return { stack, name, dir: `${P}/repos/${name.replace('/', '_')}` } })

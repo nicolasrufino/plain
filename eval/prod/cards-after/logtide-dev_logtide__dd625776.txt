@@ -10,6 +10,8 @@ WHAT CHANGED
       agent what it does differently.
       /dashboard/settings/usage
   Other files
+    • Most of this change is in packages/backend/src/modules/otlp/metric-routes.ts (31 lines
+      added, 1 removed).
     • The agent changed CHANGELOG.md, a notes file (not code).
     • The agent also changed packages/backend/src/capabilities/registry.ts, in a way plain
       can't describe yet.

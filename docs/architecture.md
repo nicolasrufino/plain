@@ -20,6 +20,10 @@ changes + problems
 the card
 ```
 
+A snapshot reads every file's text at a commit in one `git cat-file --batch`. Images, fonts, archives, anything with a NUL
+byte and files over 2 MB stand in as `\0blob <git object id>`: never read, but a changed one still looks changed (Infisical's
+1.4 GB of screenshots ran a pilot out of memory).
+
 Most of it is in [src/plain.ts](../src/plain.ts). Per language or format:
 
 - [src/python.ts](../src/python.ts): Python files (FastAPI, Flask, Django) with tree-sitter.
@@ -134,6 +138,9 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
     `messages/` folder): "The agent added wording in the app (in locales/en.ts): "Add exercise" ..., and the same in N other
     languages". Wording is a string value that reads as words (not a URL, `true`, an anchor, a plural rule or markup); a key is
     added when it's there more times than before, else changed. Other languages count only for the same file with the same keys.
+  - On a card that says nothing specific about pages, the server, the database or outside services, the biggest part of the
+    change, when one code file holds 40% or more of the changed lines: "Most of this change is in a new file,
+    src/.../add-exercise-modal.tsx (219 lines added)". Where and how big, which is always true.
   - Code-style settings (`.eslintrc.*`, `eslint.config.*`, `.prettierrc*`, `biome.json`, `.editorconfig`) read "the settings for
     code style checks (not what the app does)", not "changed in a way plain can't describe".
   - A stylesheet's new `@media (max-width: ...)` block reads "changed how the app looks on small screens like phones" only
