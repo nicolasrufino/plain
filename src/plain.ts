@@ -10,7 +10,7 @@ import { memberCheck, keepsTo, scan, topLevel, roleGate, roomOnly, free, boundAl
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, normalize } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
 import { pyFacts, djClassRoutes, pySwallows, dbWrite, FAILS, type PyFacts, type DjClass } from './python.ts'
 import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
@@ -2946,6 +2946,50 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   for (const m of real.filter(q => /\.sql$/i.test(q) && /migrat/i.test(q) && after.get(q) !== undefined && after.get(q) !== before.get(q))) {
     const first = (after.get(m) ?? '').replace(/^\uFEFF/, '').split('\n').map(l => l.trim()).find(Boolean)
     if (first && CLI_OUTPUT.test(first)) problems.push({ kind: 'Broken', text: `${m} starts with "${first.slice(0, 60)}", which is terminal output, not SQL, so applying it will fail. Remove the lines that aren't SQL.` })
+  }
+  // A new import of a file that isn't in the project (papermark imported four redaction components from ee/features/redaction/, a
+  // folder that isn't there): the build fails. Strict, since files made at build time look missing too: only an import line new in
+  // this commit, in a JS/TS/Vue/Svelte file, starting `./`, `../` or `@/`; its folder has no files at all while a folder above it
+  // (not the project's top) has some; not a path .gitignore covers, not a generated-looking one, and not one any file already imported before.
+  // (built once: every file without its extension, and every folder that holds something)
+  const stems = new Set<string>(), dirs = new Set<string>(), lowStems = new Set<string>()
+  for (const k of after.keys()) { const st = k.replace(/\.[^/]*$/, ''); stems.add(st); stems.add(k); lowStems.add(st.toLowerCase()); lowStems.add(k.toLowerCase())
+    for (let d = k; d.includes('/');) { d = d.slice(0, d.lastIndexOf('/')); if (dirs.has(d)) break; dirs.add(d) } }
+  const exists = (q: string) => stems.has(q) || stems.has(q + '/index') || stems.has(q.replace(/\.[cm]?jsx?$/, ''))   // (ESM's './x.js' for x.ts)
+  const hasFiles = (d: string) => dirs.has(d)
+  // (.gitignore lines as path pieces: `/dist` or `generated/` match that folder anywhere below the .gitignore, `*.gen.ts` by pattern)
+  const ignored = [...after].filter(([k]) => /(^|\/)\.gitignore$/.test(k)).flatMap(([, t]) => t.split('\n').map(l => l.trim().replace(/^\/|\/$/g, '')).filter(l => l && !l.startsWith('#') && !l.startsWith('!')))
+    .map(g => new RegExp(`(?:^|/)${g.split('*').map(x => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}(?:/|$)`))
+  const GENERATED = /(?:^|\/)(?:generated|__generated__|_generated|\.generated|gen|paraglide|wayfinder|\.svelte-kit|\.next|\.nuxt|\$types|\+types)(?:\/|$)|\.gen(?:\.|$)|(?:^|\/)resources\/js\/(?:routes|actions)(?:\/|$)/
+  // (where tsconfig or jsconfig `paths` sends `@/`: "@/*": ["./app/*"])
+  const atBases = [...after].filter(([k]) => /(^|\/)[tj]sconfig[\w.]*\.json$/.test(k)).flatMap(([k, t]) => { const dir = k.replace(/\/?[^/]*$/, ''), base = t.match(/"baseUrl"\s*:\s*"([^"]*)"/)?.[1] ?? '.'
+      return [...t.matchAll(/"@\/\*"\s*:\s*\[([^\]]*)\]/g)].flatMap(m => [...m[1].matchAll(/"([^"*]*)\*"/g)].map(x => normalize(join(dir || '.', base, x[1])).replace(/^\.\/?/, '').replace(/\/+$/, '') + '/').map(x => x === '/' ? '' : x)) })
+    // (and Vite's resolve.alias: '@': path.resolve(__dirname, './client'), or '@': '/src')
+    .concat([...after].filter(([k]) => /(^|\/)vite\.config\.[cm]?[jt]s$/.test(k)).flatMap(([k, t]) => [...t.matchAll(/['"]@['"]\s*:\s*(?:\w+\.resolve\([^,]*,\s*)?['"]\.?\/?([^'"]*)['"]/g)].map(m => normalize(join(k.replace(/\/?[^/]*$/, '') || '.', m[1])).replace(/^\.\/?/, '').replace(/\/+$/, '') + '/').map(x => x === '/' ? '' : x)))
+  const oldImports = new Set([...before].flatMap(([, t]) => [...t.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map(m => m[1])))
+  // (imports read from the syntax tree, multi-line ones too, never text inside a string; a .vue or .svelte file's <script> part)
+  const importsOf = (q: string, t = '') => { const code = /\.(?:vue|svelte)$/.test(q) ? [...t.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n') : t
+    const sf = ts.createSourceFile('x.tsx', code, ts.ScriptTarget.Latest, false, /\.[cm]?ts$/.test(q) ? ts.ScriptKind.TS : ts.ScriptKind.TSX)
+    return sf.statements.filter(ts.isImportDeclaration).filter(d => !d.importClause?.isTypeOnly).map(d => (d.moduleSpecifier as ts.StringLiteral).text) }   // (not `import type`: most builds drop it)
+  // (the importing file's own project: the nearest folder above it with a package.json or tsconfig; `@/` starts there)
+  const projectOf = (q: string) => { const parts = q.split('/').slice(0, -1); for (let n = parts.length; n >= 0; n--) { const d = parts.slice(0, n).join('/'), pre = d ? d + '/' : ''
+    if (after.has(pre + 'package.json') || after.has(pre + 'tsconfig.json') || after.has(pre + 'jsconfig.json')) return pre }; return '' }
+  // (a generator's own config or scripts naming that folder: graphql-codegen's gql/, Prisma's custom output, openapi-ts's client/)
+  const genText = [...after].filter(([k]) => /(?:^|\/)(?:package\.json|schema\.prisma|codegen\.\w+|\.graphqlrc\w*|[\w-]+\.config\.\w+)$|(?:^|\/)scripts\//.test(k)).map(([, t]) => t).join('\n')
+  for (const p of real.filter(q => !q.includes('#') && /\.(?:[cm]?[jt]sx?|vue|svelte)$/.test(q) && !TESTS.test(q) && after.has(q))) {
+    const had = new Set(importsOf(p, before.get(p) ?? '')), proj = projectOf(p)
+    const missing = [...new Set(importsOf(p, after.get(p)).filter(x => /^(?:\.{1,2}\/|@\/)/.test(x) && !had.has(x)))]
+      .filter(spec => !oldImports.has(spec) && !GENERATED.test(spec) && !/\.(?:css|scss|sass|less|svg|png|jpe?g|gif|webp|json|md|mdx)(?:\?|$)/.test(spec)).filter(spec => {
+        const dir = p.split('/').slice(0, -1).join('/')
+        // (`@/` from the project folder, the tsconfig's target, and, in case the project has no config of its own, every folder above)
+        const ups = dir.split('/').map((_, k, xs) => xs.slice(0, k + 1).join('/') + '/')
+        const cands = spec.startsWith('@/') ? [proj + spec.slice(2), `${proj}src/${spec.slice(2)}`, ...atBases.map(x => x + spec.slice(2)), ...ups.flatMap(u => [u + spec.slice(2), `${u}src/${spec.slice(2)}`])] : [join(dir, spec).replace(/^\.\//, '')]
+        const under = (c: string) => c.split('/').some((_, k, xs) => k > 0 && after.has(xs.slice(0, k).join('/')))   // a symlink or submodule is one entry
+        const near = (c: string) => lowStems.has(c.toLowerCase()) || lowStems.has(c.toLowerCase() + '/index')
+        return cands.every(c => !exists(c) && !near(c) && !under(c) && !['', '.ts', '.tsx', '.js', '.jsx', '.vue', '.svelte'].some(e => ignored.some(re => re.test(c + e)))) && [cands[0]].filter(c => c.startsWith(proj) && !c.startsWith('..')).some(c => { const d = c.split('/').slice(0, -1).join('/')
+          const top = d.split('/').find((_, k, xs) => !hasFiles(xs.slice(0, k + 1).join('/'))) ?? ''
+          return d && !hasFiles(d) && !(top && new RegExp(String.raw`['"/]${top.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"/]`).test(genText)) && d.split('/').slice(1).some((_, k, xs) => hasFiles(d.split('/').slice(0, xs.length - k).join('/'))) }) })
+    if (missing.length) problems.push({ kind: 'Broken', text: `${p} imports ${list(missing.slice(0, 2).map(x => `"${x}"`))}${missing.length > 2 ? ` and ${missing.length - 2} more` : ''}, which ${missing.length > 1 ? "aren't" : "isn't"} in the project, so the app won't build (unless ${missing.length > 1 ? 'they are' : "it's"} made when it builds). Add the missing ${missing.length > 1 ? 'files' : 'file'}, or ask the agent where ${missing.length > 1 ? 'they are' : 'it is'}.` })
   }
   // An upload list that now takes SVG: an SVG can carry a script that runs when someone opens it from your site (stored XSS).
   // A list is a line (a [...] list joined into one) naming svg next to png/jpg/gif/webp, about uploads: Laravel `mimes:`, an `accept`,

@@ -7295,9 +7295,16 @@ console.log('ok (trees freed)')
   { const nc = { 'package.json': '{"dependencies":{"next":"15.0.0","next-connect":"1.0.0"}}', 'src/shared/api/mobile-auth.ts': 'export async function getMobileCompatibleSession(req: any) { return null }\n', 'lib/prisma.ts': 'export const prisma = {} as any\n',
       'pages/api/orders.ts': `import nc from "next-connect"\n${IMP}\nimport { prisma } from "@/lib/prisma"\nexport default nc().get(async (req, res) => { ${PRE}; if (!session) return res.status(401).end(); res.json(await prisma.order.findMany()) }).post(async (req, res) => { res.json(await prisma.order.create({ data: req.body })) })\n` }
     assert.ok(c(base, nc).includes('Anyone can use'), 'next-connect chain') }
-  // no "won't build" for imports: a generated, gitignored file (Wayfinder's @/routes, openapi types) looks like a missing one
+  // "won't build" for a new import of a folder that isn't there (papermark), but not for generated or gitignored files (Wayfinder's
+  // @/routes, openapi types), nor an import that was already there
   { const app = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'ee/features/billing/plan.ts': 'export const plan = 1\n', 'app/page.tsx': 'export default function P() { return <main /> }\n' }
-    assert.ok(!c(app, { ...app, 'app/page.tsx': 'import { R } from "@/ee/features/redaction/r"\nexport default function P() { return <main /> }\n' }).includes("won't build"), 'no import check') }
+    const imp = (spec: string, extra: Record<string, string> = {}) => c({ ...app, ...extra }, { ...app, ...extra, 'app/page.tsx': `import { R } from "${spec}"\nexport default function P() { return <main /> }\n` })
+    assert.ok(imp('@/ee/features/redaction/r').includes("won't build"), 'papermark: a folder that isn\'t there')
+    for (const [name, spec, extra] of [['wayfinder', '@/routes/dashboard', { 'resources/js/app.ts': 'x\n' }], ['gitignored', '@/ee/features/gen-api/client', { '.gitignore': '/node_modules\nee/features/gen-api/\n' }],
+      ['generated', '@/ee/features/__generated__/types', {}], ['a file in an existing folder', '@/ee/features/billing/plans', {}]] as const)
+      assert.ok(!imp(spec, extra).includes("won't build"), `import control: ${name}`)
+    const had = { ...app, 'app/other.tsx': 'import { R } from "@/ee/features/redaction/r"\nexport const O = 1\n' }
+    assert.ok(!c(had, { ...had, 'app/page.tsx': 'import { R } from "@/ee/features/redaction/r"\nexport default function P() { return <main /> }\n' }).includes("won't build"), 'already imported before') }
   // a migration that starts with terminal output; real SQL dialects that start with anything else aren't flagged
   const pm = { 'package.json': '{"dependencies":{"@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model A {\n  id Int @id\n}\n' }
   const mig = (sql: string) => c(pm, { ...pm, 'prisma/migrations/20261011000000_a/migration.sql': sql })
@@ -7806,3 +7813,34 @@ console.log('ok (open file deletes)')
   assert.ok(!pair('app/api/upload/route.ts', blob).includes(DEL), 'only an upload changed')
 }
 console.log('ok (review 78)')
+// Review 79: "won't build" never for an import inside a string, a monorepo app's own @/, a symlink, a generator's folder or a case
+// difference; multi-line imports are read
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const W = "won't build"
+  const run = (a: Record<string, string>, b: Record<string, string>) => c(a, { ...a, ...b })
+  assert.ok(!run({ 'src/app/main.py': 'x=1\n', 'frontend/src/lib/utils.ts': 'export const cn=1\n', 'frontend/src/App.tsx': 'export default 1\n' }, { 'frontend/src/App.tsx': "import { cn } from '@/lib/utils'\nexport default cn\n" }).includes(W), 'a monorepo app\'s @/')
+  assert.ok(!run({ 'src/gen/emit.ts': 'export const x=1\n' }, { 'src/gen/emit.ts': "export const code = `\nimport { db } from './db/client'\nexport default db\n`\n" }).includes(W), 'inside a string')
+  assert.ok(!run({ 'src/app.ts': 'x\n', 'src/shared': '../shared\n', 'shared/utils/fmt.ts': 'x\n' }, { 'src/app.ts': "import { f } from './shared/utils/fmt'\nexport const y = f\n" }).includes(W), 'symlink')
+  assert.ok(!run({ 'package.json': '{"scripts":{"codegen":"graphql-codegen"}}', 'codegen.ts': 'export default { generates: { "./src/gql/": { preset: "client" } } }\n', 'src/app.ts': 'x\n' }, { 'src/app.ts': "import { graphql } from './gql/gql'\nexport const q = graphql\n" }).includes(W), 'codegen folder')
+  assert.ok(!run({ 'src/app.ts': 'x\n', 'src/Components/Button/Button.tsx': 'export const B = 1\n' }, { 'src/app.ts': "import { B } from './components/Button/Button'\nexport const y = B\n" }).includes(W), 'case difference')
+  assert.ok(run({ 'src/app.ts': 'x\n', 'src/lib/a.ts': 'export const a = 1\n' }, { 'src/app.ts': "import {\n  y,\n} from './lib/missing/y'\nexport const z = y\n" }).includes(W), 'multi-line import of a folder that isn\'t there')
+}
+console.log('ok (review 79)')
+// Review 80: tsconfig paths with ../ and baseUrl, Vite's alias, imports leaving the project, *.tsx in .gitignore, a folder a script
+// writes, and `import type` aren't "won't build"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const W = "won't build", pkg = '{"dependencies":{"react":"18.0.0"}}'
+  const run = (a: Record<string, string>, b: Record<string, string>) => c(a, { ...a, ...b })
+  for (const [name, a, b] of [
+    ['paths with ../', { 'apps/web/package.json': pkg, 'apps/web/tsconfig.json': '{"compilerOptions":{"paths":{"@/*":["../../packages/ui/src/*"]}}}', 'apps/web/src/App.tsx': 'export const x=1\n', 'packages/ui/src/components/button.tsx': 'export const B=1\n' }, { 'apps/web/src/App.tsx': "import { B } from '@/components/button'\nexport const x=B\n" }],
+    ['baseUrl', { 'apps/web/package.json': pkg, 'apps/web/tsconfig.json': '{"compilerOptions":{"baseUrl":"./client","paths":{"@/*":["*"]}}}', 'apps/web/server/a.ts': 'export const x=1\n', 'apps/web/client/lib/api.ts': 'x' }, { 'apps/web/server/a.ts': "import { y } from '@/lib/api'\nexport const x=y\n" }],
+    ['vite alias', { 'web/package.json': pkg, 'web/vite.config.ts': "export default { resolve: { alias: { '@': path.resolve(__dirname, './client') } } }\n", 'web/server/a.ts': 'x\n', 'web/client/lib/api.ts': 'x' }, { 'web/server/a.ts': "import { y } from '@/lib/api'\nexport const x=y\n" }],
+    ['leaves the project', { 'apps/web/package.json': pkg, 'apps/web/src/a.ts': 'x\n', 'rust/Cargo.toml': 'x' }, { 'apps/web/src/a.ts': "import init from '../../../rust/pkg/my_crate'\nexport const x=init\n" }],
+    ['gitignored *.tsx', { '.gitignore': 'src/icons/*.tsx\n', 'src/app.ts': 'x\n', 'src/lib/a.ts': 'x' }, { 'src/app.ts': "import Home from './icons/Home'\nexport const x=Home\n" }],
+    ['a script writes it', { 'scripts/gen.mjs': "writeFileSync('src/gen-routes/index.ts', code)\n", 'src/app.ts': 'x\n', 'src/lib/a.ts': 'x' }, { 'src/app.ts': "import routes from './gen-routes/index'\nexport const x=routes\n" }],
+    ['import type', { 'src/app.ts': 'export const x=1\n', 'src/lib/a.ts': 'x' }, { 'src/app.ts': "import type { Database } from './lib/types/supabase'\nexport const x=1\n" }]] as const)
+    assert.ok(!run(a, b).includes(W), `import control: ${name}`)
+}
+console.log('ok (review 80)')

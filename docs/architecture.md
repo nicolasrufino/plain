@@ -89,6 +89,12 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   ⚠ if the address or table sounds sensitive (admin, orders, payments, ...), and as a "thing to
   decide" otherwise. Addresses that must be public (login, register, webhooks, ...) are never
   flagged.
+- **Broken.** A new import of a folder that isn't in the project (papermark imported `@/ee/features/redaction/...`, a folder
+  that doesn't exist): the app won't build. Strict, because files made at build time look missing too. It counts only an
+  import new in this commit, read from the syntax tree (not text in a string, not `import type`), whose folder has no files
+  inside the importing file's own project. `@/` is resolved through tsconfig `paths` and `baseUrl`, Vite's `alias`, and
+  every folder above. Never for a gitignored path, a generated-looking one, a folder a generator's config or a script names,
+  a symlink or submodule, or a path that differs only in letter case.
 - **Broken.** A function was deleted but other code still uses it, or a migration starts with terminal output pasted in
   ("Already up to date", "$ npx prisma migrate dev").
 - **Unsafe data and uploads** (from misses in the [production pilot](production-eval.md)):

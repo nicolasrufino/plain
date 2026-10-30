@@ -126,7 +126,9 @@ Those 7 are still **misses**: plain doesn't catch them yet.
 
 Tried and dropped after review:
 - **A "won't build" check for imports of files that aren't in the project.** It caught papermark, but it also fired on
-  generated, gitignored files (Laravel Wayfinder's `@/routes`, openapi types) and on imports inside code samples.
+  generated, gitignored files (Laravel Wayfinder's `@/routes`, openapi types) and on imports inside code samples. It came
+  back later in a much narrower form (see the architecture doc): only a new import, read from the syntax tree, of a folder
+  that doesn't exist inside the importing file's own project, never a gitignored, generated or script-written one.
 - **A keyword list for "this isn't SQL".** It flagged real T-SQL, SQL*Plus and DuckDB migrations. Only pasted terminal
   output is flagged now.
 

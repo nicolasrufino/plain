@@ -1,8 +1,17 @@
 plain · 12 files changed since 0a62004a~1
 You asked: "feat(ee): add redactions"
 
-  Nothing flagged  ·  5 steps before you ship
-    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+  ⚠ 2 problems  ·  5 steps before you ship
+
+LOOK AT THIS FIRST
+  ✖ pages/documents/[id]/index.tsx imports
+    "@/ee/features/redaction/components/redaction-launcher", which isn't in the project, so
+    the app won't build (unless it's made when it builds). Add the missing file, or ask the
+    agent where it is.
+  ✖ pages/documents/[id]/redactions/[jobId].tsx imports
+    "@/ee/features/redaction/components/redaction-workspace", which isn't in the project, so
+    the app won't build (unless it's made when it builds). Add the missing file, or ask the
+    agent where it is.
 
 WHAT CHANGED
   Pages
