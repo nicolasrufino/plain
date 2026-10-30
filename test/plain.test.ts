@@ -8292,3 +8292,12 @@ console.log('ok (css phones)')
   assert.ok(y.includes('now sends data to your server and says "Press the button to finish signing in."'), y)
 }
 console.log('ok (page words)')
+// The header counts every changed file, hidden ones too (atidone: "3 files" for 6); a changed config file is listed, not dropped
+// (captable's next.config.js)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'next.config.js': 'module.exports = { reactStrictMode: true }\n', 'lib/a.ts': 'export const a = 1\n', 'app/page.tsx': 'export default function P() { return <main><h1>Home</h1><p>Hi</p></main> }\n' }
+  const x = c(base, { ...base, 'next.config.js': 'module.exports = { reactStrictMode: true, serverExternalPackages: ["x"] }\n', 'lib/a.ts': 'export const a  =  1\n', 'app/page.tsx': base['app/page.tsx'].replace('Hi', 'Hello there') })
+  assert.ok(x.includes('3 files changed') && x.includes('next.config.js') && x.includes('Hidden: 1 file'), x)
+}
+console.log('ok (count and config)')

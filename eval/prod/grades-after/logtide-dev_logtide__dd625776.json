@@ -1,43 +1,14 @@
-{
- "summary": "Adds monthly metrics datapoint quota; OTLP metrics ingest returns 429 over it; shown on Usage page.",
- "statements": [
-  {
-   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets...)",
-   "kind": "reassurance",
-   "verdict": "right",
-   "why": "Default unlimited; check inside authenticated ingest route."
-  },
-  {
-   "text": "The agent changed CHANGELOG.md, a notes file (not code).",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True, but not the real change."
-  },
-  {
-   "text": "The agent also changed capabilities/registry.ts, in a way plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True; adds the new quota."
-  },
-  {
-   "text": "Type checking turned off in 1 spot in metric-routes.ts (`any`).",
-   "kind": "warning",
-   "verdict": "right",
-   "why": "(error as any).statusCode; harmless."
-  },
-  {
-   "text": "Type checking turned off in 3 spots in ingestion-quota.test.ts (`any`).",
-   "kind": "warning",
-   "verdict": "right",
-   "why": "Test-only; harmless."
-  }
- ],
- "misses": [
-  {
-   "what": "New monthly cap on metric datapoints per org: once set and exceeded, OpenTelemetry metrics get 429 while logs and traces keep flowing; shown on Usage page.",
-   "severity": "medium"
-  }
- ],
- "silent": true,
- "id": "logtide-dev_logtide__dd625776"
-}
+{ "id": "logtide-dev_logtide__dd625776",
+  "summary": "Adds a new monthly quota metrics.max_datapoints_monthly (default unlimited): OTLP metrics ingestion (POST /v1/otlp/metrics) now checks the org's datapoint quota and answers 429 when over it (logs/spans unaffected); shown on the Usage page as 'Metric datapoints (this month)'.",
+  "statements": [
+    { "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)", "kind": "reassurance", "verdict": "right", "why": "Default limit null (registry.ts) so nothing is blocked until a limit is set; check runs inside the already API-key-authenticated ingest route. No login/payment/db/secret problem." },
+    { "text": "The dashboard settings usage page changed in a way plain can't describe yet. Ask the agent what it does differently. /dashboard/settings/usage", "kind": "description", "verdict": "right", "why": "usage/+page.svelte adds a label for 'Metric datapoints (this month)'. True but empty." },
+    { "text": "The agent changed CHANGELOG.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True; the changelog entry is the only place the quota is explained, and the card doesn't relay it." },
+    { "text": "The agent also changed packages/backend/src/capabilities/registry.ts, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Registers the new metrics.max_datapoints_monthly quota (default null)." },
+    { "text": "◐ Type checking is turned off in 1 spot in packages/backend/src/modules/otlp/metric-routes.ts (`any`).", "kind": "warning", "verdict": "right", "why": "(error as any).statusCode; harmless." },
+    { "text": "◐ Type checking is turned off in 3 spots in packages/backend/src/tests/modules/capabilities/ingestion-quota.test.ts (`any`).", "kind": "warning", "verdict": "right", "why": "Test-only; irrelevant to an owner." }
+  ],
+  "misses": [
+    { "what": "New monthly cap on metric datapoints per organization: once set (entitlements/admin API/CAPABILITY_DEFAULTS_JSON) and exceeded, metrics sent by customers' OpenTelemetry collectors are rejected with 429 while logs and traces keep flowing; it appears on the Usage page.", "severity": "medium" }
+  ],
+  "silent": true }

@@ -8,5 +8,5 @@ WHAT CHANGED
   Other files
     • The agent changed src/pdf-templates/audit-log-template.tsx: it now shows "Audit Logs",
       "File Name" and 2 more.
-    • The agent also changed src/jobs/esign-pdf.ts and src/server/esign.ts, in ways plain
-      can't describe yet.
+    • The agent also changed next.config.js, src/jobs/esign-pdf.ts and src/server/esign.ts,
+      in ways plain can't describe yet.

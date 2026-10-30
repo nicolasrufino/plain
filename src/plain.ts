@@ -3157,8 +3157,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const before_ = findings(A.db, used(A), things).map(x => x.text), rls = findings(B.db, used(B), things).filter(x => !before_.includes(x.text))
   problems.push(...rls)
   const notes = rls.length ? ["Database access rules are read from supabase/migrations. Rules changed in the Supabase dashboard aren't visible to plain."] : []
-  // (SvelteKit hooks that send people to the login page in a way plain can't read: it said nothing either way about these)
-  const vagueHooks = [...new Set(real.filter(p => route(p) || p.includes('#')).map(p => (B.files.get(p.split('#')[0]) as FileFacts & { hooksVague?: string } | undefined)?.hooksVague).filter(Boolean))]
+  // (SvelteKit hooks that send people to the login page in a way plain can't read: it said nothing either way about these; not
+  // sign-in pages and other ones that are public anyway)
+  const vagueHooks = [...new Set(real.filter(p => (route(p) || p.includes('#')) && !isPublic(route(p)?.url ?? '')).map(p => (B.files.get(p.split('#')[0]) as FileFacts & { hooksVague?: string } | undefined)?.hooksVague).filter(Boolean))]
   if (vagueHooks.length) notes.push(`plain can't tell which pages the login check in ${list(vagueHooks.map(h => `${h}.*`))} covers, so it doesn't say whether the new or changed pages and server code here need login. Check they're behind it.`)
   // A page that asks for login but gets its data from a server that isn't in this project (an Angular or React app on its own):
   // its guard only hides the page; the data is safe only if that server checks login too, and plain can't see it.
@@ -4075,7 +4076,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const usedByRoutes = new Set([...B.routes.keys()].filter(q => real.includes(q) && described.has(route(q)!.url)).flatMap(q => [...seed(B.files.get(q)), ...q.includes('#') ? seed(B.files.get(q.split('#')[0])) : []]))
   for (let i = 0; i < 3; i++) for (const [q, f] of B.files) if ([...names(f), stem(q)].some(n => usedByRoutes.has(n))) for (const n of [...f.used, ...f.jsx]) usedByRoutes.add(n)
   const otherCode = (p: string) => changes.length > 0 && before.has(p) && after.has(p) && CODE.test(p) && !p.endsWith('.py') && !TESTS.test(p)
-    && !/(^|\/)(models?|schemas?|entities|migrations?|db\/migrate|database\/migrations|types?|dtos?|seeds?|seeders|routes)(\/|\.)|\.d\.ts$|(^|\/)[\w.-]+\.config\.[cm]?[jt]s$|(^|\/)(seed|main|server|app|index|DbContext|AppDbContext|Contracts|Program|Startup)\.\w+$|DbContext\.cs$|(^|\/)\+(page|layout|server|error)(\.server)?\.[jt]s$/i.test(p)
+    && !/(^|\/)(models?|schemas?|entities|migrations?|db\/migrate|database\/migrations|types?|dtos?|seeds?|seeders|routes)(\/|\.)|\.d\.ts$|(^|\/)(seed|main|server|app|index|DbContext|AppDbContext|Contracts|Program|Startup)\.\w+$|DbContext\.cs$|(^|\/)\+(page|layout|server|error)(\.server)?\.[jt]s$/i.test(p)
     && ![...names(B.files.get(p) ?? A.files.get(p)), stem(p)].some(n => usedByRoutes.has(n))
     // (Go, Ruby, PHP, C#, Java: plain doesn't follow what their routes call, and a changed route in the same language already says
     // that part changed)
@@ -4120,7 +4121,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   if (NOT_RUN.test(said(opts.agentSaid)))
     ship.unshift("The agent says it didn't run or test this. Try it yourself before you ship.")
 
-  return { ...opts, files: real.filter(p => !p.includes('#')).length, noise: noise.length, changes, problems, unfinished, ship, notes, A, B, schemaChanged: changed.some(p => p.endsWith('schema.prisma')) }
+  return { ...opts, files: real.filter(p => !p.includes('#')).length + noise.length, noise: noise.length, changes, problems, unfinished, ship, notes, A, B, schemaChanged: changed.some(p => p.endsWith('schema.prisma')) }
 }
 
 export function render(r: {

@@ -1,4 +1,4 @@
-plain · 3 files changed since 2f8c0133~1
+plain · 4 files changed since 2f8c0133~1
 You asked: "fix: email was not being sent for new users"
 
   Nothing flagged  ·  1 step before you ship

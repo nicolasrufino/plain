@@ -1,31 +1,11 @@
-{
- "id": "caoqianming_django-vue-admin__a0fa9437",
- "summary": "Adds migration system/0003 that catches up with an earlier model edit (Role.depts M2M gets related_name='roles'); this is a Django state-only change with no SQL/table change; also commits an updated dev db.sqlite3.",
- "statements": [
-  {
-   "text": "Nothing flagged",
-   "kind": "reassurance",
-   "verdict": "right",
-   "why": "Migration only changes related_name; no endpoint, login or data change."
-  },
-  {
-   "text": "• The agent changed server/db.sqlite3.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True, but doesn't say it's the checked-in dev database."
-  },
-  {
-   "text": "1. Apply server/apps/system/migrations/0003_auto_20220227_1732.py to your live database before the new code goes live (`python manage.py migrate`), or the parts that use it will fail.",
-   "kind": "step",
-   "verdict": "misleading",
-   "why": "AlterField on related_name emits no SQL; nothing fails if it isn't applied first."
-  }
- ],
- "misses": [
-  {
-   "what": "The commit also updates the checked-in dev SQLite database (server/db.sqlite3, used by settings_dev.py); it carries whatever dev data/accounts are in it and is not something to deploy over a live database. The card lists the file but doesn't say what it is.",
-   "severity": "low"
-  }
- ],
- "silent": false
-}
+{ "id": "caoqianming_django-vue-admin__a0fa9437",
+  "summary": "Adds migration system/0003 that catches up with an earlier model edit (Role.depts M2M gets related_name='roles'); this is a Django state-only change with no SQL/table change; also commits an updated dev db.sqlite3.",
+  "statements": [
+    { "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)", "kind": "reassurance", "verdict": "right", "why": "No code, endpoint or permission changes; the migration only alters related_name/verbose_name and emits no SQL." },
+    { "text": "• The agent changed server/db.sqlite3.", "kind": "description", "verdict": "right", "why": "True, but doesn't say it's the checked-in dev database (settings_dev.py) that must not be copied over a live database." },
+    { "text": "1. Apply server/apps/system/migrations/0003_auto_20220227_1732.py too (`python manage.py migrate`). It only records settings Django keeps in your code (like labels, or the name for related records), not changes to your tables, so nothing breaks if it runs later.", "kind": "step", "verdict": "right", "why": "Migration 0003 is a single AlterField on Role.depts setting related_name='roles' and verbose_name; a ManyToMany related_name change emits no SQL, so running it later is harmless. Accurate and correctly low-stakes." }
+  ],
+  "misses": [
+    { "what": "The commit also updates the checked-in dev SQLite database (server/db.sqlite3, used by settings_dev.py); it carries whatever dev data/accounts are in it and is not something to deploy over a live database. The card lists the file but doesn't say what it is.", "severity": "low" }
+  ],
+  "silent": false }

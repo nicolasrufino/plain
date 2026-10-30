@@ -1,4 +1,4 @@
-plain · 4 files changed since 8cd319db~1
+plain · 5 files changed since 8cd319db~1
 You asked: "fix(deps): upgrade better-auth to 1.7 (#419)"
 
   Nothing flagged  ·  2 steps before you ship

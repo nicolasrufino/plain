@@ -1,4 +1,4 @@
-plain · 3 files changed since a345ecd7~1
+plain · 6 files changed since a345ecd7~1
 You asked: "chore: lint and link to turso"
 
   Nothing flagged

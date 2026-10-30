@@ -1,51 +1,14 @@
-{
- "id": "atinux_atidone__a345ecd7",
- "summary": "Lint cleanups plus visible UI changes: theme toggle button, footer links, SEO text, Turso login link.",
- "statements": [
-  {
-   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)",
-   "kind": "reassurance",
-   "verdict": "right",
-   "why": "No login/payment/db/secret problem; only a boolean about Turso reaches the browser."
-  },
-  {
-   "text": "The agent changed app.vue: it now shows \"GitHub\" and \"Twitter\".",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Footer now 'GitHub \u00b7 Twitter' links."
-  },
-  {
-   "text": "The agent changed components/LoginForm.vue: it now shows \"database\" in place of \"D1 database\".",
-   "kind": "description",
-   "verdict": "misleading",
-   "why": "Text becomes 'Turso database' (with turso.tech link) when TURSO_DB_URL is set, else still D1; card hides the Turso part."
-  },
-  {
-   "text": "The agent also changed .eslintrc.cjs and composables/session.ts, in ways plain can't describe yet.",
-   "kind": "description",
-   "verdict": "misleading",
-   "why": "session.ts only renames an unused catch param (no-op) and .eslintrc.cjs is lint config; nothing that matters to the app."
-  },
-  {
-   "text": "(Hidden: 2 files whose changes don't change what the code does.)",
-   "kind": "description",
-   "verdict": "right",
-   "why": "stats.ts unused param, migrations.ts semicolon."
-  }
- ],
- "misses": [
-  {
-   "what": "New light/dark mode toggle button at top of every page (app.vue:27-29); card doesn't mention it.",
-   "severity": "medium"
-  },
-  {
-   "what": "Login card links to turso.tech when TURSO_DB_URL is set (otherwise D1).",
-   "severity": "low"
-  },
-  {
-   "what": "Page meta description reworded with typo 'queyring'.",
-   "severity": "low"
-  }
- ],
- "silent": false
-}
+{ "id": "atinux_atidone__a345ecd7",
+  "summary": "Lint cleanups plus visible UI changes: a light/dark mode toggle button at the top of the page, footer now 'GitHub · Twitter' links, SEO description reworded (with a typo 'queyring'), and the login card links to Turso instead of D1 when a Turso URL is configured; server changes are only lint (unused params, a semicolon).",
+  "statements": [
+    { "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)", "kind": "reassurance", "verdict": "right", "why": "No login, payment, database or secret issue: server edits are lint-only and only a boolean (isTurso) reaches the browser, the Turso token stays server-side." },
+    { "text": "• The agent changed app.vue: it now shows \"GitHub\" and \"Twitter\".", "kind": "description", "verdict": "right", "why": "app.vue footer now has separate GitHub and Twitter links (was 'Source code on GitHub'). Doesn't mention the new dark-mode toggle in the same file." },
+    { "text": "• The agent changed components/LoginForm.vue: it now shows \"Turso database\".", "kind": "description", "verdict": "misleading", "why": "LoginForm.vue shows 'Turso database' (linking turso.tech) only when runtimeConfig.turso.url is set; otherwise it still says 'D1 database'. An owner on D1 would expect the login card to now say Turso." },
+    { "text": "• The agent also changed .eslintrc.cjs, in a way plain can't describe yet.", "kind": "description", "verdict": "misleading", "why": ".eslintrc.cjs only turns off the 'vue/max-attributes-per-line' lint rule; dev tooling, no effect on the app. Implies an undescribed change that matters." },
+    { "text": "(Hidden: 3 files whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)", "kind": "description", "verdict": "right", "why": "composables/session.ts (unused catch param), server/api/todos/stats.ts (unused event param), server/plugins/migrations.ts (semicolon): all no-ops." }
+  ],
+  "misses": [
+    { "what": "New light/dark mode toggle button shown at the top of every page (app.vue:27-29).", "severity": "medium" },
+    { "what": "Page meta description reworded and contains a typo ('queyring').", "severity": "low" }
+  ],
+  "silent": false }

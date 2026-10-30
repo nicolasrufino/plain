@@ -1,35 +1,11 @@
-{
- "id": "fastapi-practices_fastapi-best-architecture__8dc1b3f2",
- "summary": "Renames ID-list fields in admin request bodies (roles/menus/scopes/rules to *_ids); breaks old API callers.",
- "statements": [
-  {
-   "text": "Nothing flagged",
-   "kind": "reassurance",
-   "verdict": "right",
-   "why": "Auth unchanged and the breaking rename isn't a login/payment/DB/secret issue, though it is something the owner must know (see misses)."
-  },
-  {
-   "text": "The agent changed the sys data scope rules, sys role menus and sys role scopes parts of your server in ways plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Names real changed routes; omits POST/PUT /sys/users and doesn't say fields were renamed."
-  },
-  {
-   "text": "The agent also changed crud_data_scope.py, crud_role.py, crud_user.py, schema/data_scope.py, schema/role.py and 4 more files, in ways plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Accurate file list."
-  }
- ],
- "misses": [
-  {
-   "what": "Admin API request fields renamed (roles/menus/scopes/rules to role_ids/menu_ids/scope_ids/rule_ids) on create user, edit user, edit role menus, role scopes and data-scope rules. Admin UI must be updated at the same time or saves fail with 422.",
-   "severity": "high"
-  },
-  {
-   "what": "Creating/editing users (role assignment) is affected too, not just rules/menus/scopes.",
-   "severity": "medium"
-  }
- ],
- "silent": true
-}
+{ "id": "fastapi-practices_fastapi-best-architecture__8dc1b3f2",
+  "summary": "Renames the ID-list fields in several admin request bodies (user roles, role menus, role scopes, data-scope rules) to *_ids; internal logic unchanged, but the API contract the admin frontend sends changes.",
+  "statements": [
+    { "text": "! The data your server expects changed: it now needs \"rule_ids\" instead of \"rules\", \"menu_ids\" instead of \"menus\" and 2 more. Anything that sends the old names (your own screens, a mobile app, other services) will be turned away until it changes at the same time.", "kind": "warning", "verdict": "right", "why": "schema/data_scope.py rules->rule_ids, schema/role.py menus->menu_ids and scopes->scope_ids, schema/user.py roles->role_ids; old payloads fail validation (422). Correct and actionable; 'and 2 more' hides that one of them is user role assignment." },
+    { "text": "• The agent changed the sys data scope rules, sys role menus and sys role scopes parts of your server in ways plain can't describe yet. Ask the agent what they do differently.", "kind": "description", "verdict": "misleading", "why": "Those three endpoints did change (handler param renamed, api/v1/sys/data_scope.py, role.py), but create/update user (POST/PUT /sys/users) is also affected via schema/user.py role_ids and isn't listed, so the server section reads as if only role/data-scope screens changed." },
+    { "text": "• The agent also changed backend/app/admin/crud/crud_data_scope.py, backend/app/admin/crud/crud_role.py, backend/app/admin/crud/crud_user.py, backend/app/admin/schema/data_scope.py, backend/app/admin/schema/role.py and 4 more files, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Accurate file list (11 files total, 2 api files listed above)." }
+  ],
+  "misses": [
+    { "what": "Creating/editing users (role assignment, roles -> role_ids) is affected too, not just rules/menus/scopes; the card hides it behind 'and 2 more'.", "severity": "medium" }
+  ],
+  "silent": false }

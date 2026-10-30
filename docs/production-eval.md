@@ -195,16 +195,16 @@ following [GRADING-AFTER.md](../eval/prod/GRADING-AFTER.md). The graders started
 commit really does, what the owner should know) and checked the diff for anything new. Grades are in
 [grades-after/](../eval/prod/grades-after) (`GRADES=grades-after CARDS=cards-after node eval/prod/score.ts`).
 
-| | before | after the first fixes | now |
-|---|---|---|---|
-| wrong or misleading reassurance | 13/46 (28%) | 6/61 (10%) | 4/60 (7%) |
-| wrong or misleading warning | 47/55 (85%) | 0/11 (0%) | 0/16 (0%) |
-| wrong or misleading description | 26/184 (14%) | 10/197 (5%) | 12/205 (6%) |
-| wrong or misleading step | 6/38 | 5/38 | 5/38 |
-| high-severity misses | 18 | 13 | 8 |
-| medium-severity misses | 62 | 61 | 60 |
-| silent cards | 32 (46%) | 40 (57%) | 35 (50%) |
-| crashed | 0 | 0 | 0 |
+| | before | after the first fixes | second regrade | now |
+|---|---|---|---|---|
+| wrong or misleading reassurance | 13/46 (28%) | 6/61 (10%) | 4/60 (7%) | 4/59 (7%) |
+| wrong or misleading warning | 47/55 (85%) | 0/11 (0%) | 0/16 (0%) | 1/23 (4%) |
+| wrong or misleading description | 26/184 (14%) | 10/197 (5%) | 12/205 (6%) | 11/210 (5%) |
+| wrong or misleading step | 6/38 | 5/38 | 5/38 | 0/37 |
+| high-severity misses | 18 | 13 | 8 | 7 |
+| medium-severity misses | 62 | 61 | 60 | 58 |
+| silent cards | 32 (46%) | 40 (57%) | 35 (50%) | 33 (47%) |
+| crashed | 0 | 0 | 0 | 0 |
 
 "Now" adds the later rules, each built from a pilot miss, reviewed, and checked on all 70 commits and the demos:
 - papermark's imports of a missing folder (✖ won't build);
@@ -214,6 +214,14 @@ commit really does, what the owner should know) and checked the diff for anythin
 - components that say what's new on screen (inbox-zero's "Test connection", logtide's renamed label).
 
 Only the cards that changed were regraded.
+
+"Now" (2026-10-30) regraded the 15 cards that changed again: migration steps that match the project (expense.fyi's own
+`npm run dbpush`, a Django migration that changes no tables, a Go server that applies its own migrations, a login library's
+sessions table), Express controllers read, SvelteKit apps in a monorepo folder (Django-CRM, logtide), no Stripe step for
+events a card-only checkout never sends, the CSS line saying "every screen size" when it is, and atidone's words read whole.
+Every step is now right (0/37). The one wrong warning is new: on Django-CRM, plain can't read the app's login redirect, so it
+notes "check they're behind it" for the changed pages, and some of those (sign-in, a public estimate link) are meant to be open.
+Pages that look public are now left out of that note.
 
 Silent cards went up. Many cards had only a wrong "doesn't look related" flag, and with it gone nothing useful is left. The 6
 "Nothing flagged" headers that are still wrong all hide problems plain doesn't read yet:

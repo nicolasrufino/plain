@@ -1,93 +1,23 @@
-{
- "id": "gokulkrishh_expense.fyi__80d3b85b",
- "summary": "Changes how overview estimates subscription spend (previous-renewal based, loads inactive subscriptions too), adds cancelled_at column set on switch-off, shows Cancel Date and prev renewal, bumps packages.",
- "statements": [
-  {
-   "text": "Nothing flagged",
-   "kind": "reassurance",
-   "verdict": "misleading",
-   "why": "Totals are overstated: index.js drops ?active=true and subscriptions switched off before this commit have no cancelled_at, so they count as paid. Also a schema change with no migration (the card does flag that separately)."
-  },
-  {
-   "text": "The app page now says \"Estimated spent amount for selected date range.\"",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Tooltip text changed in pages/app/index.js."
-  },
-  {
-   "text": "The agent changed the subscriptions all and subscriptions update parts of your server in ways plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "/all returns every subscription with extra fields; /update saves cancelled_at; both login-scoped."
-  },
-  {
-   "text": "Subscriptions now also store the cancelled date.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "schema.prisma adds cancelled_at String?."
-  },
-  {
-   "text": "Update your database: run `npx prisma migrate dev` (live: `npx prisma migrate deploy`). The database's structure changed, but no migration was created.",
-   "kind": "step",
-   "verdict": "misleading",
-   "why": "Column must be added, but project uses `prisma db push` (npm run dbpush), not migrations; migrate deploy won't add it."
-  },
-  {
-   "text": "Test anything that uses @heroicons/react: ^2.0.14 -> ^2.0.15",
-   "kind": "step",
-   "verdict": "right",
-   "why": "package.json bump."
-  },
-  {
-   "text": "Test anything that uses @prisma/client: ^4.10.0 -> ^4.10.1",
-   "kind": "step",
-   "verdict": "right",
-   "why": "package.json bump."
-  },
-  {
-   "text": "Test anything that uses @react-email/container: ^0.0.6 -> ^0.0.7",
-   "kind": "step",
-   "verdict": "right",
-   "why": "package.json bump."
-  },
-  {
-   "text": "Test anything that uses @react-email/section: ^0.0.6 -> ^0.0.8",
-   "kind": "step",
-   "verdict": "right",
-   "why": "package.json bump."
-  },
-  {
-   "text": "Test anything that uses resend: ^0.10.0 -> ^0.11.0",
-   "kind": "step",
-   "verdict": "right",
-   "why": "package.json bump; resend sends emails."
-  },
-  {
-   "text": "Test anything that uses prisma: ^4.10.0 -> ^4.10.1",
-   "kind": "step",
-   "verdict": "right",
-   "why": "package.json bump."
-  },
-  {
-   "text": "Test anything that uses tailwindcss: ^3.2.4 -> ^3.2.6",
-   "kind": "step",
-   "verdict": "right",
-   "why": "package.json bump."
-  }
- ],
- "misses": [
-  {
-   "what": "The overview's estimated spend (total spent/balance) changes: formula counts from the previous renewal date, and subscriptions turned off before this change (no cancel date) count as paid again, inflating totals.",
-   "severity": "high"
-  },
-  {
-   "what": "Switching a subscription off now records today as its cancel date (new 'Cancel Date' column); switching on clears it. Renewal column now shows dates for inactive subscriptions plus a 'prev:' date.",
-   "severity": "medium"
-  },
-  {
-   "what": "/api/subscriptions/all now returns all columns (whitelist removed), including internal ones like nameHash/user_id, only for the user's own rows.",
-   "severity": "low"
-  }
- ],
- "silent": false
-}
+{ "id": "gokulkrishh_expense.fyi__80d3b85b",
+  "summary": "Changes how the overview estimates subscription spending for the selected date range (new calculatePaidCount based on the previous renewal date; the overview now loads all subscriptions, not just active ones), adds a cancelled_at date that is set when a subscription is switched off (new column, no migration), shows 'Cancel Date' and previous renewal date in the subscriptions table, and bumps a few packages.",
+  "statements": [
+    { "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)", "kind": "reassurance", "verdict": "misleading", "why": "The new cancelled_at column has no backfill: subscriptions switched off before this commit have no cancel date, and since pages/app/index.js drops ?active=true, calculatePaidCount (utils/date.js:365) counts them as paid again, overstating the overview's spend/balance figures. That's a money-figure problem tied to the database change; the caveat about missing bugs softens but doesn't cover it." },
+    { "text": "• The app page now says \"Estimated spent amount for selected date range.\". /app", "kind": "description", "verdict": "right", "why": "pages/app/index.js tooltip text changed." },
+    { "text": "• The agent changed the subscriptions all and subscriptions update parts of your server in ways plain can't describe yet. Ask the agent what they do differently.", "kind": "description", "verdict": "right", "why": "True but uninformative: /all now returns every subscription (active filter and field whitelist removed) with prev_renewal_date and paid_count; /update now saves cancelled_at. Both still require login (withUserAuth) and are scoped to the user." },
+    { "text": "• Subscriptions now also store the cancelled date.", "kind": "description", "verdict": "right", "why": "prisma/schema.prisma adds cancelled_at String?." },
+    { "text": "• The agent also changed components/Card/Summary.js, components/Table/SubscriptionsTable.js, utils/dataExtraction.js and utils/date.js, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "All four really change behaviour (new estimate formula in utils/date.js, Cancel Date column and toggle setting cancelled_at in SubscriptionsTable.js, paid_count field rename in dataExtraction.js/Summary.js)." },
+    { "text": "1. Update your database: run `npm run dbpush` (it runs `prisma db push`) on your computer and on your live database. The database's structure changed.", "kind": "step", "verdict": "right", "why": "package.json:15 'dbpush': 'npm run predev && prisma db push'; the project doesn't use Prisma Migrate, so db push is the correct way to add cancelled_at. Fixes the old misleading step." },
+    { "text": "2. Test anything that uses @heroicons/react: it was upgraded from ^2.0.14 to ^2.0.15.", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "3. Test anything that uses @prisma/client: it was upgraded from ^4.10.0 to ^4.10.1.", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "4. Test anything that uses @react-email/container: it was upgraded from ^0.0.6 to ^0.0.7.", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "5. Test anything that uses @react-email/section: it was upgraded from ^0.0.6 to ^0.0.8.", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "6. Test anything that uses resend: it was upgraded from ^0.10.0 to ^0.11.0.", "kind": "step", "verdict": "right", "why": "package.json bump; resend sends the usage/plan emails (lib/auth.js)." },
+    { "text": "7. Test anything that uses prisma: it was upgraded from ^4.10.0 to ^4.10.1.", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "8. Test anything that uses tailwindcss: it was upgraded from ^3.2.4 to ^3.2.6.", "kind": "step", "verdict": "right", "why": "package.json bump." }
+  ],
+  "misses": [
+    { "what": "The overview's estimated subscription spend (and total spent/balance) changes: the formula now counts payments from the previous renewal date, and subscriptions turned off before this change (no cancel date) are counted as paid again, inflating totals.", "severity": "high" },
+    { "what": "Switching a subscription off now records today's date as its cancel date (shown in a new 'Cancel Date' column); switching it back on clears it. The renewal date column now shows a date for inactive subscriptions too (used to show '-'), plus a 'prev:' date.", "severity": "medium" },
+    { "what": "/api/subscriptions/all now returns all subscription columns (field whitelist removed), including internal ones like nameHash/user_id, but only for the logged-in user's own rows.", "severity": "low" }
+  ],
+  "silent": false }

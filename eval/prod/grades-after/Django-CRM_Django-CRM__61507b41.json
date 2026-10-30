@@ -1,101 +1,113 @@
 {
- "id": "Django-CRM_Django-CRM__61507b41",
- "summary": "Web and mobile custom-object record pages now load and show a Related records section, with new relatedAdd/relatedRemove form actions that link/unlink records via the API's /objects/related/ using target obj:<key>; notifications pages (web + mobile) now render real_estate.match ('X fits an open requirement') and education.seat_open ('A seat opened in X') alerts with icons; version bumps to 1.40.0.",
- "statements": [
-  {
-   "text": "Nothing flagged",
-   "kind": "reassurance",
-   "verdict": "right",
-   "why": "Frontend proxies with the user's own session; no new auth, payment or db change."
-  },
-  {
-   "text": "+ The agent added mobile/test/screens/record_alert_notifications_test.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Test file."
-  },
-  {
-   "text": "• The agent changed backend/uv.lock.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Version bump only."
-  },
-  {
-   "text": "• The agent changed mobile/lib/core/app_info.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Version bump."
-  },
-  {
-   "text": "• The agent changed mobile/lib/data/models/app_notification.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True, unexplained (adds alert text)."
-  },
-  {
-   "text": "• The agent changed mobile/lib/screens/notifications/notifications_screen.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True, unexplained."
-  },
-  {
-   "text": "• The agent changed mobile/lib/screens/objects/object_record_detail_screen.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True, unexplained (Related records)."
-  },
-  {
-   "text": "• The agent changed mobile/pubspec.yaml.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Version bump."
-  },
-  {
-   "text": "• The agent changed mobile/test/screens/objects/object_record_detail_screen_test.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Test file."
-  },
-  {
-   "text": "• The agent changed mobile/test/screens/phone_viewport_test.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Test file."
-  },
-  {
-   "text": "• The agent changed mobile/test/unit/lead_alerts_models_test.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Test file."
-  },
-  {
-   "text": "• The agent changed mobile/test/unit/notifications_provider_test.dart.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Test file."
-  },
-  {
-   "text": "• The agent also changed frontend/src/lib/server/v2/custom-objects.ts, notifications.ts and related-records.ts, in ways plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Real changes (related records actions, alert types)."
-  },
-  {
-   "text": "◐ Type checking is turned off in 1 spot in frontend/src/lib/server/v2/related-records.test.ts (`any`).",
-   "kind": "warning",
-   "verdict": "right",
-   "why": "True, test file only, harmless."
-  }
- ],
- "misses": [
-  {
-   "what": "Custom record pages (web and mobile) now show a Related records section where users can add or remove links between custom records. The card only lists mobile file names and never mentions the web (frontend/) changes at all.",
-   "severity": "medium"
-  },
-  {
-   "what": "Real-estate match and education 'seat opened' alerts now appear in the notifications list (web and mobile) with readable text and icons instead of a generic/blank entry.",
-   "severity": "medium"
-  }
- ],
- "silent": true
+  "id": "Django-CRM_Django-CRM__61507b41",
+  "summary": "Web and mobile custom-object record pages now load and show a Related records section, with new relatedAdd/relatedRemove form actions that link/unlink records via the API's /objects/related/ using target obj:<key>; notifications pages (web + mobile) now render real_estate.match ('X fits an open requirement') and education.seat_open ('A seat opened in X') alerts with icons; version bumps to 1.40.0.",
+  "statements": [
+    {
+      "text": "Nothing flagged — plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.",
+      "kind": "reassurance",
+      "verdict": "right",
+      "why": "Frontend proxies to the API with the user's own session; target/ids validated (custom-objects.ts validTarget/checkLink); nothing widens access, no payments/schema/secrets."
+    },
+    {
+      "text": "• The notifications page changed in a way plain can't describe yet. /notifications",
+      "kind": "description",
+      "verdict": "right",
+      "why": "notifications/+page.svelte adds text and House/Armchair icons for real_estate.match and education.seat_open; true but unexplained."
+    },
+    {
+      "text": "• Each object page now shows the related records. /objects/[key]/[id]",
+      "kind": "description",
+      "verdict": "right",
+      "why": "+page.server.ts loads loadRelated(obj:<key>) and +page.svelte renders RelatedRecords; doesn't mention the new add/remove link actions."
+    },
+    {
+      "text": "+ The agent added mobile/test/screens/record_alert_notifications_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True; a test file for the new alert notifications."
+    },
+    {
+      "text": "• The agent changed backend/uv.lock.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Only the backend's own version 1.39.0 -> 1.40.0 (matches pyproject.toml)."
+    },
+    {
+      "text": "• The agent changed mobile/lib/core/app_info.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Mobile app version 1.23.0 -> 1.24.0; true but unexplained."
+    },
+    {
+      "text": "• The agent changed mobile/lib/data/models/app_notification.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True, but doesn't say it adds the readable text for real_estate.match ('X fits an open requirement') and education.seat_open ('A seat opened in X') alerts."
+    },
+    {
+      "text": "• The agent changed mobile/lib/screens/notifications/notifications_screen.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True; shows those alerts with text and house/armchair icons, unexplained."
+    },
+    {
+      "text": "• The agent changed mobile/lib/screens/objects/object_record_detail_screen.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "True; adds a Related records section to custom record pages, unexplained."
+    },
+    {
+      "text": "• The agent changed mobile/pubspec.yaml.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "App version bump only."
+    },
+    {
+      "text": "• The agent changed mobile/test/screens/objects/object_record_detail_screen_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Test file."
+    },
+    {
+      "text": "• The agent changed mobile/test/screens/phone_viewport_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Test file."
+    },
+    {
+      "text": "• The agent changed mobile/test/unit/lead_alerts_models_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Test file."
+    },
+    {
+      "text": "• The agent changed mobile/test/unit/notifications_provider_test.dart.",
+      "kind": "description",
+      "verdict": "right",
+      "why": "Test file."
+    },
+    {
+      "text": "◐ Type checking is turned off in 1 spot in frontend/src/lib/server/v2/related-records.test.ts (`any`).",
+      "kind": "warning",
+      "verdict": "right",
+      "why": "True, but it's a test file; harmless."
+    },
+    {
+      "text": "plain can't tell which pages the login check in frontend/src/hooks.server.* covers, so it doesn't say whether the new or changed pages and server code here need login. Check they're behind it.",
+      "kind": "warning",
+      "verdict": "right",
+      "why": "Pages are under (app) whose layout gates signed-in users and the API checks the session; a fair hedge."
+    }
+  ],
+  "misses": [
+    {
+      "what": "Users can now add and remove links between custom records from a custom record page (new relatedAdd/relatedRemove actions writing via /objects/related/), and the mobile app gets the same Related records section; the card only says the web page shows related records.",
+      "severity": "medium"
+    },
+    {
+      "what": "Real-estate match and education 'seat opened' alerts now appear in the notifications list (web and mobile) with readable text and icons instead of a generic/blank entry.",
+      "severity": "medium"
+    }
+  ],
+  "silent": false
 }

@@ -1,35 +1,12 @@
-{
- "id": "captableinc_captable__2e3fdfba",
- "summary": "Redesigns the audit-log page appended to completed e-signed PDFs (logo, file name, Document history with action labels); marks @react-pdf/renderer as server external package.",
- "statements": [
-  {
-   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)",
-   "kind": "reassurance",
-   "verdict": "right",
-   "why": "Only audit-log PDF template and next config; nothing in logins, payments, db or secrets."
-  },
-  {
-   "text": "The agent changed src/pdf-templates/audit-log-template.tsx: it now shows \"Audit Logs\" and \"File Name\".",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Template now has those titles."
-  },
-  {
-   "text": "The agent also changed src/jobs/esign-pdf.ts and src/server/esign.ts, in ways plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Both really changed to feed the new template."
-  }
- ],
- "misses": [
-  {
-   "what": "Audit-log page on every completed signed document gets a 'Document history' table pairing plain-English actions (Signed, Email sent, Document completed) with each log line and a logo header; card only mentions two titles.",
-   "severity": "medium"
-  },
-  {
-   "what": "The time of each event (occurredAt) is fetched but not printed in the audit log.",
-   "severity": "low"
-  }
- ],
- "silent": false
-}
+{ "id": "captableinc_captable__2e3fdfba",
+  "summary": "Redesigns the audit-log page appended to completed e-signed PDFs: logo header, 'Audit Logs' title, the file name, and a 'Document history' list with human-readable action labels (Signed / Email sent / Document completed) next to each summary; also marks @react-pdf/renderer as a server external package so the PDF renderer works on the server.",
+  "statements": [
+    { "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)", "kind": "reassurance", "verdict": "right", "why": "Only a PDF template, extra read-only fields (action, occurredAt) selected in getEsignAudits, and a next.config external package; no login, payment, schema or secret change." },
+    { "text": "• The agent changed src/pdf-templates/audit-log-template.tsx: it now shows \"Audit Logs\", \"File Name\" and 2 more.", "kind": "description", "verdict": "right", "why": "Template now renders 'Audit Logs', 'File Name' + template name, 'Document history', and action labels (fallback 'unknown action'). True, though it doesn't say this is the audit page attached to signed documents." },
+    { "text": "• The agent also changed src/jobs/esign-pdf.ts and src/server/esign.ts, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Both really change: the audit query now also loads action/occurredAt and templateName is passed through to the PDF renderer (esign.ts:29-30,109,181; esign-pdf.ts:63)." }
+  ],
+  "misses": [
+    { "what": "The card names the template's new headings but not what they are: the audit-log page attached to every completed signed document now looks different for signers and the company (logo, file name row, 'Document history' pairing a plain-English action such as Signed / Email sent / Document completed with each log line).", "severity": "medium" },
+    { "what": "The time of each event (occurredAt) is now fetched but not printed in the audit log; the history shows only action + summary text.", "severity": "low" }
+  ],
+  "silent": false }

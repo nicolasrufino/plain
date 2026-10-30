@@ -1,4 +1,4 @@
-plain · 11 files changed since e148078c~1
+plain · 12 files changed since e148078c~1
 You asked: "Fix subscriptions from & to + upgrade pkgs"
 
   Nothing flagged  ·  7 steps before you ship
@@ -16,7 +16,7 @@ WHAT CHANGED
   Other files
     • The agent also changed app/dashboard/summary.tsx,
       components/context/data-provider.tsx, components/layout/header.tsx, constants/url.ts,
-      lib/date.ts and lib/extractor.ts, in ways plain can't describe yet.
+      lib/date.ts and 2 more files, in ways plain can't describe yet.
 
 BEFORE YOU SHIP
   1. Test anything that uses @supabase/supabase-js: it was upgraded from ^2.31.0 to ^2.32.0.

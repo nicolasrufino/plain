@@ -1,31 +1,11 @@
-{
- "id": "logtide-dev_logtide__c993470c",
- "summary": "Usage page hides Unlimited quota rows only under combined telemetry cap; card renamed 'Log bytes ingested'.",
- "statements": [
-  {
-   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)",
-   "kind": "reassurance",
-   "verdict": "right",
-   "why": "Frontend display only."
-  },
-  {
-   "text": "The agent changed usage/+page.svelte: it now shows \"Log bytes ingested\" in place of \"Bytes ingested\".",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Card title renamed."
-  },
-  {
-   "text": "The agent also changed usage-capabilities.ts, in a way plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Changes which quota rows show."
-  }
- ],
- "misses": [
-  {
-   "what": "Self-hosters capping a single quota now see all other quotas listed as 'Unlimited' on Settings > Usage; only combined-cap hosted plans hide them.",
-   "severity": "low"
-  }
- ],
- "silent": false
-}
+{ "id": "logtide-dev_logtide__c993470c",
+  "summary": "Usage settings page: 'Unlimited' per-signal quota rows are now hidden only when the combined telemetry.max_bytes_monthly quota is capped (hosted plan), instead of whenever any quota is capped; the 'Bytes ingested' card is renamed 'Log bytes ingested'.",
+  "statements": [
+    { "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)", "kind": "reassurance", "verdict": "right", "why": "Frontend display logic and a label only; nothing in logins, payments, database or secrets." },
+    { "text": "The dashboard settings usage page now says \"Log bytes ingested\". /dashboard/settings/usage", "kind": "description", "verdict": "right", "why": "routes/dashboard/settings/usage/+page.svelte renames the 'Bytes ingested' card to 'Log bytes ingested'." },
+    { "text": "The agent also changed packages/frontend/src/lib/utils/usage-capabilities.ts, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Real change: decides which quota rows the Usage page hides (only under a combined telemetry cap)." }
+  ],
+  "misses": [
+    { "what": "Self-hosters who cap a single quota (e.g. spans) now see all their other quotas listed as 'Unlimited' on Settings > Usage again; only hosted plans with a combined telemetry cap hide them.", "severity": "low" }
+  ],
+  "silent": false }
