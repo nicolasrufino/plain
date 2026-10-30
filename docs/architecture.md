@@ -64,9 +64,9 @@ and an unprotected admin `DELETE` in the same file are judged separately.
   that isn't written out (`prefix=settings.API_V1_STR`) is `…` too.
 - **Pages include their components.** A page also does what the components it imports do, except the app's frame (a
   component named Layout, AppHeader, Sidebar, Navbar or Footer, or anything in `layouts/`), and except a context's login,
-  logout and `GET /me` calls (`useAuth()`): those are the whole app's. A page that imports a file that isn't in the
-  project never gets "It only shows information".
-  They still count against "It only shows information" and toward the admin and login checks.
+  logout and `GET /me` calls (`useAuth()`): those are the whole app's, though they still count against "It only shows
+  information" and toward the admin and login checks. A page that imports a file that isn't in the project never gets
+  "It only shows information".
 - **Helpers are resolved.** `api('/bookings')` becomes `/api/bookings` when `api` wraps
   `` fetch(`/api${path}`) ``, or `` fetch(`${API_URL}/api${path}`) `` when `API_URL` is named for the
   app's own server and holds only env reads and localhost (not `OLLAMA_URL` or another company's API).
