@@ -9,6 +9,7 @@ import { adminCond, adminPos, FROM_REQUEST } from './admin.ts'
 import { memberCheck, keepsTo, scan, topLevel, roleGate, roomOnly, free, boundAll, aroundNames, inside } from './members.ts'
 import ts from 'typescript'
 import { execFileSync } from 'node:child_process'
+import { builtinModules } from 'node:module'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
@@ -3154,6 +3155,30 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)
     else if (A.deps[d] !== v) ship.push(`Test anything that uses ${d}: it was upgraded from ${A.deps[d]} to ${v}.`)
+  }
+  // A package removed from package.json that the app's code still imports: the build fails, unless another package happens to bring
+  // it along. Not when any package.json still lists it (a monorepo), not @types/ packages, and only imports in the app's own code
+  // (not tests, not node_modules).
+  // (any kind of listing counts: peer and optional too; and Node's own modules (events, buffer, url) never need one)
+  const listed = (snap: Snap) => new Set([...snap].filter(([k]) => /(^|\/)package\.json$/.test(k) && !k.includes('node_modules/')).flatMap(([, t]) => { try { const j = JSON.parse(t)
+    return [...Object.keys(j.dependencies ?? {}), ...Object.keys(j.devDependencies ?? {}), ...Object.keys(j.peerDependencies ?? {}), ...Object.keys(j.optionalDependencies ?? {})] } catch { return [] } }))
+  const listedB = listed(after)
+  // (modules a file uses, from its syntax tree: import, export ... from, require('x'), import('x'); never text in a string or comment)
+  const modulesOf = (q: string, t: string) => { const code = /\.(?:vue|svelte)$/.test(q) ? [...t.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n') : t
+    const sf = ts.createSourceFile('x.tsx', code, ts.ScriptTarget.Latest, false, /\.[cm]?ts$/.test(q) ? ts.ScriptKind.TS : ts.ScriptKind.TSX), out: string[] = []
+    const v = (n: ts.Node) => { if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) out.push(n.moduleSpecifier.text)
+      else if (ts.isCallExpression(n) && (n.expression.kind === ts.SyntaxKind.ImportKeyword || ts.isIdentifier(n.expression) && n.expression.text === 'require') && n.arguments[0] && ts.isStringLiteral(n.arguments[0])) out.push(n.arguments[0].text)
+      ts.forEachChild(n, v) }
+    v(sf); return out }
+  // (a name a bundler, tsconfig, Babel or Deno config mentions may be aliased or come from elsewhere: `alias: { react: 'preact/compat' }`)
+  const configText = [...after].filter(([k]) => /(?:^|\/)(?:[\w-]+\.config\.[cm]?[jt]s|[tj]sconfig[\w.]*\.json|\.babelrc\w*|babel\.config\.\w+|deno\.jsonc?|import_map\.json)$/.test(k)).map(([, t]) => t).join('\n')
+  const SETUP = /(?:^|\/)(?:setupTests|setup-tests|test-setup)\.[cm]?[jt]sx?$|\.setup\.[cm]?[jt]sx?$|(?:^|\/)(?:cypress|playwright|e2e|\.storybook)\/|\.stories\.[cm]?[jt]sx?$/
+  for (const d of [...listed(before)].filter(x => !listedB.has(x) && !x.startsWith('@types/') && !builtinModules.includes(x) && !/^(?:server-only|client-only)$/.test(x)
+    && !new RegExp(String.raw`['"]${x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"/]|[{,\s]${x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\s*:`).test(configText))) {
+    const users = [...after].filter(([k, t]) => /\.(?:[cm]?[jt]sx?|vue|svelte)$/.test(k) && !k.includes('node_modules/') && !TESTS.test(k) && !SETUP.test(k) && t.includes(d)
+      && modulesOf(k, t).some(m => m === d || m.startsWith(d + '/'))).map(([k]) => k)
+    const names = users.length > 3 ? [...users.slice(0, 2), `${users.length - 2} more files`] : users
+    if (users.length) problems.push({ kind: 'Check', text: `${d} was removed from package.json, but ${list(names)} still ${users.length > 1 ? 'use' : 'uses'} it. The app may not build or start (it only works if another package happens to bring ${d} along). Add it back, or remove those imports.` })
   }
   const svcBefore = new Set([...A.files.values()].flatMap(f => [...f.services]))
   for (const s of new Set([...B.files.values()].flatMap(f => [...f.services]))) if (!svcBefore.has(s))

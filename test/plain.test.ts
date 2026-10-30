@@ -7885,3 +7885,30 @@ console.log('ok (review 82)')
   assert.ok(Date.now() - t < 8000, `8,000 functions took ${Date.now() - t} ms`)
 }
 console.log('ok (big files)')
+// A package removed from package.json that code still imports
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const R = 'was removed from package.json, but'
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","date-fns":"3.0.0","@types/node":"20.0.0"}}', 'lib/d.ts': 'import { format } from "date-fns/format"\nexport const d = format\n' }
+  assert.ok(c(nx, { ...nx, 'package.json': '{"dependencies":{"next":"15.0.0","@types/node":"20.0.0"}}' }).includes(`date-fns ${R} lib/d.ts still uses it`), 'still imported')
+  assert.ok(!c(nx, { ...nx, 'package.json': '{"dependencies":{"next":"15.0.0","@types/node":"20.0.0"}}', 'lib/d.ts': 'export const d = 1\n' }).includes(R), 'imports removed too')
+  assert.ok(!c({ ...nx, 'packages/x/package.json': '{"dependencies":{"date-fns":"3.0.0"}}' }, { ...nx, 'packages/x/package.json': '{"dependencies":{"date-fns":"3.0.0"}}', 'package.json': '{"dependencies":{"next":"15.0.0"}}' }).includes(R), 'another package.json lists it')
+  assert.ok(!c(nx, { ...nx, 'package.json': '{"dependencies":{"next":"15.0.0","date-fns":"3.0.0"}}' }).includes(R), '@types')
+}
+console.log('ok (removed packages)')
+// Review 83: server-only, a bundler alias, Deno's import map, test setup files and code samples in strings aren't "still uses it"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const R = 'was removed from package.json'
+  const pj = (d: string) => `{"dependencies":{"next":"15.0.0"${d}}}`
+  assert.ok(!c({ 'package.json': pj(',"server-only":"0.0.1"'), 'lib/s.ts': 'import "server-only"\nexport const s = 1\n' }, { 'package.json': pj(''), 'lib/s.ts': 'import "server-only"\nexport const s = 1\n' }).includes(R), 'server-only')
+  const v = { 'vite.config.ts': "export default { resolve: { alias: { react: 'preact/compat' } } }\n", 'src/i.tsx': 'import { useState } from "react"\nexport const x = useState\n' }
+  assert.ok(!c({ ...v, 'package.json': pj(',"react":"18.0.0"') }, { ...v, 'package.json': pj(',"preact":"10.0.0"') }).includes(R), 'aliased')
+  const st = { 'src/setupTests.ts': 'import "@testing-library/jest-dom"\n' }
+  assert.ok(!c({ ...st, 'package.json': pj(',"@testing-library/jest-dom":"6.0.0"') }, { ...st, 'package.json': pj('') }).includes(R), 'test setup')
+  const doc = { 'app/docs/page.tsx': 'const code = `import { Button } from "old-ui"`\nexport default function P() { return <pre>{code}</pre> }\n' }
+  assert.ok(!c({ ...doc, 'package.json': pj(',"old-ui":"1.0.0"') }, { ...doc, 'package.json': pj('') }).includes(R), 'a code sample')
+  const lo = { 'src/a.ts': 'const u = "//cdn.x"\nimport x from "lodash"\nexport const y = [u, x]\n' }
+  assert.ok(c({ ...lo, 'package.json': pj(',"lodash":"4.0.0"') }, { ...lo, 'package.json': pj('') }).includes(`lodash ${R}`), 'a // inside a string')
+}
+console.log('ok (review 83)')

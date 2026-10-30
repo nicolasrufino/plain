@@ -101,6 +101,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   unbalances braces. Not for PHP files with HTML after `?>`.
 - **Broken.** A function was deleted but other code still uses it, or a migration starts with terminal output pasted in
   ("Already up to date", "$ npx prisma migrate dev").
+- **A package removed that code still uses.** A package no package.json lists any more (dependencies, dev, peer or optional)
+  that the app's own code still imports or requires, read from the syntax tree. This is a thing to decide, since another
+  package may bring it along. Not Node's built-ins, `@types/`, `server-only`/`client-only`, names a bundler, tsconfig, Babel
+  or Deno config mentions (aliases), tests, test setup files or stories.
 - **Unsafe data and uploads** (from misses in the [production pilot](production-eval.md)):
   - Bank account, card, IBAN, Social Security or passport numbers newly stored as plain text in any model plain reads.
     An account number counts only on a bank model, or next to a routing, IBAN or payout field: a CRM's `accountNumber` is
