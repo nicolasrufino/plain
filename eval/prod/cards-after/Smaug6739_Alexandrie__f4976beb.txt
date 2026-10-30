@@ -11,6 +11,6 @@ WHAT CHANGED
       /api/auth/oidc/[provider]/callback
 
 BEFORE YOU SHIP
-  1. Apply 000021_users_avatar_text.up.sql to your live database before the new code goes
-     live (`migrate -path <folder> -database $DATABASE_URL up`), or the parts that use it
-     will fail.
+  1. 000021_users_avatar_text.up.sql will change your live database by itself the next time
+     the app starts (main runs the migrations). Back up first; if it fails, the app won't
+     start.

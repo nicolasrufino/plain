@@ -30,14 +30,14 @@ export type GoOp =
   | { op: 'subfn'; on: string; prefix: string; fn: string }                               // chi r.Route(p, adminRoutes) / r.Group(h.protected)
   | { op: 'return'; v: string; wrap?: string[] }
 export type GoFunc = FileFacts & { routeOps: GoOp[]; pkgVars: Map<string, string>; takesHandler: boolean; inUse: boolean;   // pkgVars: h := handlers.New(...) -> h is from that import path
-  params: string[]; check?: 'login' | 'unknown'; mw?: 'login' | 'unknown' | 'none'; checkAdmin?: boolean; mwAdmin?: boolean; traps: string[] }   // *Admin: that login check is "only admins"
+  params: string[]; check?: 'login' | 'unknown'; mw?: 'login' | 'unknown' | 'none'; checkAdmin?: boolean; mwAdmin?: boolean; traps: string[]; up?: boolean; top?: string[]; serves?: boolean }   // *Admin: that login check is "only admins"; up: runs the migrations (m.Up(), goose.Up);
+  // top: the calls it always makes (gcall:<import path or package>.<name>; not in an if, a loop, a switch or a closure); serves: a main() that starts a server
 export type GoFacts = FileFacts & { go: {
   pkg: string; dir: string
   imports: Map<string, string>                    // alias -> import path
   funcs: Map<string, GoFunc>                      // Name / Recv.Name / @lit<offset> -> what it does
   structs: Map<string, string[]>                  // GORM-style models: type Order struct { gorm.Model; Total int } -> fields
   automigrate: string[]                           // db.AutoMigrate(&Order{}, ...) -> Order
-  selfMigrates: boolean                           // m.Up() / goose.Up / AutoMigrate at startup
   required: string[]                              // env vars the code refuses to start without (mustEnv("X"), env:"X,required")
   risks: Set<string>
 } }
@@ -47,6 +47,35 @@ const stmtsTop = (n: N) => ((n.namedChildren.find(c => c?.type === 'statement_li
 const str = (n?: N | null) => n && /^(interpreted|raw)_string_literal$/.test(n.type) ? n.text.slice(1, -1) : undefined
 const argsOf = (c: N) => (c.childForFieldName('arguments')?.namedChildren ?? []).filter((x): x is N => !!x)
 const callee = (c: N) => c.childForFieldName('function')?.text ?? ''
+// a call `fn` always makes: not inside an if/else body, an else-if, the right side of && or ||, a loop, a switch or select case, or
+// a closure (an if's `x := f(); ...` part counts), and nothing before it in `fn` can end it first: a return, os.Exit, log.Fatal or
+// panic (in a switch or loop too), except an `if err != nil` with no else, or an if that only prints and stops
+// ponytail: a goto, a for's post statement, code after `if err := http.ListenAndServe(...); err != nil {...}` still count
+// a statement's own nodes of a type, not those in a closure it defines (a handler's `return`)
+const direct = (s: N, type: string) => (s.type === type ? [s] : []).concat(all(s, type).filter(x => { for (let p = x.parent; p && p.id !== s.id; p = p.parent) if (p.type === 'func_literal') return false; return true }))
+const EXIT = /^(?:os\.Exit|log\.(?:Fatal|Panic)\w*|panic)$/
+// an early way out that only prints and stops (a missing setting, -version, usage), or hands back an error: no server starts on it
+const QUIET = /^(?:fmt|log|slog|os|errors|flag|strings|strconv)\.|^(?:len|panic|print|println)$/
+const ends = (s: N) => direct(s, 'return_statement').length > 0 || direct(s, 'call_expression').some(c => EXIT.test(callee(c)))
+const quits = (s: N, fn: N) => [s.childForFieldName('consequence'), s.childForFieldName('alternative')].every(b => !b || direct(b, 'call_expression').every(c => QUIET.test(callee(c))))
+  && direct(s, 'return_statement').every(r => fn.childForFieldName('name')?.text === 'main' && fn.type === 'function_declaration' || /(?:\berr\w*|Err\w*|\b(?:fmt\.Errorf|errors\.\w+)\(.*\))\s*$/.test(r.text))
+// if TLS { srv.ListenAndServeTLS(...) } else { srv.ListenAndServe() }: every branch of the chain serves
+const SRV = /(?:^|\.)(?:ListenAndServe|Serve)(?:TLS)?$/
+const elseServes = (i: N): boolean => { const a = i.childForFieldName('alternative'), b = i.childForFieldName('consequence')
+  return !!a && !!b && direct(b, 'call_expression').some(c => SRV.test(callee(c))) && (a.type === 'if_statement' ? elseServes(a) : direct(a, 'call_expression').some(c => SRV.test(callee(c)))) }
+const always = (c: N, fn: N) => {
+  const body = fn.childForFieldName('body'), list = body?.namedChildren.find(x => x?.type === 'statement_list') ?? body
+  let prev: N = c
+  for (let p = c.parent; p && p.id !== fn.id && p.id !== list?.id; prev = p, p = p.parent) {
+    if (p.type === 'func_literal' || /_case$/.test(p.type) || p.type === 'block' && p.id !== body?.id) return false
+    if (p.type === 'if_statement' && p.childForFieldName('alternative')?.id === prev.id) return false
+    if (p.type === 'binary_expression' && /^(?:&&|\|\|)$/.test(p.childForFieldName('operator')?.text ?? '') && p.childForFieldName('right')?.id === prev.id) return false
+  }
+  for (let s = prev.previousNamedSibling; s; s = s.previousNamedSibling)
+    if (s.type !== 'comment' && ends(s) && !(s.type === 'if_statement' && !s.childForFieldName('alternative') && /^\s*\w*err\w*\s*!=\s*nil\s*$/i.test(s.childForFieldName('condition')?.text ?? ''))
+      && !(s.type === 'if_statement' && quits(s, fn))) return false
+  return true
+}
 const VERB: Record<string, string> = { Get: 'GET', Post: 'POST', Put: 'PUT', Patch: 'PATCH', Delete: 'DELETE', GET: 'GET', POST: 'POST', PUT: 'PUT', PATCH: 'PATCH', DELETE: 'DELETE', Any: 'ANY', Handle: 'ANY', HandleFunc: 'ANY', Method: 'ANY', MethodFunc: 'ANY' }
 // {id}, :id, {id...}, {$} -> [id]
 export const goPath = (p: string) => p.replace(/\{\$\}/g, '').replace(/\{(\w+)(\.\.\.)?\}/g, '[$1]').replace(/:(\w+)/g, '[$1]').replace(/\*(\w*)$/, (_, n) => `[${n || 'rest'}]`)
@@ -113,7 +142,7 @@ export function goFacts(path: string, text: string, empty: (printed?: string) =>
   const pkg = all(root, 'package_identifier')[0]?.text ?? ''
   const imports = new Map<string, string>()
   for (const s of all(root, 'import_spec')) { const p = str(s.childForFieldName('path')) ?? '', alias = s.childForFieldName('name')?.text ?? p.split('/').filter(x => !/^v\d+$/.test(x)).pop()!.replace(/^go-/, '').replace(/-go$/, ''); imports.set(alias, p) }
-  const f: GoFacts = Object.assign(empty(text.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')), { go: { pkg, dir, imports, funcs: new Map(), structs: new Map(), automigrate: [], selfMigrates: false, required: [], risks: new Set<string>() } as GoFacts['go'] })
+  const f: GoFacts = Object.assign(empty(text.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')), { go: { pkg, dir, imports, funcs: new Map(), structs: new Map(), automigrate: [], required: [], risks: new Set<string>() } as GoFacts['go'] })
   f.todos = [...text.matchAll(/\/\/\s*((TODO|FIXME|HACK)\b[^\n]*)/g)].map(m => m[1])
   const go = f.go
   const isGin = [...imports.values()].some(p => /gin-gonic\/gin/.test(p)), lit = (n: N) => `@lit${n.startIndex}`
@@ -151,7 +180,20 @@ export function goFacts(path: string, text: string, empty: (printed?: string) =>
     for (const d of body ? all(body, 'short_var_declaration') : []) { const v = d.childForFieldName('left')?.namedChildren[0]?.text, rhs = d.childForFieldName('right')?.namedChildren[0]
       const callee_ = rhs?.type === 'call_expression' ? callee(rhs) : rhs?.type === 'unary_expression' ? rhs.text.match(/^&(\w+)\./)?.[1] + '.' : rhs?.text.match(/^(\w+)\.\w+\{/)?.[1] + '.'
       const alias = callee_?.split('.')[0]; if (v && alias && imports.has(alias)) pkgVars.set(v, imports.get(alias)!) }
-    go.funcs.set(key, Object.assign(g, { takesHandler: names(fn, /(?:http|echo|gin)\.Handler(?:Func)?\b/).length > 0, inUse: asMw, pkgVars, routeOps: body ? ops(body) : [], params, check: own.kind, mw: mw.kind ?? 'none', checkAdmin: own.kind === 'login' && own.admin, mwAdmin: mw.kind === 'login' && mw.admin, traps: actsAsMw ? mw.traps : own.traps }))
+    const top = all(fn, 'call_expression').filter(c => always(c, fn)).flatMap(c => { const sel = c.childForFieldName('function'), opnd = sel?.type === 'selector_expression' ? sel.childForFieldName('operand')!.text : ''
+      return sel?.type === 'identifier' ? [`gcall:${pkg}.${sel.text}`] : imports.has(opnd) ? [`gcall:${imports.get(opnd)}.${sel!.childForFieldName('field')!.text}`] : [] })
+    // (ListenAndServe / Serve (or passed on: g.Go(srv.ListenAndServe)), or .Run / .Start / .Listen given an address (":8080",
+    // ":" + port, *addr, cfg.Addr, os.Getenv("PORT")), or gin's r.Run(); not
+    // exec.Command("pg_dump").Run(), a tracer's .Start(ctx, ...), a command-line tool's app.Run(os.Args))
+    // (not one only in an if or a case: `if os.Getenv("PPROF") != "" { go http.ListenAndServe(":6060", nil) }` in a migrate tool;
+    // a closure only when it's started: `go func() { srv.ListenAndServe() }()`, g.Go(func() error {...}), run.Group's g.Add(func() error {...}, ...); not a cobra command's RunE)
+    const serves = all(fn, 'call_expression').some(c => { const t = callee(c), a = argsOf(c)
+      for (let p = c.parent; p && p.id !== fn.id; p = p.parent) if (/_case$/.test(p.type) || p.type === 'block' && p.parent?.type === 'if_statement' && !elseServes(p.parent)
+        || p.type === 'func_literal' && !(p.parent?.type === 'call_expression' && p.parent.parent?.type === 'go_statement' || /\.(?:Go|Add)$/.test(p.parent?.type === 'argument_list' && p.parent.parent ? callee(p.parent.parent) : ''))) return false
+      return /(?:^|\.)(?:ListenAndServe|Serve)(?:TLS)?$/.test(t) || a.some(x => /^[\w.]*\.ListenAndServe(?:TLS)?$/.test(x.text)) || /\.(?:Run|Start|Listen)(?:TLS)?$/.test(t)
+        && (a.length ? (/^[*&]?(?:"[^"]*:\d*"|":"\s*\+|fmt\.Sprintf\(\s*"[^"]*:|os\.Getenv\("\w*(?:ADDR|PORT)\w*"\))/i.test(a[0].text) || /^(?:[^()]|\(\))*\+\s*":"\s*\+/.test(a[0].text.replace(/\([^()]*\)/g, '()'))
+          || /^(?:[\w.]*[._])?(?:addr|port|listen|bind|http|ADDR|PORT|HTTP)\w*$|^[\w.]*[a-z](?:Addr|Port|Listen|Bind|HTTP|Http)\w*$/.test(a[0].text.replace(/^[*&]/, '')) && !/(?:client|transport|request|req|url|dir|path|file)$/i.test(a[0].text)) : isGin) })
+    go.funcs.set(key, Object.assign(g, { top, serves, takesHandler: names(fn, /(?:http|echo|gin)\.Handler(?:Func)?\b/).length > 0, inUse: asMw, pkgVars, routeOps: body ? ops(body) : [], params, check: own.kind, mw: mw.kind ?? 'none', checkAdmin: own.kind === 'login' && own.admin, mwAdmin: mw.kind === 'login' && mw.admin, traps: actsAsMw ? mw.traps : own.traps }))
   }
 
   // route operations in a block, in order
@@ -247,13 +289,18 @@ export function goFacts(path: string, text: string, empty: (printed?: string) =>
     }
     go.structs.set(t.childForFieldName('name')!.text, fields)
   }
-  // migrations run by the server itself: golang-migrate's m.Up() / goose.Up in a main that also starts the server (not a separate
-  // migrate command, not tests); AutoMigrate only makes GORM's tables (it never applies .sql files)
-  const serves = /ListenAndServe|\.Run\(|\.Start\(|\.Listen\(/.test(text) && pkg === 'main' && !path.endsWith('_test.go')
+  // migrations run by the server itself: golang-migrate's m.Up() / goose.Up, reached from a main that starts the server (see plain.ts);
+  // AutoMigrate only makes GORM's tables (it never applies .sql files)
   for (const c of all(root, 'call_expression')) {
     const fnt = callee(c)
     if (/\.AutoMigrate$/.test(fnt)) for (const a of argsOf(c)) { const m = a.text.match(/&?(?:\w+\.)?(\w+)\{\}/)?.[1]; if (m) go.automigrate.push(m) }
-    if (serves && (/^goose\.(Up|UpContext|UpTo)$/.test(fnt) || /\.Up$/.test(fnt) && /migrate\.New/.test(text))) go.selfMigrates = true
+    if (!(/^goose\.(Up|UpContext|UpTo)$/.test(fnt) || /\.Up$/.test(fnt) && /migrate\.New/.test(text))) continue
+    // the function that runs them, for a main that reaches it through other packages (app.InitApp -> Migrate -> m.Up(): see plain.ts)
+    // (only when it always runs there: not behind a flag, in a subcommand's closure, or in a loop)
+    let at: N | null = c.parent
+    while (at && at.type !== 'function_declaration') at = at.parent
+    const up = at && always(c, at) ? go.funcs.get(at.childForFieldName('name')!.text) : undefined
+    if (up) up.up = true
   }
   // required: mustEnv("X") / requireEnv("X") style helpers, and LookupEnv followed by a fatal
   for (const c of all(root, 'call_expression')) if (/^(must|require)\w*Env\w*$|^(must|require)Getenv$|^env\.Must\w*$/i.test(callee(c))) { const k = str(argsOf(c)[0]); if (k) go.required.push(k) }

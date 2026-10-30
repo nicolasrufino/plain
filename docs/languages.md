@@ -678,7 +678,14 @@ gorilla/mux, routers kept in a struct field (`s.router`), and a group handed str
 - **The tables:** GORM's `AutoMigrate`'d structs, or the tables golang-migrate (`*.up.sql`) and goose
   (`-- +goose Up`) migrations build, read with the same Postgres parser as Supabase.
 - **Before you ship:** "apply with `migrate ... up` / `goose up`", or "changes your live database by
-  itself the next time the app starts" when `main()` runs them (`m.Up()`, `goose.Up`). `AutoMigrate`
+  itself the next time the app starts" when a server's `main()` runs them (`m.Up()`, `goose.Up`)
+  through calls it always makes, across packages (`app.InitApp()` -> `Migrate()` -> `m.Up()`). A
+  server is a `main` that starts one (`ListenAndServe`, `Serve`, `.Run`/`.Start`/`.Listen` given an
+  address, gin's `r.Run()`), itself or through `run()`-style helpers it always calls; not one in
+  `testdata/`, `examples/`, `_x/` or a `//go:build ignore` file. "Always" means not behind a flag, a
+  subcommand, a loop, a closure, `&&`/`||`, or an earlier `if` that returns or exits (one that only
+  prints and stops, or `if err != nil`, is fine). Methods, `init()` and `migrate.New` in another file
+  still read as "apply" (the safe way round). `AutoMigrate`
   never drops a column, so a removed field isn't data loss. A setting the code refuses to start without
   (`mustEnv("X")`, `env:"X,required"`) is a required one; `os.Getenv` alone is optional.
 - **To flag:** a go.mod older than 1.22 with 1.22-style routes (`"POST /orders/{id}"` never matches),

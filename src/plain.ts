@@ -1076,6 +1076,7 @@ export function appFacts(snap: Snap) {
   const rbModels = new Map<string, string[]>()     // Rails: the same
   const goModels = new Map<string, string[]>()     // Go: GORM's AutoMigrate'd structs, and the tables SQL migrations build
   let goDb: Db | undefined, goOld: string | undefined   // goOld: go.mod's go version, when it's older than the route patterns need
+  let goSelf = false                                // Go: a server's main() runs the migrations, maybe through other packages
   const goGorm = new Set<string>()                  // (models AutoMigrate keeps: it never drops a column)
   const svelteUrls = new Map<string, string>()   // SvelteKit pages: their <form method="POST"> sends to this address
   // Where a hook's or middleware's login check applies: each checking `if` covers what its path tests allow, and an earlier
@@ -1687,6 +1688,24 @@ export function appFacts(snap: Snap) {
       return undefined
     }
     for (const [p, x] of goFiles) if (x.pkg === 'main' && x.funcs.has('main')) run(`${x.dir}::main`, new Map([['http', mux('mux')]]), 0)
+    // main -> app.InitApp -> Migrate -> m.Up(): functions that run the migrations, and the calls that always reach them. A name defined
+    // in more than one file of a package (build tags, a `//go:build ignore` tool's main) counts only if every one of them runs them.
+    const defs = new Map<string, { x: (typeof goFiles)[number][1]; fs: GoFunc[] }>()
+    for (const [, x] of goFiles) for (const [k, f] of x.funcs) if (!k.startsWith('@lit') && !k.includes('.')) { const d = defs.get(`${x.dir}::${k}`); if (d) d.fs.push(f); else defs.set(`${x.dir}::${k}`, { x, fs: [f] }) }
+    const goTarget = (u: string, x: { dir: string; pkg: string }) => { const m = u.match(/^gcall:(.+)\.(\w+)$/); const d = !m ? undefined : m[1] === x.pkg ? x.dir : dirOfImport(m[1]); return d === undefined ? '' : `${d}::${m![2]}` }
+    const ups = new Set([...defs].filter(([, d]) => d.fs.every(f => f.up)).map(([k]) => k))
+    const reaches = (f: GoFunc, x: { dir: string; pkg: string }) => f.up || (f.top ?? []).some(u => ups.has(goTarget(u, x)))
+    for (let grew = true; grew;) { grew = false
+      for (const [k, d] of defs) if (!ups.has(k) && d.fs.every(f => reaches(f, d.x))) { ups.add(k); grew = true } }
+    // (each file's own main, one that starts a server)
+    // (not one the go tool never builds: testdata/, _examples/, .hidden/, //go:build ignore; nor an example: examples/)
+    // (a server started in main or in a function it always calls: run(), startServer())
+    const srvs = new Set([...defs].filter(([, d]) => d.fs.every(f => f.serves)).map(([k]) => k))
+    for (let grew = true; grew;) { grew = false
+      for (const [k, d] of defs) if (!srvs.has(k) && d.fs.every(f => (f.top ?? []).some(u => srvs.has(goTarget(u, d.x))))) { srvs.add(k); grew = true } }
+    const serving = (f: GoFunc, x: { dir: string; pkg: string }) => f.serves || (f.top ?? []).some(u => srvs.has(goTarget(u, x)))
+    goSelf = goFiles.some(([p, x]) => x.pkg === 'main' && !!x.funcs.get('main') && serving(x.funcs.get('main')!, x) && reaches(x.funcs.get('main')!, x)
+      && !/(?:^|\/)(?:testdata|examples?|[_.][^/]*)\//.test(p) && !/^\/\/go:build\s+ignore\b/m.test(snap.get(p) ?? ''))
     // what a middleware or handler is: by its code; a library's, by its import path
     const kindOf = (ref: GoRef, ctx: Ctx): 'login' | 'unknown' | 'none' => {
       const name = ref.wrap?.[0] ?? ref.call ?? ref.fn ?? ''   // AuthRequired(sm): the factory, not its argument
@@ -2137,7 +2156,7 @@ export function appFacts(snap: Snap) {
   const pyModels = new Set<string>()
   for (const f of files.values()) for (const [m, fs] of (f as PyFacts).models ?? []) { all.set(m, fs); pyModels.add(m) }
   return {
-    files, routes, db, models: all, schemaPath, target, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()), rbModels: new Set(rbModels.keys()), goModels: new Set(goModels.keys()), goGorm, goDb, goOld,
+    files, routes, db, models: all, schemaPath, target, pyModels, dzModels, csModels: new Set(csModels.keys()), javaModels: new Set(javaModels.keys()), phpModels: new Set(phpModels.keys()), rbModels: new Set(rbModels.keys()), goModels: new Set(goModels.keys()), goGorm, goDb, goOld, goSelf,
     goMigrations: [...snap.keys()].some(p => /(^|\/)go\.mod$/.test(p)) ? [...snap.keys()].filter(goMigration) : [],
     rbMigrations: [...snap.keys()].filter(p => /(^|\/)db\/migrate\/[^/]+\.rb$/.test(p)),
     phpMigrations: [...snap.keys()].filter(p => /(^|\/)database\/migrations\/[^/]+\.php$/.test(p)),
@@ -3056,7 +3075,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     problems.push({ kind: 'Unsafe', text: `${p} is in the code. It unlocks all your Rails credentials (Stripe keys and the rest): anyone who can see the code can read them. Remove it from the repository, add it to .gitignore, and set RAILS_MASTER_KEY on your host instead.` })
   // Go: new migrations (golang-migrate / goose); main() may run them by itself (m.Up(), goose.Up, AutoMigrate)
   const newGo = B.goMigrations.filter(m => !A.goMigrations.includes(m))
-  const goSelf = [...B.files].some(([p, f]) => !p.endsWith('_test.go') && (f as GoFacts).go?.selfMigrates)
+  const goSelf = B.goSelf
   for (const m of newGo) { const bad = (B.goDb?.destructive.get(m) ?? []).filter(x => !/^deletes the \S+ (column|table)/.test(x)); if (bad.length) ship.push(`Back up your data first: ${m} ${list(bad)}, and that can't be undone.`) }
   if (newGo.length) ship.push(goSelf
     ? `${list(newGo.map(m => m.split('/').pop()!))} will change your live database by itself the next time the app starts (main runs the migrations). Back up first; if it fails, the app won't start.`
