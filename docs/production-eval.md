@@ -4,7 +4,7 @@ The trials ([round 1](trials.md) to [round 10](trials-saas-chat-ai.md)) tested p
 for us. This pilot asks the other question: what does plain say about **real commits in real apps** that nobody built
 for it?
 
-**Short answer** (before the fixes [below](#what-changed-in-plain-because-of-it)): plain didn't crash, and it never gave a false login ✓. But its "✓ No problems spotted" header was
+**Short answer** (before the fixes [below](#what-changed-in-plain-because-of-it) and the [second round](#second-round-the-7-misses)): plain didn't crash, and it never gave a false login ✓. But its "✓ No problems spotted" header was
 wrong or misleading 13 times out of 46. Its "doesn't look related" flags were wrong 42 times out of 45. Nearly half the
 cards (46%) said nothing useful. The descriptions it does give are mostly right (158 of 184 fully right).
 
@@ -129,10 +129,45 @@ Tried and dropped after review:
 - **A keyword list for "this isn't SQL".** It flagged real T-SQL, SQL*Plus and DuckDB migrations. Only pasted terminal
   output is flagged now.
 
+## Second round: the 7 misses
+
+Five of the seven are now caught, each by a rule written for that shape of problem and checked on all 70 commits. No other
+card changed, so the rules raised no new false alarms in the pilot. Across the 17 demo apps, the only change is a fair
+"thing to decide" on the persona run that added account deletion.
+
+| Miss | Now |
+|---|---|
+| `javascript:` links through saved `href` (LinkStack) | ! Links in buttons.blade.php and icons.blade.php now go straight to an address people saved… make sure saved links can only start with http:// or https:// |
+| SVG uploads (LinkStack) | ⚠ Uploads now accept SVG files… an SVG can carry a script |
+| Webhook swallows a failed save (chadnext) | ⚠ If saving to your database fails in your Stripe webhook, the error is caught and Stripe is still told it worked |
+| Bank numbers in plain text (captable) | ! Bank accounts now store the account number as plain text |
+| Account deletion with no confirmation (instagram-mern) | ! People can now delete their own account… make sure the app asks them to confirm first. The card also says what the route does now, instead of "can't describe" |
+| Search API lists everyone's playlists (blackcandy) | **still missed** |
+| Inflated spend totals (expense.fyi) | **still missed** |
+
+The two that are left:
+- **blackcandy:** the unscoped `Playlist.search` was already in the code. The commit only added a JSON view for it. Catching it
+  means knowing which data belongs to whom, and plain's earlier name-based guesses at that raised false alarms.
+- **expense.fyi:** the totals are wrong because of a calculation, which a rule that doesn't run the code can't check.
+
+Six independent review rounds tried to break the new rules with realistic code. Each finding became a test. They found
+7, 5, 6, 5, 4 and 4 problems, mostly false alarms; one was a crash on unusual code inside a `catch`, fixed before
+pushing. The last round found no crash in about 40 attempts. Examples:
+- a QR code's `["png", "svg"]` output formats;
+- a `{{ file.url }}` download link;
+- Hono's `c.json(x, 500)`;
+- a catch that answers "already processed" for a repeated event;
+- leaving a team via `DELETE /teams/[id]/members/me`;
+- a `failed = true` flag checked after the catch.
+
+To stay quiet on code like that, the rules give up some real cases:
+- React, Vue and Svelte links (their links mostly come from fixed menu lists);
+- a webhook whose save is inside a helper function;
+- SVG lists spread over several lines.
+
 ## Still open
 
-1. **The 7 misses above.** Unscoped queries in a new search endpoint; `href` from user input; webhook handlers that
-   catch and still answer 200; destructive self-service endpoints.
+1. **The 2 misses above:** unscoped queries in a new endpoint, and wrong money math.
 2. **Silent cards (32 of 70).** Frontend behaviour, CSS, mobile apps, config and deploy scripts. Outside Python, a code
    file plain can't describe is listed only when the card has nothing else to say. Listing them always named files the
    card had already described another way (models, route files).

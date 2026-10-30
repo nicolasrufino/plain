@@ -1,11 +1,14 @@
 plain · 2 files changed since 45036c1f~1
 You asked: "delete profile endpoint"
 
-  Nothing flagged
-    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+  1 thing to decide
+
+LOOK AT THIS FIRST
+  ! People can now delete their own account (the v1 me part of your server). That can't be
+    undone, so make sure the app asks them to confirm first (like typing their password),
+    and that the rest of their data is deleted or kept the way you want.
 
 WHAT CHANGED
   Server
-    • The v1 me part of your server changed in a way plain can't describe yet. Ask the agent
-      what it does differently.
+    • The v1 me part of your server now lets people delete their own account.
       /api/v1/me

@@ -1,8 +1,13 @@
 plain · 2 files changed since 28b073df~1
 You asked: "Now counting clicks using JS"
 
-  Nothing flagged
-    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+  1 thing to decide
+
+LOOK AT THIS FIRST
+  ! Links in resources/views/linkstack/elements/buttons.blade.php now go straight to an
+    address people saved. If someone saves one that starts with "javascript:", it runs code
+    in the browser of whoever clicks it, admins included. Make sure saved links can only
+    start with http:// or https://.
 
 WHAT CHANGED
   Other files

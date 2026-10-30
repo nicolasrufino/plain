@@ -1,8 +1,12 @@
 plain · 4 files changed since 74f6d85a~1
 You asked: "feat: model for bank account"
 
-  Nothing flagged  ·  1 step before you ship
-    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+  1 thing to decide  ·  1 step before you ship
+
+LOOK AT THIS FIRST
+  ! Bank accounts now store the account number as plain text. Anyone who gets a copy of your
+    database (a leaked backup or password) can read it. Encrypt it, or let your payment
+    provider keep it.
 
 WHAT CHANGED
   Database

@@ -1,8 +1,13 @@
 plain · 4 files changed since ffaf659e~1
 You asked: "refactor: :recycle: streamline Stripe webhook handling and improve billing fo..."
 
-  Nothing flagged  ·  1 step before you ship
-    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+  ⚠ 1 problem  ·  1 step before you ship
+
+LOOK AT THIS FIRST
+  ⚠ If saving to your database fails in your Stripe webhook
+    (src/app/api/webhooks/stripe/route.ts), the error is caught and Stripe is still told it
+    worked, so it won't try again. A customer can pay and never get what they paid for.
+    Answer with an error (status 500) so Stripe retries.
 
 WHAT CHANGED
   Server

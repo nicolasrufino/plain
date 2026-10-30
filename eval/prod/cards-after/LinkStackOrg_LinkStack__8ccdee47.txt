@@ -1,8 +1,13 @@
 plain · 11 files changed since 8ccdee47~1
 You asked: " JulianPrieber committed 1 hour ago Create global validation endpoint"
 
-  Nothing flagged
-    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+  ⚠ 1 problem
+
+LOOK AT THIS FIRST
+  ⚠ Uploads now accept SVG files (in app/Functions/validation.php and
+    config/validation.php). An SVG can carry a script that runs when someone opens it from
+    your site, so one user could attack others, admins included. Leave SVG out, or serve
+    uploaded files from a separate domain.
 
 WHAT CHANGED
   Server

@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { readDb, findings, isMigration, ownOnly, type Db } from './supabase.ts'
-import { pyFacts, djClassRoutes, type PyFacts, type DjClass } from './python.ts'
+import { pyFacts, djClassRoutes, pySwallows, dbWrite, FAILS, type PyFacts, type DjClass } from './python.ts'
 import { sfcToTsx, nuxtRoute, svelteRoute, ngTemplateToJsx } from './sfc.ts'
 import { javaFacts, type JavaFacts, type Family } from './java.ts'
 import { STRIPE_EVENTS } from './stripe-events.ts'
@@ -2315,6 +2315,19 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         && onlyKnownCalls(x) })
   const viewOnly = (f: FileFacts) => ![...f.fetches, ...(f as FileFacts & { quiet?: Set<string> }).quiet ?? []].some(x => !x.startsWith('GET ')) && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
 
+  // A new way to delete your own account: a DELETE on /me, /account, /profile (not /users/[id], not admin), or new server code
+  // named for it (deleteAccount, /account/delete)
+  // (/api/user, and server code named for it, only when it deletes from the users table: removeAccount may unlink a Google login,
+  // deleteProfile one of several profiles)
+  const selfDelete = (url: string, a: FileFacts | undefined, b: FileFacts) => { const nm = named(url).join(' '), newDelete = b.fns.has('DELETE') && !a?.fns.has('DELETE')
+    const deletesUser = b.ops.has('delete') && [...b.written].some(t => /^users?$/i.test(t))
+    // (the address is only that: /api/me, /api/users/me, /settings/account; not /teams/[id]/members/me (leaving a team) or
+    // /api/stripe/account (disconnecting a service). A handler plain can read must delete something: clearing a photo isn't it)
+    const segs = url.split('/').filter(Boolean), own = !url.includes('[') && segs.slice(0, -1).every(s => /^(?:api|v\d+|users?|auth|settings|me)$/.test(s))
+    return !/admin/i.test(url) && !/\]$/.test(url) && (own && /(?:^|\s)(?:me|account|my account|profile|my profile|self|current user)$/.test(nm) && newDelete
+      && (b.ops.has('delete') && [...b.written].some(t => /^(?:users?|accounts?|profiles?)$/i.test(t)) || !b.ops.size && !b.written.size && !b.outside.size && !/cookie|session\.(?:destroy|delete|flush|invalidate|revoke|clear)|(?:invalidate|revoke|delete|destroy|end)_?Sessions?\b|\.del\s*\(|logout|log_out|sign_?out|signOut|storage|\.(?:remove|delete|destroy)\s*\(/i.test(b.fns.get('DELETE') ?? ''))
+      || /(?:^|\s)user$/.test(nm) && newDelete && deletesUser
+      || !a && deletesUser && /(?:^|\s)(?:delete|remove|destroy) (?:my )?(?:account|profile|me|self)$|(?:^|\s)(?:account|profile|me) (?:delete|remove|destroy)$/.test(nm)) }
   const changes: Change[] = [], problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []
   const limiterSomewhere = [...after].some(([p, x]) => /\.(?:[cm]?[jt]sx?|py|rb|php|go|cs|java|kt)$|(?:^|\/)(?:Gemfile|package\.json|requirements\.txt|pyproject\.toml|composer\.json|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/.test(p)
     && /express-rate-limit|\brateLimit\s*\(|@upstash\/ratelimit|\bslowapi\b|\bLimiter\s*\(|@ratelimit|django-ratelimit|\bRateLimiter\b|rack-attack|Rack::Attack|\brate_limit\s+to:|AddRateLimiter|EnableRateLimiting|RequireRateLimiting|['"]throttle:|throttleApi|throttle_classes|RateThrottle\b|@Throttle|httprate|ulule\/limiter|golang\.org\/x\/time\/rate|middleware\/limiter|tollbooth|bucket4j|resilience4j|rate-limiter-flexible|RateLimiter(?:Memory|Redis|Postgres|Mongo)|\brate-?limit\b|@nestjs\/throttler|Throttler(?:Module|Guard)|@arcjet\/|checkRateLimit/i.test(x))
@@ -2389,6 +2402,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         if (!a.money && b.money) clauses.push('charges customers 💰')
         // only when there are more ways to say no than before: a reworded message isn't a new rule
         for (const m of newOnly(a.refuses, b.refuses).slice(0, Math.min(3, b.refuses.size - a.refuses.size))) clauses.push(`refuses with "${m}"`)
+        // a DELETE where there was none (its handler may be elsewhere, a controller plain doesn't follow)
+        if (b.fns.has('DELETE') && !a.fns.has('DELETE') && !clauses.some(c => /\bdeletes\b/.test(c)) && (selfDelete(r.url, a, b) || b.ops.has('delete'))) clauses.push(selfDelete(r.url, a, b) ? "lets people delete their own account" : `deletes ${noun}`)
       }
       for (const o of newOnly(a?.outside, b.outside).filter(o => !o.startsWith('Stripe: checkout.sessions'))) clauses.push(outsidePhrase(o))
     }
@@ -2406,6 +2421,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     // fetched without logging in (client-side navigation and __data.json skip the layout's load)
     if (r.kind === 'page' && (b as FileFacts & { dataOpen?: boolean }).dataOpen && !(a as FileFacts & { dataOpen?: boolean } | undefined)?.dataOpen)
       problems.push({ kind: 'Unsafe', text: `${cap(name)}'s data can be read without logging in. Its layout asks for login, but the page loads its own data without waiting for that check. Check locals.user in the page's load (or call \`await parent()\` first), or check in hooks.server.ts.` })
+    // (not when it already asks for the password: Laravel Breeze's `current_password` rule, a password compare)
+    if (r.kind === 'endpoint' && selfDelete(r.url, a, b) && !/current_password|password_verify|check_password|checkPassword|verifyPassword|comparePassword|(?:bcrypt|argon2?)\.(?:compare|verify)|Hash::check/.test([...b.fns.values(), b.printed].join('\n')))
+      problems.push({ kind: 'Check', text: `People can now delete their own account (${name}). That can't be undone, so make sure the app asks them to confirm first (like typing their password), and that the rest of their data is deleted or kept the way you want.` })
     // New, lost its login check, or started changing data without one
     const changesData = (f?: FileFacts) => !!f && (f.written.size > 0 || METHODS.slice(1).some(m => f.fns.has(m)))
     // an admin check dropped, login kept: anyone with an account gets in now
@@ -2496,6 +2514,25 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   for (const m of A.models.keys()) if (!B.models.has(m) && !(renamedTo.has(m) && B.models.has(renamedTo.get(m)!)) && !A.goGorm?.has(m)) {
     changes.push({ group: 'Database', text: `Your database will no longer store ${things(m)}.` })
     ship.push(`Back up your data first: all ${things(m)} will be deleted for good.`)
+  }
+  // Bank account, card and ID numbers saved as they are: anyone who gets a copy of the database (a leaked backup or password) can
+  // read them. Not when a line anywhere names the field and encryption (Rails `encrypts :account_number`, a Laravel 'encrypted' cast,
+  // EncryptedCharField, prisma-field-encryption's `/// @encrypted`). Routing and SWIFT codes are public: they name the bank.
+  const squash = (x: string) => x.toLowerCase().replace(/[_-]/g, '')
+  // (an account number only on a bank model, or next to a routing, IBAN, SWIFT or payout field: a CRM's `Customer.accountNumber` is
+  // a reference. A card number only on a payment card, or next to a CVV or expiry: not a loyalty card or a flashcard)
+  const secretNumber = (m: string, x: string, fs: string[]) => { const f = squash(x), mm = squash(m), near = fs.map(squash).join(' ')
+    const bankish = /bank|payout|beneficiar/.test(mm) || /routing|iban|swift|sortcode|beneficiar|bankname/.test(near)
+    const cardish = !/gift|loyalty|membership|reward|library|student/.test(mm) && (/^(?:credit|debit|payment)?cards?$|payment|billing|credit|debit/.test(mm) || /cv[cv]|expir|cardholder/.test(near))
+    return /^(?:bank)?(?:account|acct)(?:number|num|no)$/.test(f) && bankish || /^(?:credit)?card(?:number|num|no)$/.test(f) && cardish
+      || /^iban$|^cv[cv]\d?$|^ssn$|^socialsecurity(?:number|num|no)?$|^passport(?:number|num|no)$/.test(f)
+      || f === 'number' && (/^bankaccounts?$/.test(mm) || /^(?:credit|debit|payment)?cards?$/.test(mm) && /cv[cv]|expir|cardholder/.test(near)) }
+  const encrypted = (x: string) => [...after].some(([, t]) => t.split('\n').some(l => /encrypt|cipher/i.test(l) && squash(l).includes(squash(x))))
+  for (const [m, fields] of B.models) {
+    // (a field renamed from one that held the same number, acctNo -> accountNumber, isn't new)
+    const had = (A.models.get(m) ?? []).some(x => !fields.includes(x) && /acct|accountn|iban|cardn|ssn|socialsec|passport/.test(squash(x)))
+    const fs = had ? [] : fields.filter(x => !x.startsWith('→') && !A.models.get(m)?.includes(x) && secretNumber(m, x, fields) && !encrypted(x))
+    if (fs.length) problems.push({ kind: 'Check', text: `${cap(things(m))} now store the ${list(fs.map(x => ({ iban: "IBAN", ssn: "Social Security number" } as Record<string, string>)[squash(x)] ?? (fieldName(x) || words(x))))} as plain text. Anyone who gets a copy of your database (a leaked backup or password) can read ${fs.length > 1 ? 'them' : 'it'}. Encrypt ${fs.length > 1 ? "them" : "it"}${fs.some(x => /account|acct|iban|card|cv[cv]|^number$/i.test(squash(x))) ? `, or let your payment provider keep ${fs.length > 1 ? "them" : "it"}` : ""}.` })
   }
   const newMigrations = B.migrations.filter(m => !A.migrations.includes(m))
   if (changed.some(p => p.endsWith('schema.prisma')) && !newMigrations.length)
@@ -2803,6 +2840,46 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const first = (after.get(m) ?? '').replace(/^\uFEFF/, '').split('\n').map(l => l.trim()).find(Boolean)
     if (first && CLI_OUTPUT.test(first)) problems.push({ kind: 'Broken', text: `${m} starts with "${first.slice(0, 60)}", which is terminal output, not SQL, so applying it will fail. Remove the lines that aren't SQL.` })
   }
+  // An upload list that now takes SVG: an SVG can carry a script that runs when someone opens it from your site (stored XSS).
+  // A list is a line (a [...] list joined into one) naming svg next to png/jpg/gif/webp, about uploads: Laravel `mimes:`, an `accept`,
+  // an allowed or valid list, or in an upload/validation file. Not bundler rules (`test: /\.(png|svg)$/`), globs (`*.svg`) or imports.
+  // Counted over the changed files together, so a list moved from one file to another isn't new.
+  // ponytail: a list spread over lines without brackets (a PHP `array(` or a Python tuple over lines) is missed
+  // (svg as an item in code, lower case: 'svg', ".svg", image/svg+xml, mimes:png,svg; not help text like "SVG, PNG or JPG", output
+  // or export formats (a QR code's ["png", "svg"]), or a content-type map. Not docs, translations or data files.)
+  const svgLists = (p: string, t = '') => TESTS.test(p) || /\.(?:md|mdx|txt|json|po|ya?ml|lock)$|(^|\/)(?:locales?|i18n|lang)\//i.test(p) ? 0 : t.replace(/\[[^[\]]*\]/g, x => x.replace(/\s+/g, ' ')).split('\n')
+    .filter(l => /['"`,|:]\s*(?:\.|image\/)?svg(?:\+xml)?\s*(?=['"`,|\]])/.test(l) && /\b(?:png|jpe?g|gif|webp)\b/i.test(l)
+    && (/mimes?\b|mime_?types?|\baccept|\ballow|\bpermit|whitelist|\bvalid|upload/i.test(l) || /upload|valid/i.test(p) && !/\.(?:[jt]sx|vue|svelte)$|(^|\/)(?:scripts|tools|bin)\//.test(p))
+    && !/\\\.|\*\.svg|\btest\s*:|loader|^\s*import\b|\bfrom\s+['"]|require\(|formats?\b|\boutput|export_?(?:as|to|formats?)|\bsvg(?:\+xml)?['"]?\s*:|sharp\(|\.png\(|\.toFormat\(/i.test(l)).length
+  // A server template whose link now goes straight to an address someone saved: `href="{{ $link->link }}"` (Blade), `<%= user.website %>` or
+  // `link_to ..., user.website` (ERB), `href="{{ site.url }}"` (Django, Jinja). A saved "javascript:..." runs in whoever clicks it. Only
+  // fields named for an address, on an object (not a bare variable or a route helper), new in that file; not a Django URLField (it only
+  // takes http, https and ftp).
+  // ponytail: JSX, Vue and Svelte are left out: their links mostly come from fixed menu lists in the same file
+  // (nor a field some line limits to web addresses: `format: URI::DEFAULT_PARSER.make_regexp(%w[http https])`, `starts_with:http`)
+  const SCHEME_CHECK = /\bvalidates?\b[^\n]*\burl\s*:|(?:validat|format\s*:|\brules?\b|regexp?|starts_with|schemes?|protocols?)[^\n]*\bhttps?\b|\bhttps?\b[^\n]*(?:schemes?|protocols?)|make_regexp|URI::regexp|URI\.regexp/i
+  const URL_FIELD = /^(?:link|url|website|web_?site|homepage|home_?page|site_?url|web_?url|profile_?url|external_?url|social_?url|link_?url|target_?url)$/i
+  // (a `.url` on an upload or a page, `d.file.url`, `post.url`, is made by the app; Jekyll's `| relative_url` too. Angular templates
+  // (.component.html) clean "javascript:" links themselves. The scheme check is looked for in the app's own code, not vendor or CSS.)
+  // (the field's object names a model that stores it: `$link->link` and a links table with a link column, `@user.website` and users)
+  const storedBy = new Map<string, Set<string>>()
+  const keep = (m: string, fs: string[]) => { const k = squash(singular(m)); storedBy.set(k, new Set([...storedBy.get(k) ?? [], ...fs.map(squash)])) }
+  for (const [m, fs] of B.models) keep(m, fs)
+  for (const m of [...B.phpMigrations, ...B.rbMigrations]) for (const x of ((B.files.get(m) as PhpFacts | undefined)?.php ?? (B.files.get(m) as RbFacts | undefined)?.rb)?.schema ?? []) keep(x.table, x.add)
+  const stored = (obj: string, x: string) => !!storedBy.get(squash(singular(obj.replace(/^[@$]/, ''))))?.has(squash(x))
+  const ownCode = [...after].filter(([q]) => CODE.test(q) && !/(^|\/)(?:vendor|node_modules|public|assets|dist|build|static)\//.test(q))
+  // (a loop's item is read as one of its list: `{% for b in bookmarks %}`, `@foreach ($links as $link)`, `@links.each do |link|`)
+  const loops = (t: string) => new Map([...t.matchAll(/\{%-?\s*for\s+(\w+)\s+in\s+(?:\w+\.)*?(\w+)(?:\.all)?\s*(?:-?%\}|\|)|@foreach\s*\(\s*\$[\w>-]*?(\w+)\s+as\s+(?:\$\w+\s*=>\s*)?\$(\w+)|@?[\w.]*?(\w+)\.each\s+do\s*\|(\w+)\|/g)].map(m => m[1] ? [m[1], m[2]] : m[3] ? [m[4], m[3]] : [m[6], m[5]]))
+  const savedHrefs = (p: string, t = '') => /\.(?:blade\.php|erb|html|jinja2?|j2|twig)$/.test(p) && !/\.component\.html$/.test(p) ? [...t.matchAll(/href\s*=\s*["']\s*(?:\{[{!]!?\s*(\$\w+(?:->\w+)+)\s*!?[!}]\}|<%=\s*(@?\w+(?:\.\w+)+)\s*-?%>|\{\{\s*(\w+(?:\.\w+)+)\s*(\|[^}]*)?\}\})\s*["']|\blink_to\b[^\n,]*,\s*(@?\w+(?:\.\w+)+)\s*(?=[,)\n]|-?%>|$)/gm)]
+    .filter(m => !/relative_url|absolute_url/.test(m[4] ?? '')).map(m => (m[1] ?? m[2] ?? m[3] ?? m[5]).split(/->|\./))
+    .filter(s => !(/url/i.test(s.at(-1)!) && /^(?:file|image|img|avatar|photo|picture|pic|attachment|document|doc|media|logo|cover|thumbnail|thumb|icon|banner|video|audio|upload|post|page|article|request|self)$/i.test(s.at(-2)!.replace(/^[@$]/, ''))))
+    // (only a field some model stores: not a menu item's url, a config value (`settings.SITE_URL`) or a Stripe session's url)
+    .filter(s => stored(s.at(-2)!, s.at(-1)!) || s.length === 2 && stored(loops(t).get(s[0].replace(/^[@$]/, '')) ?? '', s[1])).map(s => s.at(-1)!).filter(x => URL_FIELD.test(x) && x !== x.toUpperCase() && !ownCode.some(([, t]) => new RegExp(String.raw`\b${x}\s*=\s*(?:models\.)?URLField\b`).test(t) || t.split('\n').some(l => l.length < 300 && new RegExp(String.raw`\b${x}\b`).test(l) && SCHEME_CHECK.test(l)))) : []
+  const hrefNow = real.filter(p => savedHrefs(p, after.get(p)).length > savedHrefs(p, before.get(p)).length)
+  if (hrefNow.length) problems.push({ kind: 'Check', text: `Links in ${list(hrefNow)} now go straight to an address people saved. If someone saves one that starts with "javascript:", it runs code in the browser of whoever clicks it, admins included. Make sure saved links can only start with http:// or https://.` })
+  const svgNow = real.filter(p => svgLists(p, after.get(p)) > svgLists(p, before.get(p)))
+  if (real.reduce((n, p) => n + svgLists(p, after.get(p)) - svgLists(p, before.get(p)), 0) > 0)
+    problems.push({ kind: 'Unsafe', text: `Uploads now accept SVG files (in ${list(svgNow)}). An SVG can carry a script that runs when someone opens it from your site, so one user could attack others, admins included. Leave SVG out, or serve uploaded files from a separate domain.` })
 
   // (No "doesn't look related to what you asked for" guess: on 70 real commits it was wrong 42 times in 45, mostly on the
   // file that was the fix. See docs/production-eval.md.)
@@ -2828,8 +2905,55 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     return new Set([...[...code.matchAll(/(?:===?|\bcase|\bwhen|Equals\()\s*['"`]([a-z_.]+)['"`]|['"`]([a-z_.]+)['"`]\s*(?:===?|=>|:)/g)].map(m => m[1] ?? m[2]),
       ...[...code.matchAll(/\bEventTypes\.(\w+)/g)].map(m => PASCAL.get(m[1].toLowerCase()) ?? '')].filter(e => STRIPE_EVENTS.has(e)))
   }
-  const verifies = (t = '') => /constructEvent|construct_event|ConstructEvent|parseEventNotification|parse_event_notification/.test(t)
+  const VERIFIES = /constructEvent|construct_event|ConstructEvent|parseEventNotification|parse_event_notification/
+  const verifies = (t = '') => VERIFIES.test(t)
   const hookFiles = (X: Snap) => [...X].filter(([p, t]) => CODE.test(p) && verifies(t) && !/(^|\/)(tests?|__tests__|spec|scripts|e2e|cypress)\/|\.(test|spec)\.\w+$|Tests?\.\w+$|(^|\/)test_\w+\.py$|_test\.py$/i.test(p))
+  // A webhook that catches a failed database write and carries on: it still answers 200, so Stripe counts it delivered and never
+  // retries, and the customer paid for nothing. A catch counts when its try writes (update, create, upsert, save, delete, a commit)
+  // and it neither throws nor answers with an error status (a 4xx/5xx, next(err)). Python: pySwallows.
+  const swallows = (p: string, t: string) => {
+    if (/\.py$/.test(p)) return pySwallows(t, VERIFIES)
+    if (!/\.[cm]?[jt]sx?$/.test(p)) return 0
+    const sf = ts.createSourceFile(p, t, ts.ScriptTarget.Latest, true, /x$/.test(p) ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+    // (only in the function that checks the signature, the innermost one)
+    const fns: ts.Node[] = [], find = (x: ts.Node) => { if (ts.isFunctionLike(x) && VERIFIES.test(x.getText(sf))) fns.push(x); ts.forEachChild(x, find) }
+    find(sf)
+    let n = 0
+    // (a catch that answers on purpose, `return new Response("already processed")` for an event seen before, is a decision: only one
+    // that logs and carries on counts)
+    const exits = (x: ts.Node): boolean => ts.isThrowStatement(x) || ts.isReturnStatement(x) || !ts.isFunctionLike(x) && ts.forEachChild(x, exits) === true
+    // (nor one that sets a flag the code checks later, `failed = true`, or a best-effort write inside a try whose own catch answers)
+    // (a flag: a name the catch assigns, `failed = true`, that the function reads again after the try)
+    let fn: ts.Node = sf
+    // (any assignment, `+=`, `||=`, `++`, a destructuring, or `errors.push(e)`. The name is the whole dotted chain, `ctx.failed`,
+    // `this.failed`: a bare `res` or `s` is read after any try, so `res.set(...)` or `s.failed = true` alone isn't a flag)
+    const root = (e: ts.Node): string[] => { while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e) || ts.isTypeAssertionExpression(e)) e = e.expression
+      if (ts.isIdentifier(e)) return [e.text]
+      if (ts.isPropertyAccessExpression(e)) { const r = e.expression.kind === ts.SyntaxKind.ThisKeyword ? ['this'] : root(e.expression); return r.length === 1 ? [`${r[0]}.${e.name.text}`] : [] }
+      if (ts.isElementAccessExpression(e)) return root(e.expression)
+      if (ts.isArrayLiteralExpression(e) || ts.isObjectLiteralExpression(e)) { const out: string[] = []; const f = (y: ts.Node) => { if (ts.isIdentifier(y)) out.push(y.text); else ts.forEachChild(y, f) }; f(e); return out }
+      return [] }
+    const flag = (c: ts.CatchClause) => { const names: string[] = [], find = (y: ts.Node) => {
+        if (ts.isBinaryExpression(y) && y.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && y.operatorToken.kind <= ts.SyntaxKind.LastAssignment) names.push(...root(y.left))
+        if ((ts.isPrefixUnaryExpression(y) || ts.isPostfixUnaryExpression(y)) && (y.operator === ts.SyntaxKind.PlusPlusToken || y.operator === ts.SyntaxKind.MinusMinusToken)) names.push(...root(y.operand))
+        if (ts.isCallExpression(y) && ts.isPropertyAccessExpression(y.expression) && /^(?:push|add|set|unshift)$/.test(y.expression.name.text)) names.push(...root(y.expression.expression))
+        if (!ts.isFunctionLike(y)) ts.forEachChild(y, find) }
+      find(c.block); const after = sf.text.slice(c.parent.end, fn.end)
+      return names.some(n => /^[\w$]+(?:\.[\w$]+)*$/.test(n) && !/^(?:req|res|request|response|reply|event|evt|err|error)$/.test(n.split('.')[0]) && new RegExp(String.raw`(?<![\w$.])${n.replace(/[.$]/g, '\\$&')}(?![\w$])`).test(after)) }
+    const handled = (c: ts.CatchClause) => exits(c.block) || FAILS.test(c.block.getText(sf)) || flag(c)
+    // (the try's own writes: an inner try that answers for its write already handles it)
+    const own = (b: ts.Block) => { let t = b.getText(sf); const inner: ts.TryStatement[] = [], find = (y: ts.Node) => { if (ts.isTryStatement(y) && y.catchClause && handled(y.catchClause)) inner.push(y); else if (!ts.isFunctionLike(y)) ts.forEachChild(y, find) }
+      ts.forEachChild(b, find); for (const i of inner.reverse()) t = t.slice(0, i.getStart(sf) - b.getStart(sf)) + t.slice(i.end - b.getStart(sf)); return t }
+    const visit = (x: ts.Node, inside = false) => {
+      if (ts.isTryStatement(x) && x.catchClause && !inside && dbWrite(own(x.tryBlock)) && !handled(x.catchClause)) n++
+      if (ts.isTryStatement(x) && x.catchClause && handled(x.catchClause)) { ts.forEachChild(x.tryBlock, y => visit(y, true)); ts.forEachChild(x.catchClause, y => visit(y, inside)); return }
+      ts.forEachChild(x, y => visit(y, inside))
+    }
+    for (const f of fns) if (!fns.some(g => g !== f && g.pos >= f.pos && g.end <= f.end)) { fn = f; visit(f) }
+    return n
+  }
+  const swallowed = hookFiles(after).filter(([p, t]) => swallows(p, t) > swallows(p, before.get(p) ?? '')).map(([p]) => p)
+  if (swallowed.length) problems.push({ kind: 'Unsafe', text: `If saving to your database fails in your Stripe webhook (${list(swallowed)}), the error is caught and Stripe is still told it worked, so it won't try again. A customer can pay and never get what they paid for. Answer with an error (status 500) so Stripe retries.` })
   const hadEvents = new Set(hookFiles(before).flatMap(([, t]) => [...handled(t)]))
   const newEvents = [...new Set(hookFiles(after).flatMap(([, t]) => [...handled(t)]))].filter(e => !hadEvents.has(e))
   if (newEvents.length) ship.push(hookFiles(before).length

@@ -7308,3 +7308,281 @@ console.log('ok (trees freed)')
     assert.ok(!mig(sql).includes('not SQL'), `control: ${JSON.stringify(sql.slice(0, 20))}`)
 }
 console.log('ok (production pilot fixes)')
+// The pilot's misses: bank and ID numbers kept as plain text, uploads that take SVG, a Stripe webhook that swallows a failed save,
+// a new way to delete your own account
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  // plain-text numbers: a new model, or a new field; not public bank codes, a last-4, an encrypted field
+  const pm = { 'package.json': '{"dependencies":{"@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Company {\n  id String @id\n}\n' }
+  const bank = (fields: string, extra: Record<string, string> = {}) => c(pm, { ...pm, ...extra, 'prisma/schema.prisma': `model Company {\n  id String @id\n}\nmodel BankAccount {\n  id String @id\n${fields}\n}\n` })
+  const b1 = bank('  bankName String\n  accountNumber String // iban or account number\n  routingNumber String\n  swiftCode String?')
+  assert.ok(b1.includes('Bank accounts now store the account number as plain text. Anyone who gets a copy of your database (a leaked backup or password) can read it.'), b1)
+  assert.ok(bank('  iban String\n  cardNumber String\n  cardExpiry String').includes('the IBAN and card number as plain text'), 'two')
+  for (const [name, f, x] of [['last 4', '  accountNumberLast4 String', {}], ['encrypted name', '  encryptedAccountNumber String', {}], ['routing only', '  routingNumber String\n  swiftCode String', {}],
+    ['/// @encrypted', '  accountNumber String /// @encrypted', {}], ['an encryption helper', '  accountNumber String', { 'lib/bank.ts': 'export const save = (n: string) => ({ accountNumber: encrypt(n) })\n' }]] as const)
+    assert.ok(!bank(f, x).includes('plain text'), `control: ${name}`)
+  const dj = { 'requirements.txt': 'django==5.1\n', 'people/models.py': 'from django.db import models\n\nclass Person(models.Model):\n    name = models.CharField(max_length=80)\n' }
+  assert.ok(c(dj, { ...dj, 'people/models.py': dj['people/models.py'] + '    ssn = models.CharField(max_length=11)\n' }).includes('Persons now store the Social Security number as plain text. Anyone who gets a copy of your database (a leaked backup or password) can read it. Encrypt it.'), 'django ssn')
+  assert.ok(!c(dj, { ...dj, 'people/models.py': dj['people/models.py'] + '    ssn = EncryptedCharField(max_length=11)\n' }).includes('plain text'), 'django encrypted')
+  // SVG uploads
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'app/Http/Controllers/AvatarController.php': "<?php\nclass AvatarController {\n  public function store($r) {\n    $r->validate(['image' => 'required|file|mimes:jpeg,png,webp|max:2048']);\n  }\n}\n" }
+  const svg = c(lv, { ...lv, 'app/Http/Controllers/AvatarController.php': lv['app/Http/Controllers/AvatarController.php'].replace('webp|', 'webp,svg|') })
+  assert.ok(svg.includes('Uploads now accept SVG files (in app/Http/Controllers/AvatarController.php). An SVG can carry a script'), svg)
+  const cfg = { 'config/validation.php': "<?php\nreturn [\n    'image_extensions' => [\n        'jpeg', 'jpg', 'png',\n        'svg',\n    ],\n];\n" }
+  assert.ok(c(lv, { ...lv, ...cfg }).includes('Uploads now accept SVG files (in config/validation.php)'), 'a list over lines, in a validation file')
+  const up = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/upload/page.tsx': 'export default function U() { return <input type="file" accept="image/png, image/jpeg" /> }\n' }
+  assert.ok(c(up, { ...up, 'app/upload/page.tsx': up['app/upload/page.tsx'].replace('image/jpeg', 'image/jpeg, image/svg+xml') }).includes('Uploads now accept SVG'), 'accept')
+  for (const [name, a, b] of [
+    ['bundler rule', { 'webpack.config.js': 'module.exports = { module: { rules: [] } }\n' }, { 'webpack.config.js': 'module.exports = { module: { rules: [{ test: /\\.(png|jpe?g|gif|svg)$/i, type: "asset" }] } }\n' }],
+    ['glob', { 'vite.config.ts': 'export default {}\n' }, { 'vite.config.ts': 'export default { assetsInclude: ["**/*.png", "**/*.svg"] }\n' }],
+    ['already allowed', { 'lib/upload.ts': 'export const allowed = ["png", "jpg", "svg"]\n' }, { 'lib/upload.ts': 'export const allowed = ["png", "jpg", "svg"]\nexport const max = 5\n' }],
+    ['moved', { 'lib/upload.ts': 'export const allowed = ["png", "jpg", "svg"]\n' }, { 'lib/upload.ts': 'export { allowed } from "./types"\n', 'lib/types.ts': 'export const allowed = ["png", "jpg", "svg"]\n' }],
+    ['a test', {}, { 'tests/upload.test.ts': 'const allowed = ["png", "svg"]\n' }],
+    ['no context', { 'lib/icons.ts': 'export const x = 1\n' }, { 'lib/icons.ts': 'export const kinds = ["png", "svg"]\n' }]] as const)
+    assert.ok(!c(a, b).includes('accept SVG'), `control: ${name}`)
+  // a webhook that swallows a failed save
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","stripe":"17.0.0","@prisma/client":"6.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n' }
+  const hook = (catchBody: string, tryBody = 'await prisma.user.update({ where: { id: s.metadata.userId }, data: { pro: true } })') => ({ ...nx,
+    'app/api/webhooks/stripe/route.ts': `import Stripe from "stripe"\nimport { prisma } from "@/lib/db"\nconst stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)\nexport async function POST(req: Request) {\n  const event = stripe.webhooks.constructEvent(await req.text(), req.headers.get("stripe-signature")!, process.env.STRIPE_WEBHOOK_SECRET!)\n  if (event.type === "checkout.session.completed") {\n    const s = event.data.object as any\n    try {\n      ${tryBody}\n    } catch (error) {\n      ${catchBody}\n    }\n  }\n  return new Response(null, { status: 200 })\n}\n` })
+  const before = hook('throw error')
+  assert.ok(c(before, hook('console.error(error)')).includes('If saving to your database fails in your Stripe webhook (app/api/webhooks/stripe/route.ts), the error is caught and Stripe is still told it worked'), 'swallowed')
+  assert.ok(c(before, hook('')).includes('Stripe is still told it worked'), 'an empty catch')
+  // (a catch that answers on purpose is a decision: an event already handled)
+  assert.ok(!c(before, hook('return new Response("already processed")', 'await prisma.processedEvent.create({ data: { id: event.id } })')).includes('Stripe is still told it worked'), 'answers on purpose')
+  for (const [name, x] of [['throws', hook('console.error(error)\n      throw error')], ['500', hook('return new Response("failed", { status: 500 })')], ['only Stripe', hook('console.error(error)', 'await stripe.customers.update(s.customer, { metadata: {} })')]] as const)
+    assert.ok(!c(before, x).includes('Stripe is still told it worked'), `control: ${name}`)
+  assert.ok(!c(hook('console.error(error)'), { ...hook('console.error(error)'), 'lib/x.ts': 'export const y = 1\n' }).includes('Stripe is still told it worked'), 'not new')
+  const fa = { 'requirements.txt': 'fastapi==0.115.5\nstripe==10.0.0\nsqlalchemy==2.0.36\n' }
+  const pyHook = (exc: string) => ({ ...fa, 'app/webhooks.py': `import stripe\nfrom fastapi import APIRouter, Request, HTTPException\nrouter = APIRouter()\n\n@router.post("/webhooks/stripe")\nasync def stripe_hook(request: Request, db=None):\n    event = stripe.Webhook.construct_event(await request.body(), request.headers["stripe-signature"], "whsec")\n    try:\n        db.add(event)\n        db.commit()\n    except Exception as e:\n${exc}\n    return {"ok": True}\n` })
+  assert.ok(c(pyHook('        raise'), pyHook('        print(e)')).includes('Stripe is still told it worked'), 'python swallowed')
+  assert.ok(!c(pyHook('        print(e)\n        raise HTTPException(status_code=500)'), pyHook('        print(e)\n        raise HTTPException(status_code=500)')).includes('Stripe is still told it worked') &&
+    !c(pyHook('        print(e)'), pyHook('        print(e)\n        raise HTTPException(status_code=500)')).includes('Stripe is still told it worked'), 'python raises')
+  // deleting your own account
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0"}}', 'auth.js': 'exports.isAuthenticated = (req, res, next) => { if (!req.user) return res.status(401).end(); next() }\n',
+    'controllers/user.js': 'exports.getAccount = (req, res) => res.json(req.user)\nexports.deleteProfile = async (req, res) => { await req.user.remove(); res.json({}) }\n' }
+  const srv = (chain: string, path = '/me') => ({ ...ex, 'server.js': `const express = require("express")\nconst { isAuthenticated } = require("./auth")\nconst { getAccount, deleteProfile } = require("./controllers/user")\nconst app = express()\nconst router = express.Router()\nrouter.route("${path}")${chain}\napp.use("/api/v1", router)\napp.listen(3000)\n` })
+  const del = c(srv('.get(isAuthenticated, getAccount)'), srv('.get(isAuthenticated, getAccount).delete(isAuthenticated, deleteProfile)'))
+  assert.ok(del.includes('lets people delete their own account') && del.includes('People can now delete their own account (the v1 me part of your server). That can\'t be undone'), del)
+  const ids = c(srv('.get(isAuthenticated, getAccount)', '/users/:id'), srv('.get(isAuthenticated, getAccount).delete(isAuthenticated, deleteProfile)', '/users/:id'))
+  assert.ok(!ids.includes('delete their own account') && !ids.includes('deletes data'), ids)
+  const act = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/settings/page.tsx': 'export default function S() { return <main /> }\n' }
+  assert.ok(c(act, { ...act, 'app/settings/actions.ts': '"use server"\nimport { auth } from "@/auth"\nexport async function deleteAccount() {\n  const s = await auth()\n  if (!s) throw new Error("no")\n  await db.user.delete({ where: { id: s.user.id } })\n}\n' }).includes('People can now delete their own account'), 'server action')
+}
+console.log('ok (pilot misses)')
+// a server template's link now goes straight to a saved address (a "javascript:" link runs in whoever clicks it)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const MSG = 'now go straight to an address people saved. If someone saves one that starts with "javascript:"'
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'resources/views/buttons.blade.php': `<a href="{{ route('go') . '/' . $link->id }}">{{ $link->title }}</a>\n`,
+    'database/migrations/2024_01_01_000000_create_links_table.php': "<?php\nreturn new class extends Migration {\n  public function up() {\n    Schema::create('links', function (Blueprint $table) {\n      $table->id();\n      $table->string('link');\n      $table->string('title');\n    });\n  }\n};\n" }
+  const lb = c(lv, { ...lv, 'resources/views/buttons.blade.php': '<a id="{{ $link->id }}" href="{{ $link->link }}">{{ $link->title }}</a>\n' })
+  assert.ok(lb.includes(`Links in resources/views/buttons.blade.php ${MSG}`), lb)
+  const rb = { 'Gemfile': 'gem "rails", "~> 8.0"\n', 'app/views/users/show.html.erb': '<h1><%= @user.name %></h1>\n', 'app/models/user.rb': 'class User < ApplicationRecord\nend\n',
+    'db/migrate/20240101000000_create_users.rb': 'class CreateUsers < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users do |t|\n      t.string :name\n      t.string :website\n    end\n  end\nend\n' }
+  const site = { ...rb, 'app/views/users/show.html.erb': rb['app/views/users/show.html.erb'] + '<%= link_to "Website", @user.website, target: "_blank" %>\n' }
+  assert.ok(c(rb, site).includes(MSG), 'erb link_to')
+  assert.ok(!c(rb, { ...site, 'app/models/user.rb': 'class User < ApplicationRecord\n  validates :website, format: { with: URI::DEFAULT_PARSER.make_regexp(%w[http https]) }\nend\n' }).includes(MSG), 'rails: scheme validated')
+  const dj = { 'requirements.txt': 'django==5.1\n', 'people/models.py': 'from django.db import models\n\nclass Profile(models.Model):\n    website = models.CharField(max_length=200)\n', 'people/templates/profile.html': '<p>{{ profile.name }}</p>\n' }
+  const dsite = { ...dj, 'people/templates/profile.html': '<p>{{ profile.name }}</p>\n<a href="{{ profile.website }}">site</a>\n' }
+  assert.ok(c(dj, dsite).includes(MSG), 'django')
+  assert.ok(!c({ ...dj, 'people/models.py': dj['people/models.py'].replace('CharField', 'URLField') }, { ...dsite, 'people/models.py': dj['people/models.py'].replace('CharField', 'URLField') }).includes(MSG), 'django URLField')
+  for (const [name, x] of [['an id', '<a href="{{ $link->id }}">x</a>\n'], ['a bare variable', '<a href="{{ $url }}">x</a>\n'], ['a route helper', `<a href="{{ route('profile', $user->website) }}">x</a>\n`]] as const)
+    assert.ok(!c(lv, { ...lv, 'resources/views/buttons.blade.php': x }).includes(MSG), `control: ${name}`)
+  assert.ok(!c(lb.length ? { ...lv, 'resources/views/buttons.blade.php': '<a href="{{ $link->link }}">x</a>\n' } : lv, { ...lv, 'resources/views/buttons.blade.php': '<a class="b" href="{{ $link->link }}">x</a>\n' }).includes(MSG), 'control: already there')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/page.tsx': 'export default function P() { return <main /> }\n' }
+  assert.ok(!c(nx, { ...nx, 'app/page.tsx': 'export default function P({ user }: any) { return <a href={user.website}>x</a> }\n' }).includes(MSG), 'control: jsx')
+}
+console.log('ok (saved links)')
+// the webhook check reads only the function that checks Stripe's signature, not a checkout view in the same file (bakery demo)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const dj = { 'requirements.txt': 'django==5.1\nstripe==10.0.0\n', 'shop/views.py': 'import stripe\n\ndef stripe_webhook(request):\n    try:\n        event = stripe.Webhook.construct_event(request.body, "", "")\n    except ValueError:\n        return HttpResponseBadRequest("bad")\n    Order.objects.filter(pk=1).update(status="paid")\n    return HttpResponse(status=200)\n' }
+  const view = '\n\ndef checkout(request):\n    try:\n        order.save()\n    except ValueError:\n        form.add_error(None, "Try again")\n    return render(request, "x.html")\n'
+  assert.ok(!c(dj, { ...dj, 'shop/views.py': dj['shop/views.py'] + view }).includes('Stripe is still told it worked'), 'a checkout view next to the webhook')
+}
+console.log('ok (webhook function only)')
+// Review 63: false alarms in the new checks
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}', 'app/page.tsx': 'export default function P() { return <main /> }\n', 'lib/db.ts': 'export const prisma = {} as any\n' }
+  const add = (files: Record<string, string>) => c(nx, { ...nx, ...files })
+  // SVG: output formats, help text, translations, a content-type map
+  for (const [name, f] of [['QR format', { 'app/api/qr/route.ts': 'export async function GET(req: Request) {\n  const format = new URL(req.url).searchParams.get("format") ?? "png"\n  if (!["png", "svg"].includes(format)) return new Response("Invalid format", { status: 400 })\n  return new Response(format)\n}\n' }],
+    ['ALLOWED_FORMATS', { 'lib/qr.ts': 'export const ALLOWED_FORMATS = ["png", "svg", "jpeg"] as const\n' }],
+    ['hint text', { 'components/FileUpload.tsx': 'export function F() { return <label><p>SVG, PNG, JPG or GIF (MAX. 800x400px)</p><input type="file" accept="image/png, image/jpeg" /></label> }\n' }],
+    ['i18n', { 'messages/en.json': '{\n  "uploadHint": "PNG, JPG or SVG, up to 2MB"\n}\n' }],
+    ['mime map', { 'server/static.js': 'const mimeTypes = { png: "image/png", jpg: "image/jpeg", svg: "image/svg+xml" }\nmodule.exports = (ext) => mimeTypes[ext]\n' }]] as const)
+    assert.ok(!add(f).includes('accept SVG'), `svg control: ${name}`)
+  assert.ok(c({ 'requirements.txt': 'flask\n', 'app.py': 'ALLOWED_EXTENSIONS = {"png", "jpg"}\n' }, { 'requirements.txt': 'flask\n', 'app.py': 'ALLOWED_EXTENSIONS = {"png", "jpg", "svg"}\n' }).includes('Uploads now accept SVG'), 'flask set')
+  // saved links: a .url the app makes (an upload, a page), Angular, Jekyll, a bare URLField; ERB `%>` right after the field
+  const LINK = 'now go straight to an address people saved'
+  const dj = { 'requirements.txt': 'django==5.1\n', 'docs/models.py': 'from django.db import models\n\nclass Document(models.Model):\n    file = models.FileField(upload_to="docs/")\n', 'docs/templates/list.html': '<p>x</p>\n' }
+  assert.ok(!c(dj, { ...dj, 'docs/templates/list.html': '{% for d in docs %}<a href="{{ d.file.url }}">x</a>{% endfor %}\n' }).includes(LINK), 'file url')
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'resources/views/posts.blade.php': '<h2>x</h2>\n',
+    'database/migrations/2024_01_01_000000_create_links_table.php': "<?php\nreturn new class extends Migration {\n  public function up() {\n    Schema::create('links', function (Blueprint $table) {\n      $table->id();\n      $table->string('link');\n      $table->string('url');\n    });\n  }\n};\n" }
+  assert.ok(!c(lv, { ...lv, 'resources/views/posts.blade.php': '<a href="{{ $post->url }}">x</a>\n' }).includes(LINK), 'post url')
+  assert.ok(!c({ 'package.json': '{"dependencies":{"@angular/core":"18.0.0"}}' }, { 'package.json': '{"dependencies":{"@angular/core":"18.0.0"}}', 'src/app/p/p.component.html': '<a href="{{ user.website }}">site</a>\n' }).includes(LINK), 'angular')
+  assert.ok(!c({ '_config.yml': 'title: b\n' }, { '_config.yml': 'title: b\n', '_layouts/home.html': '<a href="{{ post.url | relative_url }}">x</a>\n' }).includes(LINK), 'jekyll')
+  const dw = { 'requirements.txt': 'django==5.1\n', 'people/models.py': 'from django.db import models\nfrom django.db.models import URLField\n\nclass Profile(models.Model):\n    website = URLField(blank=True)\n' }
+  assert.ok(!c(dw, { ...dw, 'people/templates/p.html': '<a href="{{ profile.website }}">site</a>\n' }).includes(LINK), 'bare URLField')
+  const rs = { 'Gemfile': 'gem "rails"\n', 'db/migrate/20240101000000_create_users.rb': 'class CreateUsers < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users do |t|\n      t.string :name\n      t.string :website\n    end\n  end\nend\n' }
+  assert.ok(c(rs, { ...rs, 'app/views/users/show.html.erb': '<%= link_to "Website", @user.website %>\n' }).includes(LINK), 'erb link_to before %>')
+  assert.ok(c(lv, { ...lv, 'resources/views/posts.blade.php': '<a href="{{ $link->link }}">x</a>\n', 'public/css/app.min.css': 'a{} /* link rules: https://x */\n' }).includes(LINK), 'minified CSS mentioning link and https is not a scheme check')
+  // webhook: an error answer it didn't know, calls that aren't the database
+  const HOOK = 'Stripe is still told it worked'
+  const hook = (tryBody: string, cat: string) => ({ ...nx, 'app/api/webhooks/stripe/route.ts': `import Stripe from "stripe"\nimport { prisma } from "@/lib/db"\nconst stripe = new Stripe("sk")\nexport async function POST(req: Request) {\n  const event = stripe.webhooks.constructEvent(await req.text(), "", "")\n  const s = event.data.object as any\n  try {\n    ${tryBody}\n  } catch (e) {\n    ${cat}\n  }\n  return new Response(null)\n}\n` })
+  const save = 'await prisma.user.update({ where: { id: s.id }, data: {} })'
+  for (const [name, t, x] of [['Hono 500', save, 'return c.json({ error: "x" }, 500)'], ['Fastify', save, 'return reply.code(500).send({})'], ['SvelteKit', save, 'error(500, "x")'],
+    ['Twilio', 'await sms.messages.create({ to: "1", body: "Thanks" })', 'console.error(e)'], ['another Stripe client', 'await stripeClient.subscriptions.update(s.subscription, {})', 'console.error(e)']] as const)
+    assert.ok(!c(hook(save, 'throw e'), hook(t, x)).includes(HOOK), `hook control: ${name}`)
+  const fl = (exc: string) => ({ 'requirements.txt': 'flask\nstripe\n', 'app.py': `import stripe\nfrom flask import Flask, request, jsonify\napp = Flask(__name__)\n\n@app.post("/webhook")\ndef hook():\n    event = stripe.Webhook.construct_event(request.data, "", "")\n    try:\n        db.session.commit()\n    except Exception as e:\n${exc}\n    return "", 200\n` })
+  assert.ok(!c(fl('        raise'), fl('        return jsonify(error=str(e)), 500')).includes(HOOK) && c(fl('        raise'), fl('        print(e)')).includes(HOOK), 'flask , 500')
+  const meta = { 'requirements.txt': 'flask\nstripe\n', 'app.py': 'import stripe\n\ndef hook(request):\n    event = stripe.Webhook.construct_event(request.data, "", "")\n    try:\n        meta.update(event["data"])\n    except Exception as e:\n        print(e)\n    return "", 200\n' }
+  assert.ok(!c({ 'requirements.txt': 'flask\nstripe\n' }, meta).includes(HOOK), 'dict update')
+  // plain-text numbers: a reference number, a card that isn't a payment card, a renamed field
+  const SECRET = 'as plain text'
+  for (const [name, m] of [['CRM reference', 'model Customer {\n  id String @id\n  accountNumber String @default(cuid())\n}\n'], ['kanban card', 'model Card {\n  id String @id\n  number Int\n}\n'],
+    ['flashcard', 'model Flashcard {\n  id String @id\n  number Int\n}\n'], ['loyalty card', 'model LoyaltyCard {\n  id String @id\n  cardNumber String\n}\n']] as const)
+    assert.ok(!add({ 'prisma/schema.prisma': m }).includes(SECRET), `secret control: ${name}`)
+  assert.ok(!c({ ...nx, 'prisma/schema.prisma': 'model BankAccount {\n  id String @id\n  acctNo String\n}\n' }, { ...nx, 'prisma/schema.prisma': 'model BankAccount {\n  id String @id\n  accountNumber String\n}\n' }).includes(SECRET), 'renamed')
+  // deleting your own account: /api/user that deletes the user; not one profile of several, an unlinked Google login, a closed bank account
+  const OWN = 'People can now delete their own account'
+  const getUser = 'import { auth } from "@/auth"\nimport { prisma } from "@/lib/db"\nexport async function GET() {\n  const s = await auth()\n  if (!s) return new Response(null, { status: 401 })\n  return Response.json(await prisma.user.findUnique({ where: { id: s.user.id } }))\n}\n'
+  assert.ok(c({ ...nx, 'app/api/user/route.ts': getUser }, { ...nx, 'app/api/user/route.ts': getUser + 'export async function DELETE() {\n  const s = await auth()\n  if (!s) return new Response(null, { status: 401 })\n  await prisma.user.delete({ where: { id: s.user.id } })\n  return new Response(null)\n}\n' }).includes(OWN), '/api/user')
+  const act = (name: string, body: string) => add({ 'app/settings/actions.ts': `"use server"\nimport { auth } from "@/auth"\nimport { prisma } from "@/lib/db"\nexport async function ${name}(id: string) {\n  const s = await auth()\n  if (!s) throw new Error("no")\n  ${body}\n}\n` })
+  for (const [name, b] of [['deleteProfile', 'await prisma.profile.delete({ where: { id, userId: s.user.id } })'], ['removeAccount', 'await prisma.account.deleteMany({ where: { userId: s.user.id, provider: id } })'],
+    ['closeAccount', 'await prisma.bankAccount.update({ where: { id }, data: { closed: true } })']] as const)
+    assert.ok(!act(name, b).includes(OWN), `delete control: ${name}`)
+  const out = c({ ...nx, 'app/api/auth/session/route.ts': 'export async function POST() { return new Response() }\n' }, { ...nx, 'app/api/auth/session/route.ts': 'import { cookies } from "next/headers"\nexport async function POST() { return new Response() }\nexport async function DELETE() { (await cookies()).delete("session"); return new Response() }\n' })
+  assert.ok(!out.includes('deletes data'), out)
+}
+console.log('ok (review 63)')
+// Review 64: more false alarms in the new checks
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0","stripe":"17.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n', 'auth.ts': 'export const auth = async () => null as any\n' }
+  // webhook: a flag checked later, a best-effort log inside a try that answers, the response handed on, a status from the error, many texts
+  const HOOK = 'Stripe is still told it worked'
+  const hook = (body: string) => ({ ...nx, 'app/api/webhook/route.ts': `import Stripe from "stripe"\nimport { prisma } from "@/lib/db"\nconst stripe = new Stripe("sk")\nexport async function POST(req: Request) {\n  const event = stripe.webhooks.constructEvent(await req.text(), "", "")\n${body}\n  return new Response(null)\n}\n` })
+  const base = hook('')
+  for (const [name, b] of [['failed flag', '  let failed = false\n  try {\n    await prisma.order.update({ where: { id: 1 }, data: { paid: true } })\n  } catch (err) {\n    console.error(err)\n    failed = true\n  }\n  if (failed) return new Response("db error", { status: 500 })'],
+    ['best-effort log', '  try {\n    await prisma.order.update({ where: { id: 1 }, data: {} })\n    try {\n      await prisma.webhookLog.create({ data: { type: event.type } })\n    } catch (logErr) {\n      console.warn(logErr)\n    }\n  } catch (e) { return new Response("err", { status: 500 }) }'],
+    ['handleError(res, err)', '  try {\n    await Order.updateOne({ _id: 1 }, { paid: true })\n  } catch (err) {\n    handleError(res, err)\n  }'],
+    ['err.statusCode || 500', '  try {\n    await Order.updateOne({ _id: 1 }, { paid: true })\n  } catch (err) {\n    res.status(err.statusCode || 500).json({})\n  }'],
+    ['texts', '  try {\n    await Promise.all(admins.map(a => twilio.messages.create({ to: a.phone, body: "paid" })))\n  } catch (err) {\n    console.error(err)\n  }']] as const)
+    assert.ok(!c(base, hook(b)).includes(HOOK), `hook control: ${name}`)
+  for (const w of ['await Order.updateOne({ _id: 1 }, { paid: true })', 'await Order.findByIdAndUpdate(id, { paid: true })', 'await Subscription.create({ user: 1 })'])
+    assert.ok(c(base, hook(`  try {\n    ${w}\n  } catch (err) {\n    console.error(err)\n  }`)).includes(HOOK), `mongoose: ${w}`)
+  const dj = (exc: string) => ({ 'requirements.txt': 'django==5.1\nstripe\n', 'shop/views.py': `import stripe\nfrom django.db import IntegrityError\n\ndef stripe_webhook(request):\n    event = stripe.Webhook.construct_event(request.body, "", "")\n    try:\n        ProcessedEvent.objects.create(stripe_id=event["id"])\n${exc}\n    return HttpResponse(status=200)\n` })
+  assert.ok(!c(dj('    except Exception:\n        raise'), dj('    except IntegrityError:\n        logger.info("already processed")')).includes(HOOK), 'IntegrityError')
+  assert.ok(!c(dj('    except Exception:\n        raise'), dj('    except Order.DoesNotExist:\n        logger.warning("no order")')).includes(HOOK), 'DoesNotExist')
+  // deleting your own account: not leaving a team, disconnecting a service, clearing a photo; not when it asks for the password
+  const OWN = 'People can now delete their own account'
+  const del = (path: string, body: string) => c({ ...nx, [path]: 'export async function GET() { return new Response() }\n' }, { ...nx, [path]: `import { auth } from "@/auth"\nimport { prisma } from "@/lib/db"\nexport async function GET() { return new Response() }\nexport async function DELETE() {\n  const s = await auth()\n  if (!s) return new Response(null, { status: 401 })\n  ${body}\n  return new Response(null)\n}\n` })
+  assert.ok(!del('app/api/teams/[teamId]/members/me/route.ts', 'await prisma.membership.delete({ where: { id: 1 } })').includes(OWN), 'leave a team')
+  assert.ok(!del('app/api/stripe/account/route.ts', 'await prisma.user.update({ where: { id: s.user.id }, data: { stripeAccountId: null } })').includes(OWN), 'disconnect Stripe')
+  assert.ok(!del('app/api/profile/route.ts', 'await prisma.user.update({ where: { id: s.user.id }, data: { image: null } })').includes(OWN), 'clear photo')
+  assert.ok(del('app/api/me/route.ts', 'await prisma.user.delete({ where: { id: s.user.id } })').includes(OWN), 'DELETE /api/me')
+  assert.ok(!del('app/api/me/route.ts', 'if (!(await bcrypt.compare(pw, s.user.hash))) return new Response(null, { status: 403 })\n  await prisma.user.delete({ where: { id: s.user.id } })').includes(OWN), 'asks for the password')
+  // saved links: a menu, a setting, a Stripe address, a validated website
+  const LINK = 'now go straight to an address people saved'
+  const fl = { 'requirements.txt': 'flask\n', 'templates/base.html': '<p></p>\n' }
+  for (const [name, h] of [['menu', '{% for item in nav %}<a href="{{ item.url }}">x</a>{% endfor %}'], ['config', '<a href="{{ config.SITE_URL }}">Home</a>'], ['Stripe', '<a href="{{ checkout_session.url }}">Pay</a>']] as const)
+    assert.ok(!c(fl, { ...fl, 'templates/base.html': h + '\n' }).includes(LINK), `link control: ${name}`)
+  const rb = { 'Gemfile': 'gem "rails"\n', 'db/migrate/20240101000000_create_users.rb': 'class CreateUsers < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users do |t|\n      t.string :website\n    end\n  end\nend\n',
+    'app/models/user.rb': 'class User < ApplicationRecord\n  validates :website, url: { allow_blank: true }\nend\n' }
+  assert.ok(!c(rb, { ...rb, 'app/views/users/show.html.erb': '<%= link_to "Website", @user.website %>\n' }).includes(LINK), 'validates url:')
+  // SVG: a preview list, a label map, converting SVG to PNG
+  const SVG = 'Uploads now accept SVG'
+  for (const [name, p, t] of [['preview', 'components/media/FilePreview.tsx', "const IMAGE_EXTS = ['png', 'jpg', 'svg']\nexport function P({ n }: any) { return IMAGE_EXTS.includes(n) ? <img /> : null }\n"],
+    ['label map', 'lib/media.ts', "export const LABELS = { 'image/png': 'PNG', 'image/svg+xml': 'SVG' }\n"], ['sharp', 'lib/upload.ts', "export async function toPng(buf: Buffer, type: string) {\n  if (type === 'image/svg+xml') return sharp(buf).png().toBuffer()\n  return buf\n}\n"]] as const)
+    assert.ok(!c(nx, { ...nx, [p]: t }).includes(SVG), `svg control: ${name}`)
+}
+console.log('ok (review 64)')
+// Review 65: nested tries, flags and expected errors in Python webhooks; a link's object; logout and session deletes
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const HOOK = 'Stripe is still told it worked'
+  const dj = (body: string) => ({ 'requirements.txt': 'django==5.1\nstripe\n', 'shop/views.py': `import stripe, logging\nfrom django.http import HttpResponse\nlogger = logging.getLogger(__name__)\n\ndef stripe_webhook(request):\n    event = stripe.Webhook.construct_event(request.body, "", "")\n    session = event["data"]["object"]\n${body}\n    return HttpResponse(status=200)\n` })
+  const pb = dj('')
+  for (const [name, b] of [['inner best-effort email', '    try:\n        Order.objects.filter(pk=session["id"]).update(paid=True)\n        try:\n            send_mail("Thanks", "Paid", None, [session["email"]])\n        except Exception:\n            logger.warning("mail failed")\n    except Exception:\n        return HttpResponse(status=500)'],
+    ['flag', '    failed = False\n    try:\n        Order.objects.filter(pk=session["id"]).update(paid=True)\n    except Exception:\n        logger.exception("db")\n        failed = True\n    if failed:\n        return HttpResponse(status=500)'],
+    ['KeyError', '    try:\n        Order.objects.filter(pk=session["metadata"]["order_id"]).update(paid=True)\n    except KeyError:\n        logger.warning("no order id")']] as const)
+    assert.ok(!c(pb, dj(b)).includes(HOOK), `python hook control: ${name}`)
+  assert.ok(c(pb, dj('    try:\n        Order.objects.filter(pk=session["id"]).update(paid=True)\n    except Exception:\n        logger.exception("db")')).includes(HOOK), 'python swallows')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0","stripe":"17.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n', 'auth.ts': 'export const auth = async () => null as any\n' }
+  const hook = (body: string) => ({ ...nx, 'app/api/webhook/route.ts': `import Stripe from "stripe"\nimport { prisma } from "@/lib/db"\nconst stripe = new Stripe("sk")\nexport async function POST(req: Request) {\n  const event = stripe.webhooks.constructEvent(await req.text(), "", "")\n  const s = event.data.object as any\n${body}\n  return new Response(null)\n}\n` })
+  assert.ok(!c(hook(''), hook('  try {\n    try {\n      await prisma.order.update({ where: { id: s.id }, data: { paid: true } })\n    } catch (e) {\n      return new Response("db", { status: 500 })\n    }\n    await sendReceipt(s.customer_email)\n  } catch (err) {\n    console.error("receipt email failed", err)\n  }')).includes(HOOK), 'outer catch around an answered inner write')
+  for (const w of ['await this.prisma.order.update({ where: { id: 1 }, data: {} })', 'await supabaseAdmin.from("orders").update({ paid: true }).eq("id", 1)', 'await updateDoc(doc(db, "orders", s.id), { paid: true })'])
+    assert.ok(c(hook(''), hook(`  try {\n    ${w}\n  } catch (err) {\n    const m: string = "failed id=" + s.id\n    console.error(m, err)\n  }`)).includes(HOOK), `write: ${w}`)
+  // links: the field's object must be a model that stores it; a loop's item counts as one of its list
+  const LINK = 'now go straight to an address people saved'
+  const fl = { 'requirements.txt': 'flask\nflask-sqlalchemy\n', 'models.py': 'from flask_sqlalchemy import SQLAlchemy\ndb = SQLAlchemy()\n\nclass Bookmark(db.Model):\n    id = db.Column(db.Integer, primary_key=True)\n    url = db.Column(db.String(500))\n', 'templates/base.html': '<p></p>\n' }
+  assert.ok(!c(fl, { ...fl, 'templates/base.html': '{% for item in nav %}<a href="{{ item.url }}">x</a>{% endfor %}\n' }).includes(LINK), 'a menu next to a Bookmark model')
+  assert.ok(c(fl, { ...fl, 'templates/base.html': '{% for b in bookmarks %}<a href="{{ b.url }}">x</a>{% endfor %}\n' }).includes(LINK), 'a loop over bookmarks')
+  // gift cards aren't payment cards; a preview list in an upload component isn't an upload rule
+  assert.ok(!c(nx, { ...nx, 'prisma/schema.prisma': 'model GiftCard {\n  id String @id\n  cardNumber String\n  expiresAt DateTime\n}\n' }).includes('as plain text'), 'gift card')
+  assert.ok(!c(nx, { ...nx, 'components/FileUpload.tsx': "const isImage = (n: string) => ['png', 'jpg', 'svg'].includes(n)\nexport function U({ f }: any) { return isImage(f.name) ? <img /> : null }\n" }).includes('Uploads now accept SVG'), 'upload component preview')
+  // own account: not a logout that clears a cookie, not signing out everywhere
+  const OWN = 'People can now delete their own account'
+  const get = 'import { auth } from "@/auth"\nimport { prisma } from "@/lib/db"\nimport { cookies } from "next/headers"\nexport async function GET() { const s = await auth(); return Response.json(s) }\n'
+  const del = (path: string, d: string) => c({ ...nx, [path]: get }, { ...nx, [path]: get + `export async function DELETE() {\n  const s = await auth()\n  if (!s) return new Response(null, { status: 401 })\n  ${d}\n  return new Response(null)\n}\n` })
+  assert.ok(!del('app/api/me/route.ts', '(await cookies()).delete("token")').includes(OWN), 'logout')
+  assert.ok(!del('app/api/account/route.ts', 'await prisma.session.deleteMany({ where: { userId: s.user.id } })').includes(OWN), 'sign out everywhere')
+}
+console.log('ok (review 65)')
+// Review 66: a flag must be read after the try; comments and nested handled tries cut cleanly; a storage delete isn't the account
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const HOOK = 'Stripe is still told it worked'
+  const dj = (body: string) => ({ 'requirements.txt': 'django==5.1\nstripe\n', 'shop/views.py': `import stripe, logging\nlogger = logging.getLogger(__name__)\n\ndef stripe_webhook(request):\n    event = stripe.Webhook.construct_event(request.body, "", "")\n    session = event["data"]["object"]\n${body}\n    return HttpResponse(status=200)\n` })
+  const pb = dj(''), save = 'Order.objects.filter(pk=session["id"]).update(paid=True)'
+  for (const [name, b] of [['a keyword argument over lines', `    try:\n        ${save}\n    except Exception:\n        logger.error(\n            "failed",\n            exc_info=True,\n        )`],
+    ['a name never read again', `    try:\n        ${save}\n    except Exception as e:\n        msg = str(e)\n        logger.error("db failed: %s", msg)`],
+    ['a comment before a best-effort inner try', `    try:\n        email = session["email"]\n        # receipt first\n        try:\n            send_mail("Thanks", "Paid", None, [email])\n        except Exception:\n            mail_failed = True\n        ${save}\n    except Exception:\n        logger.exception("db failed")`],
+    ['nested handled tries, then the write', `    try:\n        try:\n            try:\n                logger.info("got %s", event["id"])\n            except Exception:\n                return HttpResponse(status=500)\n        except Exception:\n            return HttpResponse(status=500)\n        ${save}\n    except Exception:\n        logger.exception("db failed")`]] as const)
+    assert.ok(c(pb, dj(b)).includes(HOOK), `python swallows: ${name}`)
+  assert.ok(!c(pb, dj(`    failed = False\n    try:\n        ${save}\n    except Exception: failed = True\n    if failed:\n        return HttpResponse(status=500)`)).includes(HOOK), 'one-line flag, read later')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@supabase/supabase-js":"2.0.0"}}', 'auth.ts': 'export const auth = async () => null as any\n' }
+  const get = 'import { auth } from "@/auth"\nexport async function GET() { return Response.json(await auth()) }\n'
+  assert.ok(!c({ ...nx, 'app/api/profile/route.ts': get }, { ...nx, 'app/api/profile/route.ts': get + "export async function DELETE() {\n  const s = await auth()\n  if (!s) return new Response(null, { status: 401 })\n  await supabase.storage.from('avatars').remove([s.user.id + '.png'])\n  return new Response(null)\n}\n" }).includes('delete their own account'), 'storage delete')
+  const fl = { 'requirements.txt': 'flask\nflask-sqlalchemy\n', 'models.py': 'from flask_sqlalchemy import SQLAlchemy\ndb = SQLAlchemy()\n\nclass Link(db.Model):\n    id = db.Column(db.Integer, primary_key=True)\n    url = db.Column(db.String(500))\n', 'templates/p.html': '<p></p>\n' }
+  assert.ok(c(fl, { ...fl, 'templates/p.html': '{% for l in user.links %}<a href="{{ l.url }}">x</a>{% endfor %}\n' }).includes('now go straight to an address people saved'), 'for l in user.links')
+}
+console.log('ok (review 66)')
+// Review 67: any odd left side in a catch must not crash; flags set by +=, ++, ||=, push/append or destructuring; `.all` loops
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const HOOK = 'Stripe is still told it worked'
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0","stripe":"17.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n' }
+  const hook = (body: string) => ({ ...nx, 'app/api/webhook/route.ts': `import Stripe from "stripe"\nimport { prisma } from "@/lib/db"\nconst stripe = new Stripe("sk")\nexport async function POST(req: Request) {\n  const event = stripe.webhooks.constructEvent(await req.text(), "", "")\n${body}\n  return new Response(null)\n}\n` })
+  const save = 'await prisma.order.update({ where: { id: 1 }, data: { paid: true } })'
+  for (const lhs of ['lock("(").held = false', '(a++ as any).x = 1', 'this /* ( */ .failed = true'])
+    assert.ok(c(hook(''), hook(`  try {\n    ${save}\n  } catch (e) {\n    ${lhs}\n  }`)).includes(HOOK), `no crash: ${lhs}`)
+  for (const [set, read] of [['errors.push(e)', 'if (errors.length) return new Response("x", { status: 500 })'], ['failures++', 'if (failures) return new Response("x", { status: 500 })'],
+    ['failed ||= true', 'if (failed) return new Response("x", { status: 500 })'], ['[ok] = [false]', 'if (!ok) return new Response("x", { status: 500 })'], ['(ctx as any).failed = true', 'if (ctx.failed) return new Response("x", { status: 500 })']] as const)
+    assert.ok(!c(hook(''), hook(`  try {\n    ${save}\n  } catch (e) {\n    ${set}\n  }\n  ${read}`)).includes(HOOK), `flag: ${set}`)
+  const dj = (body: string) => ({ 'requirements.txt': 'django==5.1\nstripe\n', 'shop/views.py': `import stripe\n\ndef stripe_webhook(request):\n    event = stripe.Webhook.construct_event(request.body, "", "")\n${body}\n    return HttpResponse(status=200)\n` })
+  for (const [set, read] of [['errors.append(e)', 'if errors:'], ['failures += 1', 'if failures:'], ['ok, err = False, e', 'if not ok:']] as const)
+    assert.ok(!c(dj(''), dj(`    try:\n        Order.objects.filter(pk=1).update(paid=True)\n    except Exception as e:\n        ${set}\n    ${read}\n        return HttpResponse(status=500)`)).includes(HOOK), `python flag: ${set}`)
+  const fl = { 'requirements.txt': 'flask\nflask-sqlalchemy\n', 'models.py': 'from flask_sqlalchemy import SQLAlchemy\ndb = SQLAlchemy()\n\nclass Link(db.Model):\n    id = db.Column(db.Integer, primary_key=True)\n    url = db.Column(db.String(500))\n', 'templates/p.html': '<p></p>\n' }
+  assert.ok(c(fl, { ...fl, 'templates/p.html': '{% for l in user.links.all %}<a href="{{ l.url }}">x</a>{% endfor %}\n' }).includes('now go straight to an address people saved'), 'links.all')
+  const au = { ...nx, 'auth.ts': 'export const auth = async () => null as any\n', 'lib/account.ts': 'export async function deleteAccount(id: string) {}\n' }
+  const get = 'import { auth } from "@/auth"\nimport { deleteAccount } from "@/lib/account"\nexport async function GET() { return Response.json(await auth()) }\n'
+  assert.ok(c({ ...au, 'app/api/account/route.ts': get }, { ...au, 'app/api/account/route.ts': get + 'export async function DELETE() {\n  const session = await auth()\n  if (!session) return new Response(null, { status: 401 })\n  await deleteAccount(session.user.id)\n  return new Response(null)\n}\n' }).includes('People can now delete their own account'), 'a session variable')
+}
+console.log('ok (review 67)')
+// Review 68: logouts that end a session aren't account deletion; a write on the response or event isn't a flag
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0","stripe":"17.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n', 'auth.ts': 'export const auth = async () => null as any\n' }
+  const get = 'import { auth } from "@/auth"\nexport async function GET() { return Response.json(await auth()) }\n'
+  for (const d of ['await lucia.invalidateSession(session.id)', 'await session.revoke()', 'await deleteSession(session.id)', 'await kv.del(`session:${session.id}`)'])
+    assert.ok(!c({ ...nx, 'app/api/me/route.ts': get }, { ...nx, 'app/api/me/route.ts': get + `export async function DELETE() {\n  const session = await auth()\n  if (!session) return new Response(null, { status: 401 })\n  ${d}\n  return new Response(null)\n}\n` }).includes('delete their own account'), `logout: ${d}`)
+  const HOOK = 'Stripe is still told it worked'
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","stripe":"17.0.0","mongoose":"8.0.0"}}' }
+  const srv = (cat: string) => ({ ...ex, 'server.js': `const express = require("express")\nconst Stripe = require("stripe")\nconst stripe = Stripe("sk")\nconst app = express()\napp.post("/webhook", async (req, res) => {\n  const event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], "whsec")\n  try {\n    await Order.updateOne({ _id: event.data.object.id }, { paid: true })\n  } catch (err) {\n    ${cat}\n  }\n  res.json({ received: true })\n})\napp.listen(3000)\n` })
+  for (const cat of ['res.set("X-Order-Error", "1")', 'err.handled = true'])
+    assert.ok(c(srv('throw err'), srv(cat)).includes(HOOK), `not a flag: ${cat}`)
+}
+console.log('ok (review 68)')

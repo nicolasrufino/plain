@@ -82,6 +82,27 @@ and an unprotected admin `DELETE` in the same file are judged separately.
   flagged.
 - **Broken.** A function was deleted but other code still uses it, or a migration starts with terminal output pasted in
   ("Already up to date", "$ npx prisma migrate dev").
+- **Unsafe data and uploads** (from misses in the [production pilot](production-eval.md)):
+  - Bank account, card, IBAN, Social Security or passport numbers newly stored as plain text in any model plain reads.
+    An account number counts only on a bank model, or next to a routing, IBAN or payout field: a CRM's `accountNumber` is
+    a reference. A card number counts only on a payment card, not a loyalty card or a flashcard. Not flagged when some line
+    names that field together with encryption (Rails `encrypts`, a Laravel `encrypted` cast, `EncryptedCharField`,
+    `/// @encrypted`). Routing and SWIFT codes aren't flagged, because they're public.
+  - An upload list that newly takes SVG (`mimes:...,svg`, an `accept`, an allowed or valid list), counted over the changed
+    files together, so moving a list between files doesn't count. It skips help text ("SVG, PNG or JPG"), output and
+    export formats, content-type maps, docs and translations.
+  - A Blade, ERB or Django/Jinja link that newly points straight at a saved address field (`href="{{ $link->link }}"`,
+    `link_to ..., @user.website`), for a field some table stores. It skips a `.url` the app makes itself (an upload's `file.url`, a `post.url`), a Django
+    `URLField`, and a field whose scheme some line of the app's own code checks. Angular templates clean such links
+    themselves. JSX, Vue and Svelte are skipped, because their links mostly come from fixed menu lists.
+  - A Stripe webhook whose `try` around a database write has a `catch` that logs and carries on: no throw, no return, no
+    error status. Stripe then counts the event as delivered and never retries. A `catch` that answers on purpose (an event
+    already handled), sets a flag checked later, or guards a best-effort write inside a `try` that answers is a decision,
+    so it isn't flagged. Neither is a Python `except` for a row that isn't there or an event already saved. Only the function that checks the signature is read (JS/TS and
+    Python), and calls that don't touch the database (an SMS, a Stripe call) don't count.
+  - A new way to delete your own account: a DELETE on an address that is only `/me`, `/account` or `/profile` (not
+    `/teams/[id]/members/me` or `/stripe/account`), or new code that deletes from the users table (`DELETE /api/user`, `deleteAccount`). This is a thing to decide: ask the person to confirm first, and
+    clean up the rest of their data. It isn't raised when the code already checks the password.
 - **No "doesn't look related" guess.** It used to flag code that didn't seem to match the request. On 70 real commits it was
   wrong 42 times in 45, mostly on the file that was the fix, so it's gone ([production pilot](production-eval.md)). There's
   also no check for imports of missing files: a generated, gitignored file looks the same as a missing one.

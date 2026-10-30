@@ -451,3 +451,45 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
     return g
   }
 }
+
+// A try that writes to the database (an update, create, upsert, save, delete or commit; Stripe's own calls aside) and a catch / except
+// that neither throws nor answers with an error status: the failure is swallowed (see the webhook check in plain.ts)
+// (a write on the database: prisma.x.update, db.update, supabase.from().insert, Order.objects.create, User.updateOne, x.save(),
+// session.commit(); not an SMS sent with sms.messages.create, a Stripe call, or a Python dict's update)
+const VERB = String.raw`\.(?:update|updateMany|updateOne|upsert|create|createMany|insert|insertMany|delete|deleteMany|deleteOne|findOneAndUpdate|findByIdAndUpdate|bulkWrite|bulk_create|bulk_update|update_or_create|get_or_create)\s*\(`
+export const WRITES = new RegExp(String.raw`(?<![\w.$])(?:this\.)?(?:prisma|db|database|tx|trx|knex|supabase\w*|sql|repo\w*|\w+Repository|em|entityManager|collection|[A-Z]\w*)(?:\([^()\n]*\))?(?:\.\w+(?:\([^()\n]*\))?)*?${VERB}|\.(?:save|commit|destroy)\s*\(|\b(?:updateDoc|setDoc|addDoc|deleteDoc)\s*\(|\$transaction|\b(?:INSERT\s+INTO|insert\s+into|UPDATE\s+\S+\s+SET|update\s+\S+\s+set)\b`)
+// an error answer: a 4xx/5xx status (Express, Next, Hono's c.json(x, 500), Fastify's reply.code(500), Flask's `return x, 500`),
+// SvelteKit's error(500), next(err), abort, raise, or the response handed to a helper (handleError(res, err))
+export const FAILS = /\bstatus(?:Code|_code)?\s*[:=(]\s*(?:[45]\d\d|(?:status\.)?HTTP_[45])|\.status\s*\([^)]*\b[45]\d\d\b|\b\w+\s*\(\s*(?:res|reply|response|ctx)\s*,|sendStatus\s*\(\s*[45]|\.code\s*\(\s*[45]|,\s*[45]\d\d\s*\)|,\s*[45]\d\d\s*$|\berror\s*\(\s*[45]|\bnext\s*\(\s*\w|\babort\s*\(\s*[45]|HttpResponse(?:ServerError|BadRequest)\b|INTERNAL_SERVER_ERROR|SERVICE_UNAVAILABLE|\braise\b/m
+export const dbWrite = (t: string) => WRITES.test(t.replace(/\bstripe\.[\w.]+\s*\(/gi, ''))
+// (only in the function that checks the webhook's signature, the innermost one: not a checkout view in the same file)
+// (an error a retry can't fix: the row isn't there, or the event was already saved)
+const EXPECTED = /DoesNotExist|NoResultFound|IntegrityError|NotFound|UniqueViolation|KeyError|Http404/
+export function pySwallows(text: string, verifies: RegExp) {
+  const tree = parser?.parse(text)
+  if (!tree) return 0
+  const fns = all(tree.rootNode, 'function_definition').filter(f => verifies.test(code(f))), inner = fns.filter(f => !fns.some(g => g !== f && g.startIndex >= f.startIndex && g.endIndex <= f.endIndex))
+  // (its own except clauses, not a nested try's; one counts as handled when it answers, raises, returns, sets a flag checked later or
+  // names an error a retry can't fix. A try inside a handled try's body is a best-effort extra; a handled inner try's write isn't the outer's)
+  const own = (t: N) => t.namedChildren.filter((x): x is N => x?.type === 'except_clause')
+  // (a flag: a plain name the except assigns, `failed = True`, not a keyword argument, that the function reads again after the try)
+  const flag = (e: N) => { const t = e.parent!; let f = t.parent; while (f && f.type !== 'function_definition') f = f.parent
+    const after = f ? code(f).slice(code(f).indexOf(code(t)) + code(t).length) : ''
+    // (`failed = True`, `failures += 1`, `ok, err = False, e`, `errors.append(e)`, `self.failed = True`: the name assigned or added to)
+    // (the whole dotted name, `self.failed`; a subscript's base, `failures` in `failures[k] = e`; not the request or the event)
+    const base = (l: N): string[] => l.type === 'identifier' || l.type === 'attribute' ? [l.text] : l.type === 'subscript' ? base(l.childForFieldName('value')!) : all(l, 'identifier').map(x => x.text)
+    const names = [...all(e, 'assignment'), ...all(e, 'augmented_assignment')].flatMap(a => { const l = a.childForFieldName('left'); return l ? base(l) : [] })
+      .concat(all(e, 'call').map(c => c.childForFieldName('function')).filter(f => f?.type === 'attribute' && /^(?:append|add|extend|update)$/.test(f.childForFieldName('attribute')?.text ?? '')).map(f => f!.childForFieldName('object')?.text ?? ''))
+    return names.some(n => /^\w+(?:\.\w+)*$/.test(n) && !/^(?:request|response|event|session|e|err|error|exc)$/.test(n.split('.')[0]) && new RegExp(String.raw`(?<![\w.])${n.replace(/\./g, '\\.')}\b`).test(after)) }
+  const handled = (e: N) => FAILS.test(code(e)) || all(e, 'return_statement').length > 0 || EXPECTED.test(e.text.split('\n')[0]) || flag(e)
+  const ok = (t: N) => own(t).length > 0 && own(t).every(handled)
+  const guarded = (t: N) => { for (let p = t.parent; p; p = p.parent) { if (p.type === 'function_definition') return false; if (p.type === 'try_statement' && ok(p) && t.startIndex < (p.childForFieldName('body')?.endIndex ?? 0)) return true } return false }
+  // (the body without its comments and handled inner tries, cut from the raw text, outermost first)
+  const body = (t: N) => { const b = t.childForFieldName('body'); if (!b) return ''
+    const keep: N[] = []
+    for (const c of [...all(b, 'try_statement').filter(ok), ...all(b, 'comment')].sort((x, y) => x.startIndex - y.startIndex)) if (!keep.some(k => c.startIndex >= k.startIndex && c.endIndex <= k.endIndex)) keep.push(c)
+    let x = b.text; for (const c of keep.reverse()) x = x.slice(0, c.startIndex - b.startIndex) + x.slice(c.endIndex - b.startIndex); return x }
+  const n = inner.flatMap(f => all(f, 'try_statement')).filter(t => !guarded(t) && dbWrite(body(t)) && own(t).some(e => !handled(e))).length
+  tree.delete()
+  return n
+}
