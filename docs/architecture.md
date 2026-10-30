@@ -126,6 +126,13 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
     already handled), sets a flag checked later, or guards a best-effort write inside a `try` that answers is a decision,
     so it isn't flagged. Neither is a Python `except` for a row that isn't there or an event already saved. Only the function that checks the signature is read (JS/TS and
     Python), and calls that don't touch the database (an SMS, a Stripe call) don't count.
+  - A Stripe webhook that starts handling an event the app didn't handle before gets a step to make sure the endpoint
+    receives it. Not `checkout.session.async_payment_succeeded`/`_failed` when every Checkout the app makes takes cards
+    only (each `checkout.sessions.create(...)` in the app's code, not tests, says `payment_method_types: ["card"]`, and
+    nothing else makes Checkouts: Payment Links, a pricing table, another SDK): card payments are never "pending".
+  - A stylesheet's new `@media (max-width: ...)` block reads "changed how the app looks on small screens like phones" only
+    when nothing outside those blocks changed (comments aside; spaces only where they don't matter). With rules for every
+    screen size too: "on every screen size and on small screens like phones".
   - Code with no login check that deletes stored files (UploadThing `deleteFiles`, S3 `DeleteObject`, Cloudinary `destroy`,
     Supabase storage `remove`, Vercel Blob `del`, Firebase `deleteObject`, Laravel `Storage::delete`), whenever it changed:
     "Anyone may be able to use X to delete files from your storage". Not when its own code checks something (a login call, a

@@ -5,8 +5,9 @@ You asked: "hide null quotas only under a telemetry cap"
     plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
 
 WHAT CHANGED
+  Pages
+    • The dashboard settings usage page now says "Log bytes ingested".
+      /dashboard/settings/usage
   Other files
-    • The agent changed packages/frontend/src/routes/dashboard/settings/usage/+page.svelte:
-      it now shows "Log bytes ingested" in place of "Bytes ingested".
     • The agent also changed packages/frontend/src/lib/utils/usage-capabilities.ts, in a way
       plain can't describe yet.

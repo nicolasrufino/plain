@@ -5,6 +5,12 @@ You asked: "Show related records on custom record pages, and name the real estat
     plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
 
 WHAT CHANGED
+  Pages
+    • The notifications page changed in a way plain can't describe yet. Ask the agent what
+      it does differently.
+      /notifications
+    • Each object page now shows the related records.
+      /objects/[key]/[id]
   Other files
     + The agent added mobile/test/screens/record_alert_notifications_test.dart.
     • The agent changed backend/uv.lock.
@@ -17,10 +23,11 @@ WHAT CHANGED
     • The agent changed mobile/test/screens/phone_viewport_test.dart.
     • The agent changed mobile/test/unit/lead_alerts_models_test.dart.
     • The agent changed mobile/test/unit/notifications_provider_test.dart.
-    • The agent also changed frontend/src/lib/server/v2/custom-objects.ts,
-      frontend/src/lib/server/v2/notifications.ts and
-      frontend/src/lib/server/v2/related-records.ts, in ways plain can't describe yet.
 
 LOOSE ENDS
   ◐ Type checking is turned off in 1 spot in
     frontend/src/lib/server/v2/related-records.test.ts (`any`).
+
+plain can't tell which pages the login check in frontend/src/hooks.server.* covers, so it
+doesn't say whether the new or changed pages and server code here need login. Check they're
+behind it.

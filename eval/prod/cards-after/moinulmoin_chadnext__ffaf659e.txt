@@ -1,7 +1,7 @@
 plain · 4 files changed since ffaf659e~1
 You asked: "refactor: :recycle: streamline Stripe webhook handling and improve billing fo..."
 
-  ⚠ 1 problem  ·  1 step before you ship
+  ⚠ 1 problem
 
 LOOK AT THIS FIRST
   ⚠ If saving to your database fails in your Stripe webhook
@@ -21,9 +21,3 @@ WHAT CHANGED
     + The agent added .cursor/mcp.json.
     • The agent also changed src/components/billing-form.tsx, in a way plain can't describe
       yet.
-
-BEFORE YOU SHIP
-  1. In Stripe (Workbench → Webhooks, your endpoint), make sure it receives
-     checkout.session.async_payment_succeeded (skip this if it's set to receive all events).
-     Stripe only sends an endpoint the events picked for it, so until then the new code for
-     it never runs.

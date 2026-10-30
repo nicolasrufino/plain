@@ -107,13 +107,14 @@ export function nuxtRoute(path: string): { kind: 'page' | 'endpoint'; url: strin
 
 // SvelteKit: src/routes/(app)/orders/[id=integer]/+page.svelte -> page /orders/[id]; +server.ts is an endpoint; id keeps the groups
 // (hooks often check event.route.id?.startsWith('/(app)')).
-export function svelteRoute(path: string): { file: 'page' | 'pageServer' | 'pageLoad' | 'layout' | 'server'; url: string; id: string } | null {
-  const m = path.match(/^src\/routes\/(?:(.*)\/)?\+(page|layout|server)(\.server)?\.(svelte|[cm]?[jt]s)$/)
+// (root: the app's folder in a monorepo, frontend/ for frontend/src/routes/...; +page / +layout / +server names are SvelteKit's own)
+export function svelteRoute(path: string): { file: 'page' | 'pageServer' | 'pageLoad' | 'layout' | 'server'; url: string; id: string; root: string } | null {
+  const m = path.match(/^((?:[^/]+\/)*?)src\/routes\/(?:(.*)\/)?\+(page|layout|server)(\.server)?\.(svelte|[cm]?[jt]s)$/)
   if (!m) return null
-  const dir = m[1] ?? '', id = '/' + dir
+  const [, root, dir = '', kind, server, ext] = m, id = '/' + dir
   const url = '/' + dir.split('/').filter(x => x && !/^\(.*\)$/.test(x)).map(x => x.replace(/^\[\[?(?:\.\.\.)?(\w+)(?:=\w+)?\]?\]$/, '[$1]')).join('/')
-  const file = m[2] === 'server' ? 'server' : m[2] === 'layout' ? 'layout' : m[4] === 'svelte' ? 'page' : m[3] ? 'pageServer' : 'pageLoad'
-  return { file, url, id }
+  const file = kind === 'server' ? 'server' : kind === 'layout' ? 'layout' : ext === 'svelte' ? 'page' : server ? 'pageServer' : 'pageLoad'
+  return { file, url, id, root }
 }
 
 // Angular templates (templateUrl / inline template) as JSX, the same way: {{ x }} -> {x} (pipes dropped, `| currency` kept as a price),

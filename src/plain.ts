@@ -1185,11 +1185,22 @@ export function appFacts(snap: Snap) {
   // +server.ts never runs one: those need their own check. A page's own server load runs without the layout's check unless it awaits
   // parent() first (client-side navigation fetches its data alone).
   if ('@sveltejs/kit' in deps_) {
-    const covered = coverage([...files].find(([p]) => /^src\/hooks\.server\.[jt]s$/.test(p))?.[1])
-    const sv = new Map([...files.keys()].flatMap(p => { const r = svelteRoute(p); return r ? [[p, r] as const] : [] }))
+    // (each app's own hooks.server: frontend/src/hooks.server.js in a monorepo, or src/hooks.server/index.ts)
+    const once = <T,>(fn: (root: string) => T) => { const m = new Map<string, T>(); return (root: string) => m.has(root) ? m.get(root)! : (m.set(root, fn(root)), m.get(root)!) }
+    const hooksOf = once(root => ['js', 'ts', 'mjs'].flatMap(x => [`${root}src/hooks.server.${x}`, `${root}src/hooks.server/index.${x}`]).map(p => files.get(p)).find(Boolean))
+    const hooks = new Map<string, ReturnType<typeof coverage>>(), coveredIn = (root: string) => hooks.get(root) ?? hooks.set(root, coverage(hooksOf(root))).get(root)!
+    // (hooks that send people to a login page in a way plain can't read at all, `else if (!isPublicRoute) { if (!jwtPayload) redirect(307,
+    // '/login') }`: it can't tell which routes they cover, so it says neither "requires login" nor "anyone can use", and says so in a
+    // note. A check it reads, it trusts. Only a redirect to /login, /signin or /auth (not /auth/callback, /authors) under an if that
+    // tests for a missing user, session, token or public path: not a logout hook, not sending logged-in people away from /login)
+    const LOGIN_GATE = /\bif\s*\(([^)]*)\)\s*\{?[^{}]{0,200}?\bredirect\s*\(\s*\d{3}\s*,\s*['"`](?:\/[\w-]+)*\/(?:log-?in|sign-?in|auth)(?:\?[^'"`]*)?['"`]/gi
+    const vague = once(root => { const h = hooksOf(root); return !!h && !h.authIfs.length && [...h.printed.matchAll(LOGIN_GATE)].some(m => /!\s*[\w.]*(?:user|session|token|jwt|auth|public)\w*\b(?!\s*\(?\s*['"`])/i.test(m[1]) && !/logout|sign-?out/i.test(m[1])) })
+    // (an app: its folder has svelte.config or a package.json with SvelteKit; not test apps, examples or templates)
+    const kitApp = once(root => ['js', 'ts', 'mjs', 'cjs'].some(x => snap.has(`${root}svelte.config.${x}`)) || /@sveltejs\/kit/.test(snap.get(`${root}package.json`) ?? ''))
+    const sv = new Map([...files.keys()].flatMap(p => { const r = svelteRoute(p); return r && kitApp(r.root) && !TESTS.test(r.root) && !/(^|\/)(examples?|templates?|fixtures)\//.test(r.root) ? [[p, r] as const] : [] }))
     // a layout or page load only keeps people out by throwing (redirect / error); one that returns { user: null } lets the page render
     const loadStops = (g?: FileFacts) => !!g && g.authIfs.some(x => !x.g)
-    const layoutGuards = [...sv].filter(([p, r]) => r.file === 'layout' && !p.endsWith('.svelte') && loadStops(loadOf(p))).map(([, r]) => r.id)
+    const layoutGuards = [...sv].filter(([p, r]) => r.file === 'layout' && !p.endsWith('.svelte') && loadStops(loadOf(p))).map(([, r]) => r)
     function loadOf(p: string) { return files.get(p)?.locals.get('load') }
     const checks = handlerChecks
     for (const [p, r] of sv) {
@@ -1201,20 +1212,23 @@ export function appFacts(snap: Snap) {
         for (const q of [`${dir}+page.server.ts`, `${dir}+page.server.js`, `${dir}+page.ts`, `${dir}+page.js`]) { const l = loadOf(q); if (l) { for (const t of l.tables) f.tables.add(t); f.printed += `\n[load] ${l.printed}` } }
         const serverLoad = [`${dir}+page.server.ts`, `${dir}+page.server.js`].map(loadOf).find(Boolean)
         const g = f as FileFacts & { layoutLogin?: boolean; dataOpen?: boolean }
-        g.layoutLogin = layoutGuards.some(id => r.id === id || r.id.startsWith(id.replace(/\/$/, '') + '/') || id === '/')
-        f.auth = covered(r.url, r.id) || loadStops(serverLoad) || g.layoutLogin
+        g.layoutLogin = layoutGuards.some(({ id, root }) => root === r.root && (r.id === id || r.id.startsWith(id.replace(/\/$/, '') + '/') || id === '/'))
+        f.auth = coveredIn(r.root)(r.url, r.id) || loadStops(serverLoad) || g.layoutLogin
+        if (!f.auth && vague(r.root)) Object.assign(f, { guardUnknown: true, hooksVague: `${r.root}src/hooks.server` })
         // the layout keeps people out of the page, but its own load hands its data to anyone who asks for it directly
-        g.dataOpen = g.layoutLogin && !covered(r.url, r.id) && !!serverLoad && !loadStops(serverLoad) && !/await\s+(\w+\.)?parent\s*\(/.test(serverLoad.printed)
+        g.dataOpen = g.layoutLogin && !coveredIn(r.root)(r.url, r.id) && !!serverLoad && !loadStops(serverLoad) && !/await\s+(\w+\.)?parent\s*\(/.test(serverLoad.printed)
           && (serverLoad.tables.size > 0 || serverLoad.outside.size > 0 || serverLoad.fetches.size > 0)
       }
       if (r.file === 'pageServer') for (const h of f.handlers.filter(h => h.server === '@actions')) {
-        h.guard = checks(h.facts) || covered(r.url, r.id); h.server = ''; h.path = r.url
+        h.guard = checks(h.facts) || coveredIn(r.root)(r.url, r.id); h.server = ''; h.path = r.url
+        if (!h.guard && vague(r.root)) { h.unknown = true; Object.assign(f, { hooksVague: `${r.root}src/hooks.server` }) }
       }
       if (r.file === 'server') {
         routes.set(p, { kind: 'endpoint', url: r.url })
         // each method on its own: a check in GET doesn't cover DELETE
         const ms = METHODS.filter(m => f.fns.has(m)), writes = ms.filter(m => m !== 'GET')
-        f.auth = covered(r.url, r.id) || (writes.length ? writes : ms).length > 0 && (writes.length ? writes : ms).every(m => checks(f.locals.get(m)))
+        f.auth = coveredIn(r.root)(r.url, r.id) || (writes.length ? writes : ms).length > 0 && (writes.length ? writes : ms).every(m => checks(f.locals.get(m)))
+        if (!f.auth && vague(r.root)) Object.assign(f, { guardUnknown: true, hooksVague: `${r.root}src/hooks.server` })
       }
     }
   }
@@ -2268,7 +2282,7 @@ const norm = (u: string) => u.replace(/\[[^\]]*\]/g, '*')
 
 // ---------- the diff ----------
 
-export type Change = { group: 'Pages' | 'Server' | 'Database' | 'Outside services' | 'Other files'; isNew?: boolean; text: string; detail?: string; name?: string; money?: boolean; vague?: boolean }
+export type Change = { group: 'Pages' | 'Server' | 'Database' | 'Outside services' | 'Other files'; isNew?: boolean; text: string; detail?: string; name?: string; money?: boolean; vague?: boolean; wordsOnly?: boolean }   // wordsOnly: a page line that only says its new words
 export type Problem = { kind: 'Broken' | 'Unsafe' | 'Check'; text: string }
 // ponytail: name-based guess at what's sensitive; a config file can override it later
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
@@ -2607,7 +2621,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const gone = [...(a?.texts ?? [])].filter(t => !b.texts.has(t)).map(t => t.toLowerCase().replace(/[^a-z]/g, ''))
       const said = newOnly(a?.texts, b.texts).filter(t => t !== '[price]' && ![...b.ui].some(u => u.includes(t)) && !b.headings.some(h => h.endsWith(t))
         && !gone.includes(t.toLowerCase().replace(/[^a-z]/g, '')))   // "Save" -> "Save!" isn't new copy
-      if (a && !clauses.length && said.length) clauses.push(`now says ${list(said.slice(0, 2).map(t => `"${t.length > 90 ? t.slice(0, 87) + '…' : t}"`))}`)
+      // (alone, or next to nothing but a vague "sends data to your server")
+      if (a && clauses.every(c => /^now (?:sends|loads) data\b/.test(c)) && said.length) clauses.push(`now says ${list(said.slice(0, 2).map(t => `"${t.length > 90 ? t.slice(0, 87) + '…' : t}"`))}`)
       if (!a && b.auth) clauses.push(b.admin ? 'is for admins only ✓' : 'requires login ✓')
     } else {
       const t = mainTable(b, r.url), noun = t ? things(t) : 'data'
@@ -2711,7 +2726,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
       : (lead ? `${lead}${clauses.length ? ' It also' : ''}` : '')
         + (clauses.length ? `${lead ? ' now ' : `${cap(name)} now `}${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : lead ? '' : `${cap(name)} changed in a way plain can't describe yet.${b.money ? '' : ' Ask the agent what it does differently.'}`)
-    changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰 Make a test payment before you ship.' : ''), detail: r.url, name: r.kind === 'page' ? pageName(r.url) + (!a && b.headings.find(h => h.startsWith('h1:')) ? ` ("${b.headings.find(h => h.startsWith('h1:'))!.slice(3)}")` : '') : named(r.url).join(' ') || 'main', money: b.money, vague: !!a && !clauses.length && a.auth === b.auth && !b.money })
+    changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰 Make a test payment before you ship.' : ''), detail: r.url, name: r.kind === 'page' ? pageName(r.url) + (!a && b.headings.find(h => h.startsWith('h1:')) ? ` ("${b.headings.find(h => h.startsWith('h1:'))!.slice(3)}")` : '') : named(r.url).join(' ') || 'main', money: b.money, vague: !!a && !clauses.length && a.auth === b.auth && !b.money,
+      wordsOnly: !!a && clauses.length > 0 && clauses.every(c => /^now (?:says |(?:sends|loads) data\b)/.test(c)) })
 
     // SvelteKit: the layout asks for login, but this page's own server load doesn't wait for it (no `await parent()`), so its data can be
     // fetched without logging in (client-side navigation and __data.json skip the layout's load)
@@ -2783,9 +2799,14 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const templates = new Set([...after, ...before].flatMap(([q, t]) => [...t.matchAll(/templateUrl\s*:\s*['"`]([^'"`]+)['"`]/g)].map(m => join(q, '..', m[1]))))
   for (const p of real) if (!p.includes('#') && !CODE.test(p) && !templates.has(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p) && !B.goMigrations.includes(p) && !A.goMigrations.includes(p) && !/(^|\/)go\.sum$|\.down\.sql$/.test(p))
   {
-    const media = (t = '') => new Set(t.match(/@media[^{]*max-width[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g) ?? [])
-    const phones = /\.(css|scss)$/.test(p) && [...media(after.get(p))].some(m => !media(before.get(p)).has(m))
+    const MEDIA = /@media(?=[^{]*max-width)[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g
+    const media = (t = '') => new Set(t.match(MEDIA) ?? [])
+    // (only when nothing outside those blocks changed; rules for every screen size too: both, not just phones; comments aside)
+    // (spaces can matter: `.a .b` isn't `.a.b`; around punctuation they don't)
+    const rest = (t = '') => t.replace(MEDIA, '').replace(/\/\*[^]*?\*\//g, '').replace(/\s+/g, ' ').replace(/\s*([{};:,>+~])\s*/g, '$1').replace(/;}/g, '}').trim()
+    const small = /\.(css|scss)$/.test(p) && !!after.get(p) && [...media(after.get(p))].some(m => !media(before.get(p)).has(m)), phones = small && rest(after.get(p)) === rest(before.get(p))
     changes.push({ group: 'Other files', isNew: !before.has(p), text: phones ? `The agent changed how the app looks on small screens like phones (in ${p}).`
+      : small ? (before.has(p) ? `The agent changed how the app looks, on every screen size and on small screens like phones (in ${p}).` : `The agent added ${p}: it sets how the app looks, on every screen size and on small screens like phones.`)
       : `The agent ${!before.has(p) ? 'added' : !after.has(p) ? 'deleted' : 'changed'} ${p}${/\.md$/i.test(p) ? ', a notes file (not code)' : ''}.` })
   }
 
@@ -3136,6 +3157,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const before_ = findings(A.db, used(A), things).map(x => x.text), rls = findings(B.db, used(B), things).filter(x => !before_.includes(x.text))
   problems.push(...rls)
   const notes = rls.length ? ["Database access rules are read from supabase/migrations. Rules changed in the Supabase dashboard aren't visible to plain."] : []
+  // (SvelteKit hooks that send people to the login page in a way plain can't read: it said nothing either way about these)
+  const vagueHooks = [...new Set(real.filter(p => route(p) || p.includes('#')).map(p => (B.files.get(p.split('#')[0]) as FileFacts & { hooksVague?: string } | undefined)?.hooksVague).filter(Boolean))]
+  if (vagueHooks.length) notes.push(`plain can't tell which pages the login check in ${list(vagueHooks.map(h => `${h}.*`))} covers, so it doesn't say whether the new or changed pages and server code here need login. Check they're behind it.`)
   // A page that asks for login but gets its data from a server that isn't in this project (an Angular or React app on its own):
   // its guard only hides the page; the data is safe only if that server checks login too, and plain can't see it.
   const outsideCalls = real.filter(p => route(p)?.kind === 'page' && B.files.get(p)?.auth).flatMap(p => [...B.files.get(p)!.fetches, ...(B.files.get(p) as FileFacts & { quiet?: Set<string> }).quiet ?? []].map(x => x.slice(x.indexOf(' ') + 1))).filter(u => u.startsWith('/') && !endpoint(u))
@@ -3426,7 +3450,17 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const swallowed = hookFiles(after).filter(([p, t]) => swallows(p, t) > swallows(p, before.get(p) ?? '')).map(([p]) => p)
   if (swallowed.length) problems.push({ kind: 'Unsafe', text: `If saving to your database fails in your Stripe webhook (${list(swallowed)}), the error is caught and Stripe is still told it worked, so it won't try again. A customer can pay and never get what they paid for. Answer with an error (status 500) so Stripe retries.` })
   const hadEvents = new Set(hookFiles(before).flatMap(([, t]) => [...handled(t)]))
-  const newEvents = [...new Set(hookFiles(after).flatMap(([, t]) => [...handled(t)]))].filter(e => !hadEvents.has(e))
+  // (checkout.session.async_payment_* never come when every Checkout the app creates takes cards only: a card payment is never
+  // "pending"; bank debits and vouchers are. Each checkout.sessions.create(...) of the app's code (not tests, not comments) must
+  // say payment_method_types: ["card"] in its own arguments, and nothing else may make Checkouts: Payment Links, a pricing table
+  // or buy button, a raw /v1/checkout/sessions call, another SDK's Session.create (Go, Ruby, PHP, C#, Java), or checkout.sessions handed to a helper)
+  const appCode = [...after].filter(([p]) => CODE.test(p) && !/(^|\/)(tests?|__tests__|__mocks__|mocks?|spec|fixtures|e2e|cypress)\/|\.(test|spec)\.\w+$|(^|\/)test_\w+\.py$|_test\.py$/i.test(p))
+    .map(([, t]) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\w])\/\/[^\n]*/g, '$1').replace(/(^|\s)#(?!\[)[^\n]*/g, '$1')).join('\n')
+  const argsAt = (t: string, i: number) => { let d = 0, k = i; for (; k < t.length; k++) { if (t[k] === '(') d++; else if (t[k] === ')' && --d === 0) break } return t.slice(i, k + 1) }
+  const creates = [...appCode.matchAll(/checkout\.(?:sessions|Session)\s*\.\s*create\s*(?=\()/g)].map(m => argsAt(appCode, m.index! + m[0].length))
+  const otherCheckout = /paymentLinks|payment_links|PaymentLink|stripe-pricing-table|stripe-buy-button|\/v1\/checkout\/sessions|Checkout::Session|Checkout\\Session|\bsession\.New\(|SessionService|com\.stripe\.model\.checkout\.Session\b|checkout->sessions|checkout\s*\[|sessions\?\.|checkout\??\.sessions(?!\s*\.\s*(?:create|retrieve|list|listLineItems|expire)\b)|(?<![.\w])sessions\.create\b/.test(appCode)
+  const cardsOnly = creates.length > 0 && !otherCheckout && creates.every(a => /payment_method_types["']?\s*[:=]\s*\[\s*['"]card['"]\s*,?\s*\]/.test(a))
+  const newEvents = [...new Set(hookFiles(after).flatMap(([, t]) => [...handled(t)]))].filter(e => !hadEvents.has(e) && !(cardsOnly && /^checkout\.session\.async_payment_/.test(e)))
   if (newEvents.length) ship.push(hookFiles(before).length
     ? `In Stripe (Workbench → Webhooks, your endpoint), make sure it receives ${list(newEvents)} (skip this if it's set to receive all events). Stripe only sends an endpoint the events picked for it, so until then the new code for ${newEvents.length > 1 ? 'them' : 'it'} never runs.`
     : `In Stripe (Workbench → Webhooks), create an endpoint for your webhook's address that receives ${list(newEvents)}. Until then Stripe sends it nothing.`)
@@ -4033,7 +4067,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // (and what those use in turn, a few levels down: a route calls handlers.go, which calls store.go; `prisma` from lib/prisma.ts)
   const names = (f?: FileFacts) => f ? [...f.fns.keys(), ...f.exports] : [], stem = (q: string) => q.split('#')[0].split('/').pop()!.replace(/\..*$/, '')   // (PriceCard.vue is <PriceCard>)
   // (seeded only from routes and pages the card describes, not from every route: a helper an unchanged page uses still changed)
-  const described = new Set(changes.filter(c => !c.vague && c.detail).map(c => c.detail))
+  // (not a page whose line only says its new words: what its helpers changed is still unsaid)
+  const described = new Set(changes.filter(c => !c.vague && !c.wordsOnly && c.detail).map(c => c.detail))
   // (with the files it imports: `import Plans from './PlanList'` covers PlanList.tsx)
   // (an Express route `file#/api/x` takes its imports from its file: require('../controllers/userController'))
   const seed = (f?: FileFacts) => f ? [...f.used, ...f.jsx, ...[...f.binds.values()].map(m => m.split('/').pop()!.replace(/^py:/, '').split('.').pop()!)] : []   // (and every module its file imports)

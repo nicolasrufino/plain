@@ -992,6 +992,20 @@ class OrderCreate(LoginRequiredMixin, CreateView):
     const c = card({ ...base, ...h }, { ...base, ...h, ...orders('') })
     assert.ok(!c.includes('⚠') && c.includes('saves new orders and requires login ✓'), `sveltekit hook\n${c}`)
   }
+  // the app in a folder of a monorepo (Django-CRM's frontend/src/routes): the same card; its own hooks.server.ts, not another app's
+  const pre = (o: Record<string, string>, dir = 'frontend/') => Object.fromEntries(Object.entries(o).map(([k, v]) => [k.startsWith('src/') || k === 'package.json' ? dir + k : k, v]))
+  const m1 = card(pre(base), { ...pre(base), ...pre(orders('')) })
+  for (const e of ['The orders page is new, titled "Orders"', "⚠ The orders page's data can be read without logging in", '⚠ Anyone can use the orders part of your server without logging in'])
+    assert.ok(m1.includes(e), `monorepo sveltekit missing "${e}"\n${m1}`)
+  const h = { 'src/hooks.server.ts': "import { redirect } from '@sveltejs/kit'\nexport const handle = async ({ event, resolve }) => {\n  if (event.url.pathname.startsWith('/orders') && !event.locals.user) redirect(303, '/login')\n  return resolve(event)\n}\n" }
+  assert.ok(!card(pre({ ...base, ...h }), { ...pre({ ...base, ...h }), ...pre(orders('')) }).includes('⚠'), 'monorepo: its own hooks')
+  assert.ok(card({ ...pre(base), ...pre(h, 'admin/') }, { ...pre(base), ...pre(h, 'admin/'), ...pre(orders('')) }).includes('⚠ Anyone can use the orders part'), "monorepo: another app's hooks")
+  // (review: hooks that send people to /login in a way plain can't read say nothing either way; test apps and templates aren't the app)
+  const vagueHook = { 'src/hooks.server.ts': "import { redirect } from '@sveltejs/kit'\nconst PUBLIC = ['/login']\nexport const handle = async ({ event, resolve }) => {\n  const jwtPayload = await verify(event.cookies.get('t'))\n  const isPublicRoute = PUBLIC.some(r => event.url.pathname.startsWith(r))\n  if (isPublicRoute) {\n    event.locals.x = 1\n  } else if (!jwtPayload) {\n    throw redirect(307, '/login')\n  }\n  return resolve(event)\n}\n" }
+  const v = card(pre({ ...base, ...vagueHook }), { ...pre({ ...base, ...vagueHook }), ...pre(orders('')) })
+  assert.ok(!v.includes('Anyone can use') && !v.includes('requires login ✓') && v.includes("plain can't tell which pages the login check in frontend/src/hooks.server.* covers"), `monorepo: hooks plain can't read\n${v}`)
+  for (const dir of ['packages/kit/test/apps/basics/', 'packages/create/templates/default/'])
+    assert.ok(!card(base, { ...base, [`${dir}src/routes/api/x/+server.ts`]: "export const POST = async ({ request }) => { await prisma.order.create({ data: await request.json() }); return new Response() }\n", [`${dir}package.json`]: '{"devDependencies":{"@sveltejs/kit":"^2"}}' }).includes('without logging in'), dir)
   console.log('ok (sveltekit)')
 }
 
@@ -8228,3 +8242,53 @@ console.log('ok (express controllers)')
   ] as const) { const x = lists(ctl); assert.ok(x.includes('lists orders') && !x.includes('Anyone can use'), `${name}: ${x}`) }
 }
 console.log('ok (review 99)')
+// A new checkout.session.async_payment_succeeded handler needs no dashboard step when every Checkout the app creates takes cards
+// only (chadnext): those events never come. They do with bank debits, or when the methods are left to Stripe.
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const hook = (extra: string) => `import Stripe from "stripe"\nconst stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)\nexport async function POST(req: Request) {\n  const event = stripe.webhooks.constructEvent(await req.text(), req.headers.get("stripe-signature")!, process.env.STRIPE_WEBHOOK_SECRET!)\n  if (event.type === "checkout.session.completed"${extra}) {\n    console.log(event.id)\n  }\n  return new Response(null)\n}\n`
+  const app = (methods: string, extra = '', more = '') => ({ 'package.json': '{"dependencies":{"next":"15.0.0","stripe":"17.0.0"}}', 'app/api/webhooks/stripe/route.ts': hook(extra),
+    'app/api/checkout/route.ts': `import Stripe from "stripe"\nconst stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)\nexport async function POST() {\n  const s = await stripe.checkout.sessions.create({ mode: "subscription", ${methods}line_items: [] })\n  return Response.json({ url: s.url })\n}\n${more}` })
+  const step = (methods: string, more = '') => c(app(methods, '', more), app(methods, ' || event.type === "checkout.session.async_payment_succeeded"', more)).includes('make sure it receives checkout.session.async_payment_succeeded')
+  assert.ok(!step('payment_method_types: ["card"], '), 'cards only')
+  assert.ok(step('payment_method_types: ["card", "us_bank_account"], '), 'bank debits')
+  assert.ok(step(''), 'methods left to Stripe')
+  assert.ok(step('payment_method_types: ["card"], ', 'export async function PUT() { await stripe.checkout.sessions.create({ mode: "payment", line_items: [] }) }\n'), 'another session without them')
+  // (review: card-only lists elsewhere don't count, nor test files; other ways to make a Checkout keep the step)
+  const leaves = (more: Record<string, string>) => { const a = { ...app(''), ...more }, b = { ...app('', ' || event.type === "checkout.session.async_payment_succeeded"'), ...more }
+    return c(a, b).includes('make sure it receives checkout.session.async_payment_succeeded') }
+  assert.ok(leaves({ 'lib/pay.ts': 'export const pi = (s: any) => s.paymentIntents.create({ amount: 1, currency: "usd", payment_method_types: ["card"] })\n' }), 'a PaymentIntent')
+  assert.ok(leaves({ 'test/hook.test.ts': 'const fake = { object: "checkout.session", payment_method_types: ["card"] }\n' }), 'a test fixture')
+  assert.ok(step('payment_method_types: ["card"], ', 'export async function PUT() { await stripe.paymentLinks.create({ line_items: [] }) }\n'), 'Payment Links')
+}
+console.log('ok (card-only checkout)')
+// "small screens like phones" only when the CSS change is only in max-width @media blocks (workout-cool: the same fix for every
+// screen size, then again inside @media (max-width: 768px))
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const css = (x: string) => ({ 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/globals.css': `.a { color: red; }\n${x}` })
+  const media = '@media (max-width: 768px) {\n  .modal-backdrop {\n    width: 100vw;\n  }\n}\n'
+  assert.ok(c(css(''), css(media)).includes('small screens like phones'), 'only @media')
+  assert.ok(c(css(''), css(`/* mobile */\n${media}`)).includes('small screens like phones'), 'plus a comment')
+  const both = c(css(''), css(`.modal-backdrop {\n  width: 100vw;\n}\n${media}`))
+  assert.ok(both.includes('The agent changed how the app looks, on every screen size and on small screens like phones (in app/globals.css)'), both)
+  const added = c({ 'package.json': '{"dependencies":{"next":"15.0.0"}}' }, css(media))
+  assert.ok(added.includes('The agent added app/globals.css: it sets how the app looks, on every screen size and on small screens like phones.'), added)
+  assert.ok(c({ ...css(''), 'app/globals.css': '.a .b { color: red; }\n' }, { ...css(''), 'app/globals.css': `.a.b { color: red; }\n${media}` }).includes('on every screen size'), 'a descendant selector became a compound one')
+  assert.ok(c({ ...css(''), 'app/globals.css': '.a .b { color: red; }\n' }, { ...css(''), 'app/globals.css': `.a .b{color:red}\n\n${media}` }).includes('small screens like phones'), 'reformatted only')
+}
+console.log('ok (css phones)')
+// A changed page that only says new words: the words, and the helper it uses still listed (logtide); next to a vague "sends data"
+// the words still show (Django-CRM's login verify page)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const app = (label: string, helper: string, extra = '') => ({ 'package.json': '{"dependencies":{"next":"15.0.0"}}',
+    'lib/caps.ts': `export function caps(n: number) { return ${helper} }\n`,
+    'app/usage/page.tsx': `import { caps } from "@/lib/caps"\nexport default function Usage() {\n  ${extra}return <main><h1>Usage</h1><p>${label}</p><p>{caps(1)}</p></main>\n}\n` })
+  const x = c(app('Bytes ingested', 'n * 2'), app('Log bytes ingested', 'n * 3'))
+  assert.ok(x.includes('now says "Log bytes ingested"') && x.includes("The agent also changed lib/caps.ts, in a way plain can't describe yet"), x)
+  const pg = (label: string, extra = '') => ({ 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/usage/page.tsx': `"use client"\nexport default function Usage() {\n  ${extra}return <main><h1>Usage</h1><p>${label}</p></main>\n}\n` })
+  const y = c(pg('Bytes ingested'), pg('Press the button to finish signing in.', 'const go = () => fetch("/api/finish", { method: "POST" })\n  '))
+  assert.ok(y.includes('now sends data to your server and says "Press the button to finish signing in."'), y)
+}
+console.log('ok (page words)')

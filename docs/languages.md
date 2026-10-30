@@ -442,6 +442,10 @@ built on it ([NuxtHub][nuxthub-db]).
 
 - **Pages:** `src/routes/(app)/orders/[id=integer]/+page.svelte` is `/orders/[id]`. What
   its `load` functions read is what the page shows.
+- **Monorepos:** an app in a folder (`frontend/src/routes/...`) counts when that folder has
+  `svelte.config.*` or a `package.json` with SvelteKit; not test apps, `examples/`,
+  `templates/` or `fixtures/`. Each app uses its own `hooks.server.*` (or
+  `src/hooks.server/index.*`) and its own layouts.
 - **Server:** `+server.ts` exports one handler per method. Form `actions` in
   `+page.server.ts` are POSTs to the page's own address; `<form method="POST">` on the page
   sends to them ([SvelteKit: form actions][kit-actions]).
@@ -449,6 +453,11 @@ built on it ([NuxtHub][nuxthub-db]).
   - `hooks.server.ts` (`handle`) runs before everything: pages, form actions and `+server.ts`.
     A check there covers the paths (`url.pathname.startsWith('/admin')`) or route groups
     (`event.route.id?.startsWith('/(app)')`) it tests.
+    When the hooks send people to `/login` behind a test plain can't read (`else if
+    (!isPublicRoute) { if (!jwtPayload) redirect(307, '/login') }`), plain can't tell what they
+    cover: it says neither "requires login" nor "anyone can use" for the routes they might
+    cover, and adds a note saying so. A logout hook, an OAuth callback or sending logged-in
+    people away from `/login` isn't that.
   - A `+layout.server.ts` load that redirects keeps people out of the pages under it, and
     that's all. **Form actions run before any load function, and `+server.ts` never runs one**
     ([SvelteKit: form actions][kit-actions], [loading data][kit-load]). So a page that asks

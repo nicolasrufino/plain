@@ -5,6 +5,10 @@ You asked: "add metrics datapoint quota"
     plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
 
 WHAT CHANGED
+  Pages
+    • The dashboard settings usage page changed in a way plain can't describe yet. Ask the
+      agent what it does differently.
+      /dashboard/settings/usage
   Other files
     • The agent changed CHANGELOG.md, a notes file (not code).
     • The agent also changed packages/backend/src/capabilities/registry.ts, in a way plain

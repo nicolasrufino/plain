@@ -13,6 +13,10 @@ WHAT CHANGED
       in ways plain can't describe yet. Ask the agent what they do differently.
   Database
     • Subscriptions now also store the cancelled date.
+  Other files
+    • The agent also changed components/Card/Summary.js,
+      components/Table/SubscriptionsTable.js, utils/dataExtraction.js and utils/date.js, in
+      ways plain can't describe yet.
 
 BEFORE YOU SHIP
   1. Update your database: run `npm run dbpush` (it runs `prisma db push`) on your computer
