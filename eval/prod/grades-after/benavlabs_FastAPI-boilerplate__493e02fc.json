@@ -1,0 +1,53 @@
+{
+ "id": "benavlabs_FastAPI-boilerplate__493e02fc",
+ "summary": "API-key usage middleware records invalid/overlong client IP as none instead of a 500.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Bug fix in usage logging; no new exposure."
+  },
+  {
+   "text": "There's now a maximum address length of 45. backend/src/modules/api_keys/usage.py",
+   "kind": "description",
+   "verdict": "misleading",
+   "why": "45 limit already existed on DB columns; real change is that bad/overlong forwarded IPs are stored as empty instead of crashing the request. 'Address' reads like email/postal."
+  },
+  {
+   "text": "The agent changed docs/changelog.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Changelog."
+  },
+  {
+   "text": "The agent changed docs/user-guide/authentication/api-keys.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs."
+  },
+  {
+   "text": "The agent also added tests/unit/modules/api_keys/test_usage.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Tests."
+  },
+  {
+   "text": "The agent also changed tests/integration/api/v1/api_keys/test_usage.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Tests."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Fixes a production 500: with TRUSTED_PROXY_HOPS set, a junk/overlong X-Forwarded-For made an API-key request fail after its change was saved; now it succeeds and the usage row has no IP.",
+   "severity": "medium"
+  },
+  {
+   "what": "If a usage record can't be built it is logged and skipped, so some usage may go unrecorded.",
+   "severity": "low"
+  }
+ ],
+ "silent": false
+}

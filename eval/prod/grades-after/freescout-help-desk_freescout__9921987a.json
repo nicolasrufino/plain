@@ -1,0 +1,73 @@
+{
+ "id": "freescout-help-desk_freescout__9921987a",
+ "summary": "Internal links now open in the same tab instead of a new tab; processLinks disabled; freescout.net links from config; a debug Log::error line was left in Thread.php.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "No login/payment/DB/secret problem (the leftover debug log line is not in those areas)."
+  },
+  {
+   "text": "The agent changed prev_convs_short.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Previous-conversation links open in same tab."
+  },
+  {
+   "text": "The agent changed conversations/search.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Search results open in same tab."
+  },
+  {
+   "text": "The agent changed layouts/app.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Navbar search no longer opens a new tab."
+  },
+  {
+   "text": "The agent changed modules/modules.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "License-key URL from config."
+  },
+  {
+   "text": "The agent changed secure/logs.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Log links open in same tab."
+  },
+  {
+   "text": "The agent changed users/subscriptions_table.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Mobile app links from config."
+  },
+  {
+   "text": "The agent also changed CustomersController.php, Helper.php and Thread.php, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Real changes, including the leftover debug log in Thread.php."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Links that used to open in a new tab (search results, header search, previous conversations, links to your own helpdesk in emails, log links) now replace the current page.",
+   "severity": "medium"
+  },
+  {
+   "what": "A debug line was left in (app/Thread.php: Log::error('SKIP host=...')) that writes an error log entry every time a conversation with a link to your own helpdesk is shown.",
+   "severity": "medium"
+  },
+  {
+   "what": "The 'Recommendations' link in the outgoing-mail-problem warning lost its new-tab behaviour although it points to an external wiki.",
+   "severity": "low"
+  },
+  {
+   "what": "Card omits what the server-side changes do (Thread.php link rewriting, Helper.php warning, CustomersController.php, main.js processLinks disabled).",
+   "severity": "low"
+  }
+ ],
+ "silent": true
+}

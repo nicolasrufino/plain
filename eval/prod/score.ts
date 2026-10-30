@@ -1,13 +1,13 @@
-// Roll grades/*.json up into the numbers: per stack and overall.
+// Roll grades/*.json up into the numbers: per stack and overall. After the fixes: GRADES=grades-after CARDS=cards-after node score.ts
 import { readFileSync, readdirSync } from 'node:fs'
 const P = import.meta.dirname   // repos/, cards/, diffs/ and grades/ live next to this file
 type St = { text: string; kind: string; verdict: string; why: string }
 type G = { id: string; summary: string; statements: St[]; misses: { what: string; severity: string }[]; silent: boolean }
 const picks: { repo: string; stack: string; sha: string }[] = JSON.parse(readFileSync(`${P}/picks.json`, 'utf8'))
 const stackOf = (id: string) => picks.find(p => id.startsWith(p.repo.replace('/', '_')) && id.endsWith(p.sha.slice(0, 8)))?.stack ?? '?'
-const grades: (G & { stack: string; crashed: boolean })[] = readdirSync(`${P}/grades`).filter(f => f.endsWith('.json')).map(f => {
-  const g = JSON.parse(readFileSync(`${P}/grades/${f}`, 'utf8')) as G
-  return { ...g, stack: stackOf(g.id), crashed: readFileSync(`${P}/cards/${g.id}.txt`, 'utf8').startsWith('PLAIN CRASHED') }
+const grades: (G & { stack: string; crashed: boolean })[] = readdirSync(`${P}/${process.env.GRADES ?? 'grades'}`).filter(f => f.endsWith('.json')).map(f => {
+  const g = JSON.parse(readFileSync(`${P}/${process.env.GRADES ?? 'grades'}/${f}`, 'utf8')) as G
+  return { ...g, stack: stackOf(g.id), crashed: readFileSync(`${P}/${process.env.CARDS ?? 'cards'}/${g.id}.txt`, 'utf8').startsWith('PLAIN CRASHED') }
 })
 const pct = (a: number, b: number) => b ? `${Math.round(100 * a / b)}%` : '-'
 const row = (name: string, gs: typeof grades) => {

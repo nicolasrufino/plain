@@ -1,0 +1,8 @@
+{"id":"octobox_octobox__9c3f4937","summary":"Fixes Notification.archive so a value casting to nil (empty string from archive_selected or API) archives instead of writing archived = NULL via update_all.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"The commit fixes a data bug; no login/payment/db-schema/secret problem introduced."},
+{"text":"The agent changed app/models/notification.rb in a way plain can't describe yet.","kind":"description","verdict":"right","why":"notification.rb:80-81 really changed archive behavior; unexplained."}],
+"misses":[
+{"what":"Bug fix: a request with empty 'value' used to set archived NULL so notifications vanished from both Inbox and Archive; now they are archived.","severity":"medium"},
+{"what":"Notifications already stuck with archived = NULL are not repaired.","severity":"low"}],
+"silent":true}

@@ -1,0 +1,44 @@
+{
+ "id": "benavlabs_FastAPI-boilerplate__23851c9a",
+ "summary": "Docs/docstring-only: wiring modules documented, docs list all modules, new docs test.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Docstrings, docs, tests only."
+  },
+  {
+   "text": "The agent changed docs/user-guide/composable-features.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs."
+  },
+  {
+   "text": "The agent changed docs/user-guide/project-structure.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs."
+  },
+  {
+   "text": "The agent also changed seeders.py, wiring/admin.py, app.py, cache.py, email.py and 5 more files, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docstring-only changes in those files; vague but true."
+  },
+  {
+   "text": "The agent also added test_docs_wiring.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "New test."
+  },
+  {
+   "text": "The agent also changed backend/tests/wiring.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Test helper."
+  }
+ ],
+ "misses": [],
+ "silent": false
+}

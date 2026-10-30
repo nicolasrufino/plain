@@ -1,0 +1,35 @@
+{
+ "id": "fastapi-practices_fastapi-best-architecture__8dc1b3f2",
+ "summary": "Renames ID-list fields in admin request bodies (roles/menus/scopes/rules to *_ids); breaks old API callers.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Auth unchanged and the breaking rename isn't a login/payment/DB/secret issue, though it is something the owner must know (see misses)."
+  },
+  {
+   "text": "The agent changed the sys data scope rules, sys role menus and sys role scopes parts of your server in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Names real changed routes; omits POST/PUT /sys/users and doesn't say fields were renamed."
+  },
+  {
+   "text": "The agent also changed crud_data_scope.py, crud_role.py, crud_user.py, schema/data_scope.py, schema/role.py and 4 more files, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Accurate file list."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Admin API request fields renamed (roles/menus/scopes/rules to role_ids/menu_ids/scope_ids/rule_ids) on create user, edit user, edit role menus, role scopes and data-scope rules. Admin UI must be updated at the same time or saves fail with 422.",
+   "severity": "high"
+  },
+  {
+   "what": "Creating/editing users (role assignment) is affected too, not just rules/menus/scopes.",
+   "severity": "medium"
+  }
+ ],
+ "silent": true
+}

@@ -1,0 +1,20 @@
+{
+ "summary": "Removes an unneeded inviter eager load from the hottest-stories query; adds specs.",
+ "statements": [
+  {
+   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets...)",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Query preload tweak only."
+  },
+  {
+   "text": "The agent changed app/models/story.rb in a way plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True; query include removed, no user-visible change."
+  }
+ ],
+ "misses": [],
+ "silent": true,
+ "id": "lobsters_lobsters__afd505e4"
+}

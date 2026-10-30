@@ -1,0 +1,51 @@
+{
+ "summary": "Adds PWA support: manifest.json, CSP manifest-src, 512 icon, suppresses Chrome install prompt.",
+ "statements": [
+  {
+   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets...)",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "No login/payment/DB/secret issue."
+  },
+  {
+   "text": "The agent added public/manifest.json.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True."
+  },
+  {
+   "text": "The agent added public/touch-icon-512.png.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True."
+  },
+  {
+   "text": "The agent changed application.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True; adds manifest link."
+  },
+  {
+   "text": "The agent also changed application.js and content_security_policy.rb, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True; both are PWA-related."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Users can now install Lobsters to their home screen as a standalone app with name, icons and red theme color.",
+   "severity": "medium"
+  },
+  {
+   "what": "Installed app locked to portrait orientation.",
+   "severity": "low"
+  },
+  {
+   "what": "Chrome's automatic install prompt is suppressed; users must install from the browser menu.",
+   "severity": "low"
+  }
+ ],
+ "silent": false,
+ "id": "lobsters_lobsters__1afa6312"
+}

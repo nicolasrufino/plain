@@ -1,0 +1,35 @@
+{
+ "id": "amidaware_tacticalrmm__b6db076e",
+ "summary": "Adds nats_request wrapper turning NoResponders into a timeout so offline-agent actions report timeout instead of 500.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Error-handling fix only."
+  },
+  {
+   "text": "The agent also changed autotasks/tasks.py and nats_utils.py, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True; omits agents/models.py and explains nothing."
+  },
+  {
+   "text": "The agent also added test_nats_no_responders.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "New tests."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Talking to a disconnected agent no longer shows a server error (500); it reports offline/timed out, and bulk jobs keep other agents' results.",
+   "severity": "medium"
+  },
+  {
+   "what": "Those requests now wait the full timeout before answering (nats_utils.py:44-53).",
+   "severity": "low"
+  }
+ ],
+ "silent": true
+}

@@ -1,0 +1,47 @@
+{
+ "id": "Django-CRM_Django-CRM__10af0013",
+ "summary": "Cases and contacts CSV imports now reject rows whose tag matches an archived tag in the org (row error; commit refused with 400) instead of silently attaching a hidden archived tag; leads importer refactored onto shared Tags.archived_errors with a new message pointing to Settings > Tags; version bump 1.14.5->1.14.6 and docs.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Org-scoped, no new endpoints or permission changes."
+  },
+  {
+   "text": "• The agent changed backend/uv.lock.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Version bump only."
+  },
+  {
+   "text": "• The agent changed docs/integrations/csv-import.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs for archived-tag behaviour."
+  },
+  {
+   "text": "• The agent also changed backend/cases/services/csv_import.py, backend/contacts/services/csv_import.py and backend/leads/csv_import.py, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Real behaviour change (archived tags now row errors) but not described."
+  },
+  {
+   "text": "• The agent also changed ... test_import.py ... test_lead_import.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Test files."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Case and contact CSV imports that name an archived tag now fail: the row is flagged in preview and the whole import is refused at commit (400) until an admin restores the tag in Settings > Tags or the tag is removed from the file. Previously such rows imported and got a hidden archived tag.",
+   "severity": "medium"
+  },
+  {
+   "what": "Lead import error message for archived tags changes to \"Tag 'VIP' is archived; an admin can restore it in Settings > Tags\" (shows tag name as stored).",
+   "severity": "low"
+  }
+ ],
+ "silent": true
+}

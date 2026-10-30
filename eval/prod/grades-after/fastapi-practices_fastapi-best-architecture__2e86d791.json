@@ -1,0 +1,26 @@
+{
+ "id": "fastapi-practices_fastapi-best-architecture__2e86d791",
+ "summary": "Pure refactor of module-level globals (Final/TypeAlias, globals replaced by functions, lazy import); no user-facing change.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Refactor only; identical behaviour."
+  },
+  {
+   "text": "The agent also changed celery.py, beat.py, schedulers.py, cli.py, lifespan.py and 9 more files, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Code really changed (globals to functions, renames), though behaviour is the same."
+  },
+  {
+   "text": "The agent also changed backend/tests/utils/db.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Test-only global removed."
+  }
+ ],
+ "misses": [],
+ "silent": true
+}

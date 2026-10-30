@@ -1,0 +1,9 @@
+{"id":"Snouzy_workout-cool__0a285109","summary":"Reworks program/subscription API routes for the mobile app (mobile-compatible session reading, inlined action logic), adds logged-in /api/user/preferences backed by new User.onboardingPreferences column (no migration), scroll tweak.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Preferences route requires a session (401 otherwise) and only touches own user; ownership checks kept."},
+{"text":"New server code that shows and updates the logged-in person's own account. /api/user/preferences","kind":"description","verdict":"right","why":"GET/PUT of session user's own onboardingPreferences; fixes old 'lists users' wording."},
+{"text":"The agent changed the program enroll, program progress, session progress complete/start and revenuecat sync status parts of your server in ways plain can't describe yet.","kind":"description","verdict":"right","why":"True but uninformative."},
+{"text":"Users now also store the onboarding preferences.","kind":"description","verdict":"right","why":"schema adds onboardingPreferences Json?."},
+{"text":"The agent also changed workout-session-sets.tsx in a way plain can't describe yet.","kind":"description","verdict":"right","why":"Scroll alignment tweak."},
+{"text":"Update your database: run `npx prisma migrate dev` (live: migrate deploy). No migration was created.","kind":"step","verdict":"right","why":"No migration exists; Prisma user queries would fail without the column."}],
+"misses":[{"what":"Commit message ('server port variable') doesn't describe the change; it changes how logins are read on 6 mobile API routes.","severity":"medium"},{"what":"Enrolling via API no longer sends EnrolledInProgram analytics or revalidates the program page.","severity":"low"},{"what":"Program progress API requires login, only published/active programs, returns null instead of 404 when not enrolled.","severity":"low"}],"silent":false}

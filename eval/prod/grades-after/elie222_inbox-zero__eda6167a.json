@@ -1,0 +1,29 @@
+{
+ "id": "elie222_inbox-zero__eda6167a",
+ "summary": "Adds a 'Test connection' menu item for active MCP integrations backed by a new login-checked server action that re-syncs tools.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "No login/payment/DB/secret problem; action is behind actionClient and scoped by emailAccountId."
+  },
+  {
+   "text": "The agent changed IntegrationRow.tsx, mcp.ts, mcp.validation.ts, list-tools.ts and sync-tools.ts in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Real new feature in those files."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Users can now click 'Test connection' on a connected MCP integration and get a tool count or an auth/unreachable error.",
+   "severity": "medium"
+  },
+  {
+   "what": "Testing isn't read-only: it refreshes OAuth tokens, replaces the stored tool list, and a failed refresh can deactivate the connection.",
+   "severity": "low"
+  }
+ ],
+ "silent": true
+}

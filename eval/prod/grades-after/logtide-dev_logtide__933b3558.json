@@ -1,0 +1,39 @@
+{
+ "summary": "Opt-in Terms/Privacy acceptance backend: env-var driven, registration requires acceptTerms, /accept-terms endpoint, flags on /auth/me.",
+ "statements": [
+  {
+   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets...)",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Off by default; /accept-terms requires session; no secret exposure."
+  },
+  {
+   "text": "The agent added users/terms.ts. plain can't describe it yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True."
+  },
+  {
+   "text": "The agent changed config/index.ts, audit-log/actions.ts, settings/routes.ts, users/routes.ts and users/service.ts in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Turning the feature on breaks web sign-up: frontend has no terms checkbox, every registration gets 400 until frontend ships.",
+   "severity": "medium"
+  },
+  {
+   "what": "New opt-in ToS/Privacy acceptance controlled by three env vars; partial or invalid config makes server refuse to start.",
+   "severity": "medium"
+  },
+  {
+   "what": "Existing and SSO users who haven't accepted are only flagged, not blocked.",
+   "severity": "low"
+  }
+ ],
+ "silent": true,
+ "id": "logtide-dev_logtide__933b3558"
+}

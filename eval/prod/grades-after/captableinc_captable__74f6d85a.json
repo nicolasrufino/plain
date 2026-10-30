@@ -1,0 +1,41 @@
+{
+ "id": "captableinc_captable__74f6d85a",
+ "summary": "Adds a BankAccount table (beneficiary/bank details, account + routing numbers, type, SWIFT, primary flag) owned by a company with a migration, plus an unused placeholder BankAccountModal ('Please clone this file and implement the modal.'). Nothing in the app reads or writes bank accounts yet.",
+ "statements": [
+  {
+   "text": "! Bank accounts now store the account number as plain text. Anyone who gets a copy of your database can read it. Encrypt it, or let your payment provider keep it.",
+   "kind": "warning",
+   "verdict": "right",
+   "why": "accountNumber and routingNumber are plain String columns in schema.prisma/migration."
+  },
+  {
+   "text": "+ Your database now stores bank accounts: beneficiary name, ..., date updated. Each one belongs to a company.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Matches BankAccount model; companyId required."
+  },
+  {
+   "text": "• Companies are now linked to bank accounts.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Matches the diff."
+  },
+  {
+   "text": "1. Apply prisma/migrations/20240718223224_add_bank_account to your live database before the new code goes live (`npx prisma migrate deploy`)... Don't use the `db:migrate` script there.",
+   "kind": "step",
+   "verdict": "right",
+   "why": "Additive migration, not auto-applied; db:migrate is prisma migrate dev."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Unique index on (companyId, primary) means a company can have at most one non-primary bank account; adding a third account will fail once the feature is built.",
+   "severity": "medium"
+  },
+  {
+   "what": "A placeholder 'Please clone this file and implement the modal.' BankAccountModal was registered (not opened anywhere yet); there is no user-facing bank account feature in this commit.",
+   "severity": "low"
+  }
+ ],
+ "silent": false
+}

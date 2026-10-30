@@ -1,0 +1,25 @@
+{
+ "id": "getopenpost_openpost__5d8f0194",
+ "summary": "LinkedIn adapter resolves company Page logos through the Images API so connected Pages show an avatar.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "No login/payment/DB/secret problem."
+  },
+  {
+   "text": "The agent changed apps/server/internal/platform/linkedin.go in a way plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "linkedin.go:437-502 adds the Images API lookup."
+  }
+ ],
+ "misses": [
+  {
+   "what": "LinkedIn company Pages now show their logo as account picture (on connect and refresh); one extra LinkedIn API call per Page without a direct logo URL, silently skipped on failure.",
+   "severity": "low"
+  }
+ ],
+ "silent": true
+}

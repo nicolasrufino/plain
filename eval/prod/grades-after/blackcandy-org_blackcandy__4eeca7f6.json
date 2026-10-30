@@ -1,0 +1,37 @@
+{
+ "id": "blackcandy-org_blackcandy__4eeca7f6",
+ "summary": "Playlists page and API now list the Favorites playlist first; dev gem brakeman bumped.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Ordering only; still login-required and user-scoped."
+  },
+  {
+   "text": "The playlists part of your server changed in a way plain can't describe yet. /playlists",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Correct address, unexplained."
+  },
+  {
+   "text": "The agent changed Gemfile.lock.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "brakeman 8.0.6 -> 8.1.0."
+  },
+  {
+   "text": "The agent changed test/fixtures/playlists.yml.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Test data."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Users' Favorites playlist is now pinned at the top of the playlists list (web and API) regardless of sort.",
+   "severity": "medium"
+  }
+ ],
+ "silent": false
+}

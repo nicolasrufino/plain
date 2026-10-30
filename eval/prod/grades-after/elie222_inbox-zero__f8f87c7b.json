@@ -1,0 +1,33 @@
+{
+ "id": "elie222_inbox-zero__f8f87c7b",
+ "summary": "Bulk Unsubscribe suggestions and the inbox-health email only include senders with a usable unsubscribe link.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "No problem in logins, payments, DB or secrets."
+  },
+  {
+   "text": "The agent changed suggestions.ts, inbox-health helpers.ts, route.ts and sender-stats.ts in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Real behaviour change in those files."
+  }
+ ],
+ "misses": [
+  {
+   "what": "The 'Suggested' list on Bulk Unsubscribe no longer shows senders without a working unsubscribe link, so users may see fewer suggestions.",
+   "severity": "medium"
+  },
+  {
+   "what": "The inbox-health email only counts senders with an unsubscribe link, so counts drop and some users who used to get it won't.",
+   "severity": "medium"
+  },
+  {
+   "what": "Sender stats now prefer an http(s)/mailto unsubscribe link over junk values, so more Unsubscribe buttons work.",
+   "severity": "low"
+  }
+ ],
+ "silent": true
+}

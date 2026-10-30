@@ -1,0 +1,13 @@
+{"id":"OpnForm_OpnForm__412dd90a","summary":"Drops laravel/vapor-core: the public /vapor/signed-storage-url controller now builds the S3 presigned PUT itself (same behaviour, 5 min expiry in filesystems.php); bumps symfony/mime and @intlify tooling; api/vapor.yml stays but can no longer deploy without vapor-core.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"No login/payment/db/secret problem; signing behaviour intended identical. The Vapor deploy break is outside those areas (see misses)."},
+{"text":"The vapor signed storage URL part of your server changed in a way plain can't describe yet. /vapor/signed-storage-url","kind":"description","verdict":"right","why":"Correct endpoint, unexplained."},
+{"text":"The agent changed api/composer.json.","kind":"description","verdict":"right","why":"Removes laravel/vapor-core."},
+{"text":"The agent changed api/composer.lock.","kind":"description","verdict":"right","why":"Removes vapor-core and deps, bumps symfony/mime."},
+{"text":"The agent changed docs/deployment/docker.mdx.","kind":"description","verdict":"right","why":"True, but doesn't relay that Vapor deployments need vapor-core restored."},
+{"text":"(Hidden: 1 file ... or lockfiles.)","kind":"description","verdict":"right","why":"client/package-lock.json with @intlify bumps."}],
+"misses":[
+{"what":"If you deploy with Laravel Vapor (api/vapor.yml still present), deployments no longer work until laravel/vapor-core is restored; docker.mdx says so but the card doesn't. Docker/self-hosted unaffected.","severity":"high"},
+{"what":"File uploads to S3 are now signed by the app itself instead of the Vapor package, meant to behave the same; links still expire after 5 minutes.","severity":"medium"},
+{"what":"Security updates: symfony/mime 7.4.19 -> 7.4.22 and @intlify tooling (vue-i18n-extensions 8 -> 9, needs Node 22+ for builds).","severity":"low"}],
+"silent":false}

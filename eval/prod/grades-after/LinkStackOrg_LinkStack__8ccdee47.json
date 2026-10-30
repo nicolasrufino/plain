@@ -1,0 +1,65 @@
+{
+ "summary": "Adds global validation/sanitizer, allows SVG/GIF uploads; but truncates functions.php (parse error, site breaks) and deletes still-used block helpers.",
+ "statements": [
+  {
+   "text": "! Uploads now accept SVG files... one user could attack others, admins included. Leave SVG out or serve uploads from a separate domain.",
+   "kind": "warning",
+   "verdict": "right",
+   "why": "Real stored XSS risk via SVG uploads."
+  },
+  {
+   "text": "The agent changed the admin edit user, admin site, studio page, studio background and import data parts of your server in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True."
+  },
+  {
+   "text": "The agent changed composer.json.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True; autoload files entry added."
+  },
+  {
+   "text": "The agent changed edit-user.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True."
+  },
+  {
+   "text": "The agent changed studio/page.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True."
+  },
+  {
+   "text": "The agent changed studio/theme.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True."
+  }
+ ],
+ "misses": [
+  {
+   "what": "The whole site breaks: functions.php cut off mid-function (footer() unclosed), PHP syntax error loaded on every request.",
+   "severity": "high"
+  },
+  {
+   "what": "Block helper functions (setBlockAssetContext, block_asset, block_text, bt, ...) deleted but still used; link blocks crash.",
+   "severity": "high"
+  },
+  {
+   "what": "Admin 'Edit user' now rejects saves when password box is empty (or no handle/email).",
+   "severity": "medium"
+  },
+  {
+   "what": "Profile/page descriptions and text blocks go through a stricter HTML sanitizer; may strip formatting.",
+   "severity": "low"
+  },
+  {
+   "what": "Needs `composer dump-autoload` on deploy so validation.php is loaded.",
+   "severity": "medium"
+  }
+ ],
+ "silent": false,
+ "id": "LinkStackOrg_LinkStack__8ccdee47"
+}

@@ -1,0 +1,37 @@
+{
+ "id": "amidaware_tacticalrmm__2f131403",
+ "summary": "File browser listing now rejects page numbers above 10,000 (configurable) with a 400.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Input validation only; no login/payment/db/secret change."
+  },
+  {
+   "text": "The agent files part of your server changed in a way plain can't describe yet. /agents/[agent_id]/files",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Correct endpoint, unexplained."
+  },
+  {
+   "text": "There's now a maximum file browser page of 10,000 (your settings can change it).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "FILE_BROWSER_MAX_PAGE in constants.py, enforced in views.py."
+  },
+  {
+   "text": "The agent also changed test_file_browser.py (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Test file."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Remote file browser now refuses page numbers above 10,000 with an error; the limit is mostly explained but not the rejection behaviour.",
+   "severity": "low"
+  }
+ ],
+ "silent": false
+}

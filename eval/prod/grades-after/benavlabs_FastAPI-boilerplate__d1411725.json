@@ -1,0 +1,65 @@
+{
+ "id": "benavlabs_FastAPI-boilerplate__d1411725",
+ "summary": "PATCH /api/v1/users/{username}: scoped credentials (API keys) now need user.update to edit own profile; closes hole where read-only keys could rename owner.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "misleading",
+   "why": "This is a login/permission change: API keys lose the self-edit pass and integrations now get 403 without user.update. Card hides that."
+  },
+  {
+   "text": "The user part of your server changed in a way plain can't describe yet. /…/[username]",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Correct place (users/{username} PATCH); says nothing about the permission change."
+  },
+  {
+   "text": "The agent changed docs/changelog.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Changelog."
+  },
+  {
+   "text": "The agent changed docs/user-guide/authentication/api-keys.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs."
+  },
+  {
+   "text": "The agent changed docs/user-guide/authentication/permissions.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs."
+  },
+  {
+   "text": "The agent changed docs/user-guide/authentication/user-management.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Docs."
+  },
+  {
+   "text": "The agent also changed backend/src/modules/user/service.py, in a way plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Holds the actual permission change."
+  },
+  {
+   "text": "The agent also changed three test files (tests).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Tests."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Security fix: an API key scoped to nothing or read-only could rename its owner's account via PATCH /api/v1/users/{username}; scoped credentials now need user.update.",
+   "severity": "high"
+  },
+  {
+   "what": "API-key integrations that edit their own profile now get 403 unless scoped with user.update (and without rbac only superusers' keys can hold it). Browser sessions unaffected.",
+   "severity": "medium"
+  }
+ ],
+ "silent": true
+}

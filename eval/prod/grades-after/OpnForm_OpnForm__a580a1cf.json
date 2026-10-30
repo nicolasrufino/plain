@@ -1,0 +1,11 @@
+{"id":"OpnForm_OpnForm__a580a1cf","summary":"PDF templates can place a form's computed variables as zones; PdfGeneratorService evaluates them per submission; 0/'0' now printed; PDF cache key includes computed-variable hash; zone field_id validation stricter.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Signed download/preview routes unchanged; edit routes stay authenticated; no security/data-loss issue."},
+{"text":"The agent changed the open form PDF template submission download and open form PDF template preview parts of your server in ways plain can't describe yet.","kind":"description","verdict":"right","why":"Both routes use PdfGeneratorService, which changed; unexplained."},
+{"text":"The agent also changed PdfRightSidebar.vue and working_pdf.js, in ways plain can't describe yet.","kind":"description","verdict":"right","why":"Editor sidebar/store really changed to list and place computed variables."}],
+"misses":[
+{"what":"New feature: in the PDF editor you can add computed variables (formula results) to a PDF template, and generated PDFs fill them in per submission.","severity":"medium"},
+{"what":"Fields whose answer is 0 (or '0') now appear in generated PDFs; before they were blank.","severity":"low"},
+{"what":"All previously cached PDFs are regenerated once; PDFs refresh when computed-variable formulas change.","severity":"low"},
+{"what":"Saving a PDF template now rejects zones whose field_id isn't a real field/special field/computed variable.","severity":"low"}],
+"silent":true}

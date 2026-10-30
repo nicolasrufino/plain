@@ -186,6 +186,33 @@ only your own row vouched for a PATCH that could edit anyone, through a helper, 
 method must be the login check, reading the request, or a `prisma.user` lookup or update keyed by the login's id.
 Anything else keeps the old wording.
 
+## Where it stands now: the 70 cards regraded
+
+After all of the above, the 70 new cards ([cards-after/](../eval/prod/cards-after)) were regraded by separate agents
+following [GRADING-AFTER.md](../eval/prod/GRADING-AFTER.md). The graders started from the first pilot's ground truth (what each
+commit really does, what the owner should know) and checked the diff for anything new. Grades are in
+[grades-after/](../eval/prod/grades-after) (`GRADES=grades-after CARDS=cards-after node eval/prod/score.ts`).
+
+| | before | after |
+|---|---|---|
+| wrong or misleading reassurance | 13/46 (28%) | 6/61 (10%) |
+| wrong or misleading warning | 47/55 (85%) | 0/11 (0%) |
+| wrong or misleading description | 26/184 (14%) | 10/197 (5%) |
+| wrong or misleading step | 6/38 | 5/38 |
+| high-severity misses | 18 | 13 |
+| medium-severity misses | 62 | 61 |
+| silent cards | 32 (46%) | 40 (57%) |
+| crashed | 0 | 0 |
+
+Silent cards went up. Many cards had only a wrong "doesn't look related" flag, and with it gone nothing useful is left. The 6
+"Nothing flagged" headers that are still wrong all hide problems plain doesn't read yet:
+- a build that fails on files missing from the repo (papermark);
+- a deploy-script typo that leaves email broken (lobsters);
+- a sign-in flow change (Django-CRM);
+- API keys losing a permission (FastAPI-boilerplate);
+- an unscoped search (blackcandy);
+- inflated money totals (expense.fyi).
+
 ## Still open
 
 1. **The 2 misses above:** unscoped queries in a new endpoint, and wrong money math.

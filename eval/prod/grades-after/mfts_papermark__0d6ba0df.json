@@ -1,0 +1,12 @@
+{"id":"mfts_papermark__0d6ba0df","summary":"Adds an embed viewer on custom domains, makes the Embed code modal use it, lets any site iframe /embed paths on custom domains, and refactors the link-session cookie name helper (no behavior change).",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"No login/payment/db/secret problem; new page reuses existing viewer protections."},
+{"text":"The view domain embed page is new, titled \"Page not found.\" ... sections for Welcome ... sends verification tokens ... deletes data ...","kind":"description","verdict":"misleading","why":"It is an iframe-only embed viewer for links on a custom domain; the listed boxes/calls come from reused viewer components. Owner can't tell what the page is."},
+{"text":"The views part of your server changed in a way plain can't describe yet. /api/views","kind":"description","verdict":"misleading","why":"Only swaps the literal cookie name for a helper returning the same string; no behavior change."},
+{"text":"The agent also changed embed-code-modal.tsx, links-table.tsx, link-session.ts and domain.ts, in ways plain can't describe yet.","kind":"description","verdict":"right","why":"All four really changed (modal URL, cookie helper, frame-ancestors middleware)."},
+{"text":"Type checking is turned off in 2 spots in embed.tsx (`any`).","kind":"description","verdict":"right","why":"recordMap: any and theme: any."}],
+"misses":[
+{"what":"For links on a custom domain, the 'Embed code' modal now gives an iframe pointing to https://<custom-domain>/<slug>/embed; only works if the domain is set up and served by the app. Old embed codes keep working.","severity":"medium"},
+{"what":"Custom-domain /<slug>/embed pages can now be framed by any website (frame-ancestors * in lib/middleware/domain.ts), same as default-domain embeds.","severity":"low"},
+{"what":"Inside an embed on the same root domain the viewer's session cookie now works so downloads work.","severity":"low"}],
+"silent":false}

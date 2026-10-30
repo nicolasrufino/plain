@@ -1,0 +1,9 @@
+{"id":"octobox_octobox__2eac19a0","summary":"Adds arrow-key shortcuts on the notifications list (Down/Up like j/k, Left/Right like p/n), default scrolling suppressed, ignored while typing; updates help modal, README, tests.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Client-side keyboard shortcuts only."},
+{"text":"The agent changed README.md, a notes file (not code).","kind":"description","verdict":"right","why":"Documents the arrow shortcuts."},
+{"text":"The agent changed app/views/shared/_keyboard_mappings.html.erb.","kind":"description","verdict":"right","why":"Adds arrow rows to shortcut help."},
+{"text":"The agent also changed app/assets/javascripts/octobox.js, in a way plain can't describe yet.","kind":"description","verdict":"right","why":"This is the real feature file."}],
+"misses":[
+{"what":"Not explained what changed: arrow keys now move through notifications and switch pages, and Up/Down no longer scroll the page on screens with shortcuts enabled.","severity":"medium"}],
+"silent":false}

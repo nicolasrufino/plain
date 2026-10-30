@@ -1,0 +1,8 @@
+{"id":"pdovhomilja_nextcrm-app__7bec7fcf","summary":"Adds orderDate column to CRM orders (default today, backfilled), order page shows the date, orders tables show orderDate instead of creation date.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Additive column with default and backfill; no logins, money or data loss."},
+{"text":"Each crm order page changed in a way plain can't describe yet.","kind":"description","verdict":"right","why":"Order page now shows 'Date: ...' (orders/[orderId]/page.tsx:36)."},
+{"text":"Crm orders now also store the order date.","kind":"description","verdict":"right","why":"crm_Orders.orderDate."},
+{"text":"The agent also changed OrdersTable.tsx and lib/orders/serialize.ts, in ways plain can't describe yet.","kind":"description","verdict":"right","why":"Table date column now uses orderDate; serializer includes it."},
+{"text":"Apply prisma/migrations/20261013000000_order_date before the new code goes live.","kind":"step","verdict":"right","why":"Valid additive migration; Prisma selects all columns."}],
+"misses":[{"what":"Orders list date column now shows order date instead of created date; same for existing orders.","severity":"low"},{"what":"Order date is the UTC creation day and can't be edited; late-evening orders may show neighbouring day.","severity":"low"}],"silent":false}

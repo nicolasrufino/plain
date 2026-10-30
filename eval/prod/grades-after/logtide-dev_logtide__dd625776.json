@@ -1,0 +1,43 @@
+{
+ "summary": "Adds monthly metrics datapoint quota; OTLP metrics ingest returns 429 over it; shown on Usage page.",
+ "statements": [
+  {
+   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets...)",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Default unlimited; check inside authenticated ingest route."
+  },
+  {
+   "text": "The agent changed CHANGELOG.md, a notes file (not code).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True, but not the real change."
+  },
+  {
+   "text": "The agent also changed capabilities/registry.ts, in a way plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True; adds the new quota."
+  },
+  {
+   "text": "Type checking turned off in 1 spot in metric-routes.ts (`any`).",
+   "kind": "warning",
+   "verdict": "right",
+   "why": "(error as any).statusCode; harmless."
+  },
+  {
+   "text": "Type checking turned off in 3 spots in ingestion-quota.test.ts (`any`).",
+   "kind": "warning",
+   "verdict": "right",
+   "why": "Test-only; harmless."
+  }
+ ],
+ "misses": [
+  {
+   "what": "New monthly cap on metric datapoints per org: once set and exceeded, OpenTelemetry metrics get 429 while logs and traces keep flowing; shown on Usage page.",
+   "severity": "medium"
+  }
+ ],
+ "silent": true,
+ "id": "logtide-dev_logtide__dd625776"
+}

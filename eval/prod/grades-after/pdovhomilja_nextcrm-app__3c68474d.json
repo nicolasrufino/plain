@@ -1,0 +1,11 @@
+{"id":"pdovhomilja_nextcrm-app__3c68474d","summary":"Database-only groundwork for price lists (new tables, enums, nullable pricelist_id on accounts, parentId on categories). Migration file begins with two lines of pnpm output, so it is invalid SQL and fails when applied.",
+"statements":[
+{"text":"1 problem: migration.sql starts with \"Already up to date\", terminal output not SQL; applying it will fail.","kind":"warning","verdict":"right","why":"migration.sql lines 1-2 are pnpm output; migrate deploy fails."},
+{"text":"Your database now stores crm price lists ... can have many crm price list rules, crm price list rules and crm accounts.","kind":"description","verdict":"right","why":"Matches crm_PriceLists; duplicated 'rules' wording is clumsy but true."},
+{"text":"Your database now stores crm price list rules ... belongs to a crm price lists, a crm price lists, a crm product categories and a crm products.","kind":"description","verdict":"right","why":"Matches crm_PriceListRules."},
+{"text":"Crm accounts are now linked to crm price lists.","kind":"description","verdict":"right","why":"crm_Accounts.pricelist_id."},
+{"text":"Currencies are now linked to crm price lists.","kind":"description","verdict":"right","why":"FK to Currency.code."},
+{"text":"Crm product categories are now linked to crm product categories, crm product categories and crm price list rules.","kind":"description","verdict":"right","why":"parentId tree + priceRules."},
+{"text":"Crm products are now linked to crm price list rules.","kind":"description","verdict":"right","why":"priceRules relation."},
+{"text":"Apply prisma/migrations/20261011000000_price_lists to your live database before the new code goes live, or pages that load crm accounts and categories can fail.","kind":"step","verdict":"right","why":"Correct; the card also tells the owner to fix the invalid SQL lines first in the problem box."}],
+"misses":[{"what":"Nothing visible changes for users yet; database structure only.","severity":"low"}],"silent":false}

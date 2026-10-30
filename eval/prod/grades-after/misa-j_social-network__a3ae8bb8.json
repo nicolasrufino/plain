@@ -1,0 +1,7 @@
+{"id":"misa-j_social-network__a3ae8bb8","summary":"AWS deploy prep: moves the static-files/catch-all index.html handler after the /api routers (before, every GET to /api/* such as email activation was swallowed and returned index.html), adds a public GET /api/user/status health check returning {message:'Ok'}, gitignores ECS task JSON.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Health route is public but returns only {message:'Ok'}; no login/payment/db/secret problem."},
+{"text":"New server code that lists data and works without logging in. /api/user/status","kind":"description","verdict":"misleading","why":"Public is correct (no checkAuth), but it lists no data, only returns {message:'Ok'}; owner may think user data is exposed."}],
+"misses":[
+{"what":"Before this commit the catch-all app.get('*') sat before the API routers, so every GET API request (e.g. email activation link /api/user/email/activate/:token) returned the React index.html; app.js reorder fixes that. Card doesn't mention app.js.","severity":"medium"}],
+"silent":false}

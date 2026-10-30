@@ -1,0 +1,26 @@
+{
+ "id": "fastapi-practices_fastapi-best-architecture__8d9a79de",
+ "summary": "Refactor only: repeated Redis key strings hoisted into local variables; no behaviour change.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Identical keys and calls."
+  },
+  {
+   "text": "The monitors sessions part of your server changed in a way plain can't describe yet. /\u2026/monitors/sessions",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Route is GET /api/v1/monitors/sessions (online.py), correctly named; code changed though behaviour didn't."
+  },
+  {
+   "text": "The agent also changed auth_service.py, user_password_history_service.py, user_service.py, schedulers.py, jwt.py and 2 more files, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Same key-variable refactor in those files."
+  }
+ ],
+ "misses": [],
+ "silent": true
+}

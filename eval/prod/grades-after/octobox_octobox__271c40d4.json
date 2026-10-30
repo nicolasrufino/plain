@@ -1,0 +1,9 @@
+{"id":"octobox_octobox__271c40d4","summary":"Notification preview prev/next links are now computed within active filters instead of the whole inbox; shows a 'Draft'/'Not draft' chip in the filter bar.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Show route still behind authentication and scoped to current_user; no login/payment/db/secret issue."},
+{"text":"The notification show part of your server changed in a way plain can't describe yet. /notifications/[id]/show","kind":"description","verdict":"right","why":"Correct route, no explanation."},
+{"text":"The agent changed app/views/notifications/_filter-list.html.erb.","kind":"description","verdict":"right","why":"Adds the Draft/Not draft chip; unexplained."}],
+"misses":[
+{"what":"Previous/next buttons in the notification preview now stay inside the current filter instead of jumping to unrelated inbox items.","severity":"medium"},
+{"what":"A 'Draft' / 'Not draft' chip appears in the active-filters bar when the draft filter is on.","severity":"low"}],
+"silent":true}

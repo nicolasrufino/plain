@@ -1,0 +1,29 @@
+{
+ "summary": "Wires DELETE /api/v1/me (login required) to deleteProfile which permanently deletes the user's account and posts; fixes missing Post import; suggested users now last 5.",
+ "statements": [
+  {
+   "text": "! People can now delete their own account... make sure the app asks them to confirm first and the rest of their data is deleted or kept the way you want.",
+   "kind": "warning",
+   "verdict": "right",
+   "why": "Accurate; irreversible, no password re-check, partial cleanup (comments, likes, chats remain)."
+  },
+  {
+   "text": "The v1 me part of your server now lets people delete their own account. /api/v1/me",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Matches the new DELETE route."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Deletion is partial and not atomic: user removed first, a missing post makes it fail half-way; comments, likes, saves and chats left behind.",
+   "severity": "medium"
+  },
+  {
+   "what": "Suggested-users list now shows the last 5 candidate users instead of the first 5.",
+   "severity": "low"
+  }
+ ],
+ "silent": false,
+ "id": "jigar-sable_instagram-mern__45036c1f"
+}

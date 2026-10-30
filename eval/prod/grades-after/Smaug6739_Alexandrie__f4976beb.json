@@ -1,0 +1,6 @@
+{"id":"Smaug6739_Alexandrie__f4976beb","summary":"Fixes OIDC first sign-up failing for long picture claims: users.avatar widened to TEXT (migration applied automatically at startup); non-http(s) or >2048 char pictures are no longer stored.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Widening column, no data loss or new exposure."},
+{"text":"The auth oidc callback part of your server changed in a way plain can't describe yet. /api/auth/oidc/[provider]/callback","kind":"description","verdict":"right","why":"Correct address; true but doesn't say it fixes sign-up."},
+{"text":"Apply 000021_users_avatar_text.up.sql to your live database before the new code goes live (migrate ...), or the parts that use it will fail.","kind":"step","verdict":"misleading","why":"Server applies embedded migrations at startup (app/migrations.go), so no manual step; without it nothing new breaks."}],
+"misses":[{"what":"Fixes SSO: first-time OIDC users with long/base64 picture (e.g. Authentik) previously hit a DB error and couldn't sign up.","severity":"medium"},{"what":"Migration runs automatically on start; down migration fails if any avatar >150 chars.","severity":"low"},{"what":"New OIDC users with a non-http(s) picture now get no avatar.","severity":"low"}],"silent":false}

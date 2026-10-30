@@ -1,0 +1,12 @@
+{"id":"moinulmoin_chadnext__ffaf659e","summary":"Stripe webhook: period end now from current_period_end instead of ended_at (null -> 1970, paying users never Pro); handles async_payment_succeeded; database updates wrapped in try/catch that only logs, still returning 200. Billing button loading cleanup; adds local .cursor/mcp.json.",
+"statements":[
+{"text":"If saving to your database fails in your Stripe webhook, the error is caught and Stripe is still told it worked, so it won't try again. A customer can pay and never get what they paid for. Answer with 500.","kind":"warning","verdict":"right","why":"webhooks/stripe/route.ts catches and only logs db failures, then returns 200."},
+{"text":"The stripe part of your server changed in a way plain can't describe yet ... Make a test payment before you ship. /api/stripe","kind":"description","verdict":"right","why":"Only removed billing_address_collection 'auto' (Stripe default); test payment reasonable."},
+{"text":"The webhooks stripe part of your server changed in a way plain can't describe yet. /api/webhooks/stripe","kind":"description","verdict":"right","why":"True but empty: doesn't mention the Pro-status fix."},
+{"text":"The agent added .cursor/mcp.json.","kind":"description","verdict":"right","why":"Local editor config; doesn't affect the app."},
+{"text":"The agent also changed src/components/billing-form.tsx, in a way plain can't describe yet.","kind":"description","verdict":"right","why":"Loading-state change in the button."},
+{"text":"In Stripe, make sure it receives checkout.session.async_payment_succeeded ... until then the new code for it never runs.","kind":"step","verdict":"misleading","why":"Checkout uses payment_method_types ['card'], which never emits async_payment_succeeded, so the branch can't run anyway; step suggests needed setup that changes nothing."}],
+"misses":[
+{"what":"Fix: paying subscribers were saved with period end from ended_at (null -> 1970) so they never showed as Pro; now current_period_end is stored and Pro works after checkout and renewals.","severity":"high"},
+{"what":"Upgrade/Manage button now stops spinning if Stripe returns no URL.","severity":"low"}],
+"silent":false}

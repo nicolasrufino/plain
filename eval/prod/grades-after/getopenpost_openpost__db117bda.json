@@ -1,0 +1,14 @@
+{
+ "id": "getopenpost_openpost__db117bda",
+ "summary": "Test-only: consolidates duplicate Go server tests across 15 *_test.go files.",
+ "statements": [
+  {
+   "text": "Nothing about the app changed.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Only *_test.go files changed."
+  }
+ ],
+ "misses": [],
+ "silent": false
+}

@@ -1,0 +1,29 @@
+{
+ "summary": "Usage page hides Unlimited quota rows only under combined telemetry cap; card renamed 'Log bytes ingested'.",
+ "statements": [
+  {
+   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets...)",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Frontend display only."
+  },
+  {
+   "text": "The agent changed usage-capabilities.ts and usage/+page.svelte in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True; changes visible rows and a card title."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Self-hosters capping a single quota now see all other quotas listed as 'Unlimited' on Settings > Usage.",
+   "severity": "low"
+  },
+  {
+   "what": "Usage card 'Bytes ingested' renamed 'Log bytes ingested'.",
+   "severity": "low"
+  }
+ ],
+ "silent": true,
+ "id": "logtide-dev_logtide__c993470c"
+}

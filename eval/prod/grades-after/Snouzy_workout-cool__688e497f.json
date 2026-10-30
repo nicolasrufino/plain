@@ -1,0 +1,5 @@
+{"id":"Snouzy_workout-cool__688e497f","summary":"Adds a 'What's New' note (Portuguese + donation banner, Sponsors/Ko-fi links) in 6 languages, links the HN note title, renders release notes as HTML and scrolls.",
+"statements":[
+{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Static strings in code; no logins, payments, DB or secrets issue."},
+{"text":"The agent changed locales/en.ts ... and 3 more files in ways plain can't describe yet.","kind":"description","verdict":"right","why":"Files really changed with visible user effect, but nothing useful said."}],
+"misses":[{"what":"New 'What's New' note shown to all users announcing Portuguese support and donation banner with GitHub Sponsors/Ko-fi links.","severity":"medium"},{"what":"Release-notes dialog now injects translation text as raw HTML; safe today, risky for untrusted future text.","severity":"low"},{"what":"Commit doesn't add Portuguese or the banner; it only announces them.","severity":"low"}],"silent":true}

@@ -1,0 +1,29 @@
+{
+ "id": "freescout-help-desk_freescout__46bd96f4",
+ "summary": "Adds indexed notifications.conversation_id column (migration backfills) and marks notifications read by exact id instead of LIKE on JSON.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Route still behind auth and authorize; query scoped to the user; no data loss."
+  },
+  {
+   "text": "1. Apply 2026_08_28_010101_add_conversation_id_column_to_notifications_table to your live database before the new code goes live (`php artisan migrate --force`), or the parts that use it will fail.",
+   "kind": "step",
+   "verdict": "right",
+   "why": "Without the column, opening a conversation and creating notifications hit SQL errors."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Card never says what changed: opening a conversation now marks its notifications read via the new indexed column and no longer wrongly marks those of conversations with the same leading digits (#12 vs #123).",
+   "severity": "medium"
+  },
+  {
+   "what": "The migration backfills every existing notification row in batches after a full LIKE scan; on large help desks it can take long, and the new code fails if live before it finishes.",
+   "severity": "medium"
+  }
+ ],
+ "silent": false
+}
