@@ -7586,3 +7586,81 @@ console.log('ok (review 67)')
     assert.ok(c(srv('throw err'), srv(cat)).includes(HOOK), `not a flag: ${cat}`)
 }
 console.log('ok (review 68)')
+// Wrong descriptions from the pilot: an address plain only knows the end of, a GET that lists nothing, the logged-in person's own
+// account, a helper that became a server action
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  // FastAPI routers mounted from a table plain can't follow (FastAPI-boilerplate): "…/[username]", named for the folder
+  const fa = { 'requirements.txt': 'fastapi\n', 'backend/src/interfaces/api/v1/__init__.py': 'from fastapi import APIRouter\nfrom ..wiring import ROUTER_MOUNTS\nrouter = APIRouter(prefix="/v1")\nfor m in ROUTER_MOUNTS:\n    router.include_router(m.router, prefix=m.prefix)\n',
+    'backend/src/modules/user/routes.py': 'from fastapi import APIRouter\nrouter = APIRouter()\n@router.get("/{username}")\ndef read(username: str):\n    return {"username": username}\n' }
+  const lost = c(fa, { ...fa, 'backend/src/modules/user/routes.py': fa['backend/src/modules/user/routes.py'].replace('return', 'x = 1\n    return') })
+  assert.ok(lost.includes('The user part of your server') && lost.includes('/…/[username]') && !lost.includes(' /[username]'), lost)
+  const mounted = { ...fa, 'backend/src/interfaces/api/v1/__init__.py': 'from fastapi import APIRouter\nfrom ....modules.user import routes as users\nrouter = APIRouter(prefix="/v1")\nrouter.include_router(users.router, prefix="/users")\n' }
+  assert.ok(c(mounted, { ...mounted, 'backend/src/modules/user/routes.py': fa['backend/src/modules/user/routes.py'].replace('return', 'x = 1\n    return') }).includes('/v1/users/[username]'), 'a router plain can follow keeps its address')
+  // a status endpoint that reads no table (social-network): "answers requests", not "lists data"
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0"}}', 'server.js': 'const express = require("express")\nconst app = express()\napp.listen(3000)\n' }
+  const st = c(ex, { ...ex, 'server.js': 'const express = require("express")\nconst app = express()\napp.get("/api/user/status", (req, res) => res.json({ message: "Ok" }))\napp.listen(3000)\n' })
+  assert.ok(st.includes('answers requests') && !st.includes('lists data'), st)
+  // the logged-in person's own account (workout-cool); a list or another person's row isn't
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n', 'auth.ts': 'export const auth = async () => null as any\n' }
+  const pref = (where: string) => c(nx, { ...nx, 'app/api/user/preferences/route.ts': `import { auth } from "@/auth"\nimport { prisma } from "@/lib/db"\nexport async function GET() {\n  const session = await auth()\n  if (!session) return new Response(null, { status: 401 })\n  return Response.json(await prisma.user.findUnique({ where: ${where} }))\n}\nexport async function PUT(req: Request) {\n  const session = await auth()\n  if (!session) return new Response(null, { status: 401 })\n  return Response.json(await prisma.user.update({ where: ${where}, data: await req.json() }))\n}\n` })
+  assert.ok(pref('{ id: session.user.id }').includes("shows and updates the logged-in person's own account"), 'own account')
+  assert.ok(!pref('{ id: (await req.json()).id }').includes('own account'), 'someone else')
+  // a helper moved into a "use server" file (chadnext): not new, now callable from the browser
+  const old = { ...nx, 'src/lib/subscription.ts': 'import { prisma } from "@/lib/db"\nexport async function getPlan(userId: string) {\n  return prisma.user.findFirst({ where: { id: userId } })\n}\n' }
+  const moved = c(old, { ...nx, 'src/actions/subscription.ts': '"use server"\nimport { prisma } from "@/lib/db"\nexport async function getPlan(userId: string) {\n  return prisma.user.findFirst({ where: { id: userId } })\n}\n' })
+  assert.ok(moved.includes('getPlan() was a helper in src/lib/subscription.ts. It moved into a "use server" file, so the browser can now call it directly.') && !moved.includes('New server code'), moved)
+}
+console.log('ok (pilot descriptions)')
+// Review 69: someone else's id isn't your own account; a kept or duplicated helper didn't move; aliased mounts and prefixes from settings
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n' }
+  const open = c(nx, { ...nx, 'pages/api/users/[id].ts': 'import { prisma } from "@/lib/db"\nexport default async function h(req: any, res: any) {\n  if (req.method === "GET") return res.json(await prisma.user.findUnique({ where: { id: req.query.id } }))\n  return res.json(await prisma.user.update({ where: { id: req.query.id }, data: req.body }))\n}\n' })
+  assert.ok(!open.includes('own account'), open)
+  const lib = { ...nx, 'lib/api.ts': 'export async function deletePost(id: string) {\n  return fetch(`/api/posts/${id}`, { method: "DELETE" })\n}\n' }
+  const act = { 'app/actions.ts': '"use server"\nimport { prisma } from "@/lib/db"\nexport async function deletePost(id: string) {\n  await prisma.post.delete({ where: { id } })\n}\n' }
+  assert.ok(!c(lib, { ...lib, ...act }).includes('was a helper'), 'a fetch wrapper kept in place')
+  const helper = { ...nx, 'lib/posts.ts': 'import { prisma } from "@/lib/db"\nexport async function deletePost(id: string) {\n  await prisma.post.delete({ where: { id } })\n}\n' }
+  assert.ok(!c(helper, { ...helper, ...act }).includes('was a helper'), 'duplicated, old one kept')
+  const fa = { 'requirements.txt': 'fastapi\n', 'shop/orders.py': 'from fastapi import APIRouter\nrouter = APIRouter()\n@router.get("/items")\ndef items():\n    return []\n' }
+  const alias = { ...fa, 'shop/main.py': 'from fastapi import FastAPI\nfrom shop.orders import router as orders_router\napp = FastAPI()\napp.include_router(orders_router, prefix="/api")\n' }
+  assert.ok(c(alias, { ...alias, 'shop/orders.py': fa['shop/orders.py'].replace('return []', 'x = 1\n    return []') }).includes('/api/items'), 'an aliased router keeps its prefix')
+  const setting = { ...fa, 'shop/main.py': 'from fastapi import FastAPI\nfrom shop.orders import router\napp = FastAPI()\napp.include_router(router, prefix=settings.API_V1_STR)\n' }
+  const s = c(setting, { ...setting, 'shop/orders.py': fa['shop/orders.py'].replace('return []', 'x = 1\n    return []') })
+  assert.ok(s.includes('/…/items') && !s.includes(' /items'), s)
+}
+console.log('ok (review 69)')
+// Review 70: each method must be keyed by the login on its own; folder names don't repeat the address
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n', 'auth.ts': 'export const auth = async () => null as any\n', 'lib/users.ts': 'import { prisma } from "@/lib/db"\nexport const updateUser = (id: string, d: any) => prisma.user.update({ where: { id }, data: d })\n' }
+  const get = 'import { auth } from "@/auth"\nimport { prisma } from "@/lib/db"\nimport { updateUser } from "@/lib/users"\nexport async function GET() {\n  const session = await auth()\n  if (!session) return new Response(null, { status: 401 })\n  return Response.json(await prisma.user.findUnique({ where: { id: session.user.id } }))\n}\n'
+  for (const patch of ['const b = await req.json()\n  return Response.json(await updateUser(b.id, b))', 'const b = await req.json()\n  await prisma.$executeRaw`UPDATE "User" SET name = ${b.name} WHERE id = ${b.id}`\n  return new Response(null)'])
+    assert.ok(!c(nx, { ...nx, 'app/api/me/route.ts': get + `export async function PATCH(req: Request) {\n  const session = await auth()\n  if (!session) return new Response(null, { status: 401 })\n  ${patch}\n}\n` }).includes('own account'), `a write the GET can't vouch for: ${patch.slice(0, 40)}`)
+  const fa = { 'requirements.txt': 'fastapi\n', 'app/users/router.py': 'from fastapi import APIRouter\nrouter = APIRouter()\n@router.get("/users/{uid}")\ndef one(uid: int):\n    return {}\n', 'app/main.py': 'from fastapi import FastAPI\nfrom app.users.router import router\napp = FastAPI()\napp.include_router(router, prefix=settings.API)\n' }
+  const dup = c(fa, { ...fa, 'app/users/router.py': fa['app/users/router.py'].replace('return {}', 'x = 1\n    return {}') })
+  assert.ok(dup.includes('The user part of your server') && !dup.includes('users user'), dup)
+}
+console.log('ok (review 70)')
+// Review 71: a method that looks itself up and then writes another way isn't "own account"; file names before folder names
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}', 'lib/db.ts': 'export const prisma = {} as any\n', 'auth.ts': 'export const auth = async () => null as any\n' }
+  const route = (patch: string) => c(nx, { ...nx, 'app/api/me/route.ts': `import { auth } from "@/auth"\nimport { prisma } from "@/lib/db"\nexport async function PATCH(req: Request) {\n  const session = await auth()\n  if (!session) return new Response(null, { status: 401 })\n  const me = await prisma.user.findUnique({ where: { id: session.user.id } })\n  ${patch}\n  return Response.json(me)\n}\n` })
+  assert.ok(route('await prisma.user.update({ where: { id: session.user.id }, data: await req.json() })').includes('own account'), 'control')
+  for (const p of ['await prisma.user.updateMany({ data: await req.json() })', 'const b = await req.json()\n  await updateUser(b.id, b)', 'await prisma.user.deleteMany({})'])
+    assert.ok(!route(p).includes('own account'), `not own: ${p}`)
+  const fa = { 'requirements.txt': 'fastapi\n', 'myshop/routers/orders.py': 'from fastapi import APIRouter\nrouter = APIRouter()\n@router.get("/{oid}")\ndef one(oid: int):\n    return {}\n', 'myshop/main.py': 'from fastapi import FastAPI\nfrom myshop.routers.orders import router\napp = FastAPI()\napp.include_router(router, prefix=settings.API)\n' }
+  assert.ok(c(fa, { ...fa, 'myshop/routers/orders.py': fa['myshop/routers/orders.py'].replace('return {}', 'x = 1\n    return {}') }).includes('The orders part of your server'), 'file name first')
+}
+console.log('ok (review 71)')
+// a router whose own prefix comes from settings (fastapi-best-architecture): "…", and the address's own words name it
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const fa = { 'requirements.txt': 'fastapi\n', 'app/api/router.py': 'from fastapi import APIRouter\nfrom app.api.monitor import router as monitor_router\nv1 = APIRouter(prefix=settings.API_V1_PATH)\nv1.include_router(monitor_router)\n',
+    'app/api/monitor.py': 'from fastapi import APIRouter\nrouter = APIRouter()\n@router.get("/monitors/sessions")\ndef s():\n    return []\n', 'app/main.py': 'from fastapi import FastAPI\nfrom app.api.router import v1\napp = FastAPI()\napp.include_router(v1)\n' }
+  const x = c(fa, { ...fa, 'app/api/monitor.py': fa['app/api/monitor.py'].replace('return []', 'y = 1\n    return []') })
+  assert.ok(x.includes('The monitors sessions part of your server') && x.includes('/…/monitors/sessions'), x)
+}
+console.log('ok (settings prefix)')

@@ -165,6 +165,26 @@ To stay quiet on code like that, the rules give up some real cases:
 - a webhook whose save is inside a helper function;
 - SVG lists spread over several lines.
 
+## Third round: wrong descriptions
+
+Wrong statements cost more than silence, so these were fixed before the silent cards. On the 70 commits, only these five
+cards changed:
+
+| App | Before | Now |
+|---|---|---|
+| FastAPI-boilerplate | "The main part … `/[username]`" (real: `/api/v1/users/{username}`, mounted from a list built at runtime) | "The user part … `/…/[username]`": a partial address, marked as one |
+| fastapi-best-architecture | "The main part … `/`" (real: `/api/v1/monitors/sessions`) | "The monitors sessions part … `/…/monitors/sessions`": routers imported under another name are followed now, and a prefix from settings is `…` |
+| fastapi-best-architecture | "the rules, menus and scopes parts" | "the sys data scope rules, sys role menus and sys role scopes parts" |
+| workout-cool | "lists users and updates users" | "shows and updates the logged-in person's own account" |
+| chadnext | "New server code that looks up users" | "getUserSubscriptionPlan() was a helper in src/lib/subscription.ts. It moved into a "use server" file, so the browser can now call it directly." |
+
+On the demo apps, two health checks that return `{ ok: true }` now "answer requests" instead of "list data".
+
+Three review rounds found 3 problems each. The "own account" rule leaked three times: a GET that read
+only your own row vouched for a PATCH that could edit anyone, through a helper, `updateMany` or raw SQL. It's strict now. Every call in every
+method must be the login check, reading the request, or a `prisma.user` lookup or update keyed by the login's id.
+Anything else keeps the old wording.
+
 ## Still open
 
 1. **The 2 misses above:** unscoped queries in a new endpoint, and wrong money math.

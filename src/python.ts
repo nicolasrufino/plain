@@ -9,7 +9,7 @@ import { parserFor } from './treesitter.ts'
 const parser = await parserFor('tree-sitter-python.wasm')   // null when web-tree-sitter isn't installed: Python files are skipped
 
 // servers: routers/apps/blueprints made in this file; aliases: CurrentUser = Annotated[User, Depends(get_current_user)]
-export type PyFacts = FileFacts & { models: Map<string, string[]>; risks: Set<string>; servers: Map<string, { prefix: string; guard: boolean }>
+export type PyFacts = FileFacts & { models: Map<string, string[]>; risks: Set<string>; servers: Map<string, { prefix: string; guard: boolean; router?: boolean }>
   aliases: Map<string, boolean>; appGuard: boolean; dj: Dj }
 // Django. A view's routes are relative to where urls.py puts it: '' for a plain view, '/[pk]' and '/[pk]/pay' for a DRF viewset.
 // guard: true / false / 'writes' (only changes need login) / undefined (DRF view without its own: the settings decide).
@@ -153,7 +153,7 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
     if (right?.type !== 'call') continue
     const fn = fnName(right)
     if (/^(FastAPI|APIRouter|Flask|Blueprint)$/.test(fn.split('.').at(-1)!))
-      servers.set(left, { prefix: str(kw(right, 'prefix') ?? kw(right, 'url_prefix')) ?? '', guard: depGuard(kw(right, 'dependencies')?.text ?? '') })
+      servers.set(left, { prefix: ((x = kw(right, 'prefix') ?? kw(right, 'url_prefix')) => x && str(x) === undefined ? '/…' : str(x) ?? '')(), guard: depGuard(kw(right, 'dependencies')?.text ?? ''), router: /^APIRouter$/.test(fn.split('.').at(-1)!) })
     // CurrentUser = Annotated[User, Depends(get_current_user)]: a parameter typed CurrentUser is a login check
     if (/^[A-Z]\w*$/.test(left) && /^Annotated\[/.test(right?.text ?? '')) f.aliases.set(left, depGuard(right!.text))
   }
@@ -200,9 +200,11 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
   for (const c of all(root, 'call')) {
     const fn = fnName(c), last = fn.split('.').at(-1)!, parent = fn.split('.').slice(0, -1).join('.')
     if (!/^(include_router|register_blueprint)$/.test(last) || !servers.has(parent) && !f.binds.has(parent)) continue
-    const t = pos(c)[0]?.text ?? '', [target, attr] = t.includes('.') ? [t.split('.')[0], t.split('.').slice(1).join('.')] : [t, t]
+    // (an imported router under another name, `from shop.orders import router as orders_router`: keyed by its own name, `router`;
+    // a prefix that isn't written out, `prefix=settings.API_V1_STR`, is "…")
+    const t = pos(c)[0]?.text ?? '', [target, attr] = t.includes('.') ? [t.split('.')[0], t.split('.').slice(1).join('.')] : [t, f.binds.get(t)?.split('.').at(-1) ?? t]
     const given = kw(c, 'prefix') ?? kw(c, 'url_prefix')
-    if (target) f.mounts.push({ server: parent, path: str(given) ?? '', target, attr, guard: depGuard(kw(c, 'dependencies')?.text ?? ''), guardLike: false,
+    if (target) f.mounts.push({ server: parent, path: given && str(given) === undefined ? '/…' : str(given) ?? '', target, attr, guard: depGuard(kw(c, 'dependencies')?.text ?? ''), guardLike: false,
       override: last === 'register_blueprint' && !!given })
   }
   // Mounted in the same file: fold the mount into the routes right away

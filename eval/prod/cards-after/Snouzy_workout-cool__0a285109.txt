@@ -6,7 +6,7 @@ You asked: "chore: update server port variable to uppercase for clarity and cons
 
 WHAT CHANGED
   Server
-    + New server code that lists users and updates users.
+    + New server code that shows and updates the logged-in person's own account.
       /api/user/preferences
     • The agent changed the program enroll, program progress, programs session progres
       complete, programs session progress start and revenuecat sync status parts of your

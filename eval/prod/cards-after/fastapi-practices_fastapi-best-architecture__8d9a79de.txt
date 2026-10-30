@@ -6,9 +6,9 @@ You asked: "Reuse Redis key strings in local variables (#1259)"
 
 WHAT CHANGED
   Server
-    • The main part of your server changed in a way plain can't describe yet. Ask the agent
-      what it does differently.
-      /
+    • The monitors sessions part of your server changed in a way plain can't describe yet.
+      Ask the agent what it does differently.
+      /…/monitors/sessions
   Other files
     • The agent also changed backend/app/admin/service/auth_service.py,
       backend/app/admin/service/user_password_history_service.py,

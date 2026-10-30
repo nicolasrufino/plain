@@ -13,7 +13,8 @@ WHAT CHANGED
       what it does differently.
       /[locale]/dashboard/billing
   Server
-    + New server code that looks up users.
+    + getUserSubscriptionPlan() was a helper in src/lib/subscription.ts. It moved into a
+      "use server" file, so the browser can now call it directly. It looks up users.
       (server action) getUserSubscriptionPlan in src/actions/subscription.ts
     • The stripe part of your server changed in a way plain can't describe yet. This is the
       code that charges your customers 💰 Make a test payment before you ship.

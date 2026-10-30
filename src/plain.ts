@@ -1787,13 +1787,13 @@ export function appFacts(snap: Snap) {
     if (q) pyMounts.set(`${q}::${m.attr}`, { from: p, server: m.server, path: m.path.replace(/\/$/, ''), guard: m.guard, override: !!m.override })
   }
   const pyServer = (file: string, name: string) => (files.get(file) as PyFacts | undefined)?.servers?.get(name)
-  const pyPrefix = (file: string, server: string, seen = new Set<string>()): { path: string; guard: boolean; override: boolean } => {
+  const pyPrefix = (file: string, server: string, seen = new Set<string>()): { path: string; guard: boolean; override: boolean; found?: boolean } => {
     const k = `${file}::${server}`, m = pyMounts.get(k)
     if (!m || seen.has(k)) return { path: '', guard: false, override: false }
     seen.add(k)
     const pf = !pyServer(m.from, m.server) && files.get(m.from)!.binds.has(m.server) ? target(m.from, m.server) ?? m.from : m.from   // parent imported too
     const up = pyPrefix(pf, m.server, seen), parent = pyServer(pf, m.server)
-    return { path: up.path + (up.override ? '' : (parent?.prefix ?? '').replace(/\/$/, '')) + m.path, guard: up.guard || !!parent?.guard || m.guard, override: m.override }
+    return { path: up.path + (up.override ? '' : (parent?.prefix ?? '').replace(/\/$/, '')) + m.path, guard: up.guard || !!parent?.guard || m.guard, override: m.override, found: true }
   }
   const pyAliases = new Map([...files.values()].flatMap(f => [...((f as PyFacts).aliases ?? [])]))
   const pyAppGuard = [...files.values()].some(f => (f as PyFacts).appGuard)
@@ -1801,7 +1801,15 @@ export function appFacts(snap: Snap) {
     let file = p, own = h.own ?? '', g = false
     if (h.imported) { const q = target(p, h.server); if (q) { file = q; own = pyServer(q, h.server)?.prefix ?? ''; g = !!pyServer(q, h.server)?.guard } }
     const P = pyPrefix(file, h.server)
-    return { url: (P.path + (P.override ? '' : own.replace(/\/$/, '')) + h.path).replace(/(.)\/$/, '$1') || '/',
+    // (a router mounted nowhere plain can see, `for m in ROUTER_MOUNTS: router.include_router(m.router, prefix=m.prefix)`: its address
+    // is only the end of the real one, written "…/x", and the place is named for its folder)
+    // (no include_router(...) anywhere leads to it: not `include_router(api_router)` after `from app.api import router as api_router`,
+    // not `include_router(users.router)`; `include_router(mount.router)` over a list does)
+    const traced = () => [...files].some(([q, f]) => q.endsWith('.py') && [...f.printed.matchAll(/include_router\(\s*([\w.]+)/g)].some(m => { const [head, attr] = m[1].split('.')
+      return target(q, head) === file && (!attr || attr === h.server) || q === file && head === h.server }))
+    const lost = !!pyServer(file, h.server)?.router && !P.found && !pyServer(file, h.server)?.prefix && [...files.values()].some(f => /\binclude_router\b/.test(f.printed)) && !traced()
+    const url = (P.path + (P.override ? '' : own.replace(/\/$/, '')) + h.path).replace(/(.)\/$/, '$1') || '/'
+    return { url: lost ? ('/…' + url).replace(/(.)\/$/, '$1') : url,
       guard: P.guard || g || pyAppGuard || h.mw.some(a => pyAliases.get(a)) }
   }
   // Python: a route also does what the functions it calls do (create_order() in services.py), following them down.
@@ -2130,7 +2138,7 @@ const fieldList = (fs: string[]) => list(fs.filter(f => !f.startsWith('→')).ma
 // "/products/[slug]/reviews" -> ["product", "reviews"]: a segment before a [param] is one of many
 export const named = (url: string): string[] => {
   if (url.startsWith('(server action) ')) return [words(url.slice(16).split(' in ')[0].replace(/(?<=\w)Action$/, ''))]
-  const segs = url.replace(/^\/functions\/v1\//, '/').split('/').filter(s => s && s !== 'api')
+  const segs = url.replace(/^\/functions\/v1\//, '/').split('/').filter(s => s && s !== 'api' && s !== '…')
   return segs.flatMap((s, i) => s.startsWith('[') ? [] : [segs[i + 1]?.startsWith('[') ? singular(words(s)) : words(s)])
 }
 export function pageName(url: string) {
@@ -2207,7 +2215,14 @@ const RISK: Record<string, Problem> = {
 export function analyze(before: Snap, after: Snap, opts: Opts) {
   const A = appFacts(before), B = appFacts(after)
   const route = (p: string) => B.routes.get(p) ?? A.routes.get(p) ?? null
-  const placeName = (p: string) => { const r = route(p); return r ? (r.kind === 'page' ? pageName(r.url) : serverName(r.url)) : p }
+  // (an address plain only knows the end of, "…/[username]": named for the folder its file is in, `modules/user/routes.py` -> user)
+  const GENERIC = /^(?:routes?|routers?|api|apis|views?|endpoints?|v\d+|app|src|backend|server|modules?|interfaces?|controllers?|handlers?|main|__init__|index)$/i
+  // (the file's own name when it says something, views/orders.py -> orders, or else its nearest folder: modules/user/routes.py -> user)
+  const folderName = (p: string) => { const parts = p.split('#')[0].split('/'); return [parts.at(-1)!.replace(/\.\w+$/, ''), ...parts.slice(0, -1).reverse()].find(s => !GENERIC.test(s)) }
+  const placeName = (p: string) => { const r = route(p); if (!r) return p
+    if (r.kind !== 'page' && r.url.startsWith('/…') && !named(r.url).length && folderName(p)) { const f = words(folderName(p)!), rest = named(r.url)
+      const n = (rest.length && singular(rest[0].split(' ')[0]) === singular(f) ? rest : [f, ...rest]).join(' '); return `the ${n} part of your server` }
+    return r.kind === 'page' ? pageName(r.url) : serverName(r.url) }
   const changed = [...new Set([...before.keys(), ...after.keys()])].filter(p => before.get(p) !== after.get(p)).sort()
   const noise: string[] = [], real: string[] = []
   for (const p of changed) {
@@ -2370,13 +2385,28 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         // (an address ending in an id whose GET only looks up one row, `findUnique`, `db.get(Model, id)`, `find_by`: one, not a list)
         const getText = b.fns.get('GET') ?? '', oneRow = !!t && /\]$/.test(r.url) && /\b(?:findUnique|findFirst|findUniqueOrThrow|findFirstOrThrow|findOne|findByPk|findById|find_by!?|get_object_or_404|firstOrFail|findOrFail)\s*\(|\b(?:db|session)\.get\s*\(|\.first\s*\(\s*\)/.test(getText)
           && !/\b(?:findMany|findAll|\.all\s*\(|\.filter\s*\(|\.where\s*\(|select\s*\(|\.list\s*\(|\$queryRaw|\.from\s*\()/.test(getText.replace(/\b(?:findUnique|findFirst)\w*\s*\(\s*\{[^]*?\}\s*\)/g, ''))
-        if (b.fns.has('GET')) can.push(link ? `shows ${noun} to anyone with the link, no login needed` : oneRow ? `looks up one ${words(t!)}` : `lists ${noun}`)
+        // (only the logged-in person's own user row: every lookup is `where: { id: session.user.id }` or Django's `request.user`, never a list)
+        // (only the login's own id: session.user.id, req.user.id, locals.user.id; never req.params.id, query or body ids)
+        const ME = String.raw`(?:session(?:\??\.user)?|ctx\??\.session\??\.user|currentUser|current_user|req\??\.user|request\??\.user|locals\??\.user|viewer)\??\.id`
+        // (each method on its own, strictly: its only calls are the login check, reading and validating the request, and `prisma.user` lookups or updates
+        // that start `({ where: { id: <the login's id> }`. A helper, raw SQL, updateMany or any other call: not claimed)
+        const OWN_CALL = /^(?:auth|get\w*Session|currentUser|getCurrentUser|console\.\w+|\w+\.(?:safeParse|parse)|\w+\.error\.(?:format|flatten)|(?:Next)?Response(?:\.json)?|(?:req|request)\.json|JSON\.\w+|prisma\.user\.(?:findUnique|findFirst|findUniqueOrThrow|update))$/
+        const self = !!t && /^users?$/i.test(t) && (b.auth || !!(b as FileFacts & { guardUnknown?: boolean }).guardUnknown) && b.fns.size > 0 && [...b.fns.values()].every(x => {
+          const body = x.replace(/^[^]*?\)\s*(?::\s*[^{]+)?\{/, ''), calls = [...body.matchAll(/((?:[\w$]+\??\.)*[\w$]+)\s*\(/g)].filter(m => !/^(?:if|for|while|switch|catch|function|return|await|typeof)$/.test(m[1]))
+          return calls.some(m => m[1].startsWith('prisma.user.')) && calls.every(m => OWN_CALL.test(m[1].replace(/\?/g, '')) && (!m[1].startsWith('prisma.user.')
+            || new RegExp(String.raw`^\(\s*\{\s*where\s*:\s*\{\s*id\s*:\s*${ME}\s*[,}]`).test(body.slice(m.index! + m[0].length - 1)))) })
+        // (a GET that reads no table at all, a status or a health check, lists nothing)
+        // (a GET whose code only answers with literals, `res.json({ message: "Ok" })`, a status check: it lists nothing)
+        const bare = !t && !!getText && [...getText.replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, '').replace(/^[^]*?(?:=>|\{|:\s*\n)/, '').matchAll(/[A-Za-z_$][\w$]*/g)].every(m => /^(?:res|req|request|response|reply|ctx|c|event|json|send|status|sendStatus|end|Response|NextResponse|JsonResponse|HttpResponse|jsonify|return|async|await|const|let|new|true|false|null|None|True|False|message|ok|status_code|content|body|headers|text)$/.test(m[0]))
+        if (b.fns.has('GET')) can.push(link ? `shows ${noun} to anyone with the link, no login needed` : self ? "shows the logged-in person their own account" : oneRow ? `looks up one ${words(t!)}` : bare ? 'answers requests' : `lists ${noun}`)
         if (share) can.push(`turns sharing on or off for ${noun}`)   // (not which: a POST may set the token to nothing)
         if (!share && (b.fns.has('POST') || !METHODS.some(m => b.fns.has(m)))) can.push(creates ? (can.length && (!t || b.written.has(t)) ? 'saves new ones' : `saves new ${t && !b.written.has(t) && b.written.size ? things([...b.written][0]) : noun}`)
           : b.ops.has('update') && b.ops.has('delete') && !['PUT', 'PATCH', 'DELETE'].some(m => b.fns.has(m)) ? `updates and deletes ${list([...(b.written.size ? b.written : [t ?? 'data'])].map(x => x === 'data' ? x : things(x)))}`   // (not which one each: plain doesn't keep that)
           : b.ops.has('update') ? `updates ${wnoun}` : b.ops.has('delete') ? `deletes ${wnoun}` : t ? `looks up ${noun}` : 'accepts requests')
-        if (!share && (b.fns.has('PUT') || b.fns.has('PATCH'))) can.push(`updates ${noun}`)
+        if (!share && (b.fns.has('PUT') || b.fns.has('PATCH'))) can.push(self ? "updates the logged-in person's own account" : `updates ${noun}`)
         if (!share && b.fns.has('DELETE')) can.push(`deletes ${noun}`)
+        if (can.includes("shows the logged-in person their own account") && can.includes("updates the logged-in person's own account"))
+          can.splice(0, can.length, ...can.filter(x => !/logged-in person/.test(x)), "shows and updates the logged-in person's own account")
         clauses.push(...new Set(can))
         if (b.money) clauses.push('charges customers 💰')
         // (when only its changes need login, and reading it doesn't, say so: one ✓ for both would hide the open part)
@@ -2411,8 +2441,14 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     // who can use it, when that changed: login, or admins on top of it
     const lead = !a ? '' : a.auth && !b.auth && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown ? `${cap(name)} no longer requires login.` : !a.auth && b.auth ? `${cap(name)} now ${b.admin ? 'only lets admins in' : 'requires login'} ✓`
       : a.auth && b.auth && a.admin && !b.admin ? `${cap(name)} may no longer be limited to admins.` : a.auth && b.auth && !a.admin && b.admin ? `${cap(name)} is now limited to admins ✓` : ''
+    // a server action that was a plain helper before, in another file: it isn't new, but "use server" now lets the browser call it
+    const fn_ = r.url.startsWith('(server action) ') ? r.url.slice(16).split(' in ')[0] : '', file_ = p.split('#')[0]
+    // (gone from where it was, not already a server action there, and not a browser-side fetch wrapper of the same name)
+    const movedFrom = fn_ && !a ? [...A.files].find(([q, f]) => !q.includes('#') && q !== file_ && f.fns.has(fn_) && !B.files.get(q)?.fns.has(fn_)
+      && ![...A.routes.values()].some(x => x.url === `(server action) ${fn_} in ${q}`) && !/\bfetch\s*\(/.test(f.fns.get(fn_) ?? ''))?.[0] : undefined
     const text = !a
-      ? (r.kind === 'page' ? newPage(name, r.url, b, clauses) : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
+      ? (r.kind === 'page' ? newPage(name, r.url, b, clauses) : movedFrom ? `${fn_}() was a helper in ${movedFrom}. It moved into a "use server" file, so the browser can now call it directly.${clauses.length ? ` It ${list(merge(clauses))}.` : ''}`
+        : `New server code that ${list(merge(clauses)) || 'handles requests'}.`)
       : (lead ? `${lead}${clauses.length ? ' It also' : ''}` : '')
         + (clauses.length ? `${lead ? ' now ' : `${cap(name)} now `}${list(merge(clauses.map(c => c.replace(/^now /, ''))))}.` : lead ? '' : `${cap(name)} changed in a way plain can't describe yet.${b.money ? '' : ' Ask the agent what it does differently.'}`)
     changes.push({ group: r.kind === 'page' ? 'Pages' : 'Server', isNew: !a, text: text + (a?.money && b.money ? ' This is the code that charges your customers 💰 Make a test payment before you ship.' : ''), detail: r.url, name: r.kind === 'page' ? pageName(r.url) + (!a && b.headings.find(h => h.startsWith('h1:')) ? ` ("${b.headings.find(h => h.startsWith('h1:'))!.slice(3)}")` : '') : named(r.url).join(' ') || 'main', money: b.money, vague: !!a && !clauses.length && a.auth === b.auth && !b.money })

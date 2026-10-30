@@ -58,7 +58,10 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 `appFacts(snapshot)` connects the files:
 
 - **Routes.** Each page and server address is matched to the file (or, for Express, the
-  `file#/address` unit) that handles it. Mount prefixes and guards are followed up the chain.
+  `file#/address` unit) that handles it. Mount prefixes and guards are followed up the chain, including routers
+  imported under another name. A FastAPI router mounted somewhere plain can't follow (from a list built at runtime) gets
+  a partial address, `/…/[username]`, and is named for its folder, instead of a short address that looks real. A prefix
+  that isn't written out (`prefix=settings.API_V1_STR`) is `…` too.
 - **Pages include their components.** A page also does what the components it imports do,
   except a context's login, logout and `GET /me` calls (`useAuth()`): those are the whole app's.
   They still count against "It only shows information" and toward the admin and login checks.
@@ -134,6 +137,11 @@ and an unprotected admin `DELETE` in the same file are judged separately.
   still ask. Read-only server code with nothing login-ish anywhere says "anyone with the link, no login needed". An
   address ending in `/share` that only sets a link field (a token, a public id, an is-public flag) and calls nothing
   else "turns sharing on or off", not "deletes documents". When it's open, that's a ⚠.
+- **Saying what an address does, without overclaiming.** A GET that only answers with fixed values (a health check)
+  "answers requests", not "lists data". Code that only reads and updates the logged-in person's own user row
+  (`where: { id: session.user.id }`, behind a login check) "shows and updates the logged-in person's own account".
+  A function that was a helper and moved into a `"use server"` file isn't called new: the card says the browser can now
+  call it directly.
 - **Before you ship.** Data that will be deleted, and migrations to run (with the folder, the
   live-site command and what fails until then). Also new env vars without a default, new
   packages, a test payment when payment code changed, and "the agent says it didn't run or

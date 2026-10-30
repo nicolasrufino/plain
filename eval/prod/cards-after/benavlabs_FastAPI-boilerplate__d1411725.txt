@@ -6,9 +6,9 @@ You asked: "require the update permission of a scoped credential editing its own
 
 WHAT CHANGED
   Server
-    • The main part of your server changed in a way plain can't describe yet. Ask the agent
+    • The user part of your server changed in a way plain can't describe yet. Ask the agent
       what it does differently.
-      /[username]
+      /…/[username]
   Other files
     • The agent changed docs/changelog.md, a notes file (not code).
     • The agent changed docs/user-guide/authentication/api-keys.md, a notes file (not code).
