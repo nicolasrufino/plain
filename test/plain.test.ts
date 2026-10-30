@@ -7779,6 +7779,16 @@ console.log('ok (settings prefix)')
   const mid = { ...ex, 'lib/x.js': 'exports.f = (a, b) => b + 1\n' }
   assert.ok(!c(mid, { ...mid, 'lib/x.js': 'exports.f = (b) => b + 1\n' }).includes('(Hidden'), 'a parameter in the middle moves the next one')
   assert.ok(!c(ex, { ...ex, 'lib/x.js': 'exports.f = (a) => a + 2\n' }).includes('(Hidden'), 'a real change')
+  // a promise's then/catch/finally never counts its callback's parameters, written with or without parentheses (atidone's session.ts)
+  const pr = { ...ex, 'lib/x.js': 'exports.g = () => load().catch(_ => ({}))\nexports.h = () => load().then((r, _x) => r)\n' }
+  for (const after of ['exports.g = () => load().catch(() => ({}))\nexports.h = () => load().then((r, _x) => r)\n', 'exports.g = () => load().catch(_ => ({}))\nexports.h = () => load().then((r) => r)\n',
+    'exports.g = () => load().catch(() => ({}))\nexports.h = () => load().then(() => 1)\n'.replace('then(() => 1)', 'then(r => r)')])
+    assert.ok(c(pr, { ...pr, 'lib/x.js': after }).includes('Nothing about the app changed'), after)
+  // another library's callback can count them; a parameter that's read still matters
+  assert.ok(!c({ ...ex, 'lib/x.js': 'exports.g = () => it("x", done => 1)\n' }, { ...ex, 'lib/x.js': 'exports.g = () => it("x", () => 1)\n' }).includes('Nothing about the app changed'), 'mocha done')
+  assert.ok(!c(pr, { ...pr, 'lib/x.js': pr['lib/x.js'].replace('catch(_ => ({}))', 'catch(() => _)') }).includes('Nothing about the app changed'), 'read')
+  // (review 92) a bare then(step, fn) isn't a promise: jest-cucumber counts fn's parameters
+  assert.ok(!c({ ...ex, 'lib/x.js': 'exports.g = () => then("s", (_w) => 1)\n' }, { ...ex, 'lib/x.js': 'exports.g = () => then("s", () => 1)\n' }).includes('Nothing about the app changed'), 'bare then')
 }
 console.log('ok (unused parameters)')
 // Express error handlers are told apart by their 4 parameters: dropping an unused `next` changes what it does
@@ -8043,6 +8053,18 @@ console.log('ok (review 84)')
   const ui = { ...nx, 'app/page.tsx': 'export default function P() { return <main /> }\n', 'components/IntegrationRow.tsx': 'export function Row() { return <div><span>Disconnect</span></div> }\n' }
   const row = c(ui, { ...ui, 'components/IntegrationRow.tsx': 'export function Row() { return <div><span>Disconnect</span><span>Test connection</span></div> }\n' })
   assert.ok(row.includes('The agent changed components/IntegrationRow.tsx: it now shows "Test connection".') && !row.includes("can't describe"), row)
+  // text around {a ? 'Turso' : 'D1'} reads whole, each way it shows (atidone's LoginForm.vue)
+  const vue = { ...nx, 'components/LoginForm.vue': '<template>\n  <p>Welcome. Data lives in a <a href="x">D1 database</a>.</p>\n</template>\n' }
+  const tu = c(vue, { ...vue, 'components/LoginForm.vue': `<script setup>\nconst isTurso = useState('t', () => false)\n</script>\n<template>\n  <p>Welcome. Data lives in a <a href="x">\n    {{ isTurso ? 'Turso' : 'D1' }} database\n  </a>.</p>\n</template>\n` })
+  assert.ok(tu.includes('it now shows "Turso database".') && !tu.includes('"database"'), tu)
+  // (review 92) a button's label reads whole too ("Save changes", not "changes"); a cut list says how many more; entities read as shown
+  const btn = { ...nx, 'app/page.tsx': 'export default function P() { return <main /> }\n', 'components/Row.tsx': 'export function Row() { return <div><button>Save changes</button></div> }\n' }
+  const sv = c(btn, { ...btn, 'components/Row.tsx': 'export function Row({ a }: { a: boolean }) { return <div><button>{a ? "Saving" : "Save"} changes</button></div> }\n' })
+  assert.ok(!sv.includes('"changes" button'), sv)
+  const plan = c(btn, { ...btn, 'components/Row.tsx': 'export function Row({ p }: { p: string }) { return <div><button>Save changes</button><p>{p === "pro" ? "Pro" : p === "team" ? "Team" : "Free"} plan active</p></div> }\n' })
+  assert.ok(plan.includes('"Pro plan active", "Team plan active" and 1 more'), plan)
+  const ent = c(btn, { ...btn, 'components/Row.tsx': 'export function Row() { return <div><button>Save changes</button><p>Tom&apos;s profile page</p></div> }\n' })
+  assert.ok(ent.includes(`"Tom's profile page"`), ent)
 }
 console.log('ok (refusal messages, component lines)')
 // Review 85: replaced words say so; no pieces around {expressions}; not stories or emails; a reused generic message hides nothing

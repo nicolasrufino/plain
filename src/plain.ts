@@ -398,6 +398,9 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   const declOf = new Map<string, string>()
   const declVisit = (x: ts.Node): void => { if (ts.isVariableDeclaration(x) && x.initializer) for (const id of ts.isIdentifier(x.name) ? [x.name] : ts.isObjectBindingPattern(x.name) ? x.name.elements.map(e => e.name).filter(ts.isIdentifier) : []) declOf.set(id.text, x.initializer.getText(sf)); ts.forEachChild(x, declVisit) }
   declVisit(root)
+  const covered = new Set<ts.Node>()
+  // (JSX text keeps entities as written: &apos; shows as ')
+  const unent = (t: string) => t.replace(/&nbsp;/g, ' ').replace(/&apos;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')   // (JSX text read whole with the {…} around it: see the words on screen below)
   const NOT_AUTH_SOURCE = /\bstripe\b|\bprisma\.|\bdb\.|\bfetch\(|\$fetch\(|\.from\(|\.retrieve\(|\.find(Unique|First|Many)\w*\(|\.select\(|\bquery\(/
   const authSourced = (cond: ts.Expression) => { const roots = [...cond.getText(sf).matchAll(/!?\s*\(?\s*(?:await\s+)?([A-Za-z_$][\w$]*)/g)].map(m => m[1])
     return !roots.some(r => /^(user|session|currentUser|claims|auth)$/.test(r) && NOT_AUTH_SOURCE.test(declOf.get(r) ?? '')) }
@@ -615,9 +618,25 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
       if (!hasDefault(n)) f.envReq.add(n.name.text)
     }
     // Words on screen: text between tags, and strings or formatted prices inside {...} (not attributes like className)
-    if (ts.isJsxText(n) && /[a-z]{2}/i.test(n.text)) f.texts.add(n.text.replace(/\s+/g, ' ').trim())
+    // (text around {a ? 'Turso' : 'D1'} reads whole, each way it can show: "Turso database", "D1 database", not the bare "database".
+    // Only when every {…} in the run is written-out text; up to 4 ways)
+    if ((ts.isJsxElement(n) || ts.isJsxFragment(n)) && !covered.has(n)) {
+      const lits = (e: ts.Node): string[] | undefined => ts.isParenthesizedExpression(e) ? lits(e.expression) : ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) ? [e.text]
+        : ts.isConditionalExpression(e) ? ((a, b) => a && b && [...a, ...b])(lits(e.whenTrue), lits(e.whenFalse)) : undefined
+      let run: ts.Node[] = []
+      const flush = () => {
+        const parts = run.map(c => ts.isJsxText(c) ? [c.text] : (c as ts.JsxExpression).expression ? lits((c as ts.JsxExpression).expression!) : [''])
+        if (run.some(c => ts.isJsxExpression(c) && c.expression) && run.some(c => ts.isJsxText(c) && /[a-z]{2}/i.test(c.text)) && parts.every(Boolean)) {
+          const ways = parts.reduce<string[]>((acc, ps) => acc.flatMap(a => ps!.map(x => a + x)), [''])
+          if (ways.length <= 4) { ways.forEach(w => f.texts.add(unent(w).replace(/\s+/g, ' ').trim())); run.forEach(c => covered.add(c)) }
+        }
+        run = [] }
+      for (const c of n.children) if (ts.isJsxText(c) || ts.isJsxExpression(c)) run.push(c); else flush()
+      flush()
+    }
+    if (ts.isJsxText(n) && /[a-z]{2}/i.test(n.text) && !covered.has(n)) f.texts.add(unent(n.text).replace(/\s+/g, ' ').trim())
     const tagOf = (x: ts.Node) => ts.isJsxElement(x) ? x.openingElement.tagName.getText(sf) : ''
-    if (ts.isJsxExpression(n) && n.expression && (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent)) && !/^(style|script)$/.test(tagOf(n.parent))) {
+    if (ts.isJsxExpression(n) && n.expression && !covered.has(n) && (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent)) && !/^(style|script)$/.test(tagOf(n.parent))) {
       // Follow only what gets rendered: both sides of `a ? b : c`, the right of `a && b`; never conditions, keys or arguments.
       const words_ = (e: ts.Node): void => {
         if (ts.isParenthesizedExpression(e)) return words_(e.expression)
@@ -712,7 +731,10 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText(sf) === 'form') f.forms++
     if (ts.isJsxElement(n) && n.openingElement.tagName.getText(sf) === 'button') {
       const expr = (e?: ts.Expression) => e && (str(e) ?? (ts.isConditionalExpression(e) ? str(e.whenFalse) : undefined))
-      const t = n.children.filter(ts.isJsxText).map(c => c.text.trim()).join(' ').trim()
+      // (text around {saving ? 'Saving' : 'Save'} reads whole, the way it rests: "Save changes", not "changes")
+      const whole = n.children.map(c => ts.isJsxText(c) ? c.text : ts.isJsxExpression(c) ? (c.expression ? expr(c.expression) ?? null : '') : '')
+      const t = (whole.every(x => x !== null) && n.children.some(c => ts.isJsxExpression(c) && c.expression) ? unent(whole.join('')).replace(/\s+/g, ' ').trim() : '')
+        || unent(n.children.filter(ts.isJsxText).map(c => c.text.trim()).join(' ')).trim()
         || n.children.map(c => ts.isJsxExpression(c) ? expr(c.expression) : undefined).find(Boolean)
       if (t) f.ui.add(`button "${t}"`)
     }
@@ -2227,7 +2249,8 @@ const reads = (body: ts.Node, name: string) => { let hit = false
     if (ts.isIdentifier(x) && x.text === name && !(x.parent && (ts.isPropertyAccessExpression(x.parent) && x.parent.name === x || ts.isPropertyAssignment(x.parent) && x.parent.name === x))) hit = true
     else ts.forEachChild(x, v) }
   v(body); return hit }
-const SAFE_WRAPPER = /^(?:defineEventHandler|eventHandler|defineCachedEventHandler|defineNitroPlugin|defineNuxtPlugin|defineNuxtRouteMiddleware|defineWebSocketHandler)$/
+// (and a promise's then/catch/finally: promises never count a callback's parameters)
+const SAFE_WRAPPER = /^(?:then|catch|finally|defineEventHandler|eventHandler|defineCachedEventHandler|defineNitroPlugin|defineNuxtPlugin|defineNuxtRouteMiddleware|defineWebSocketHandler)$/
 // (libraries that count a callback's parameters to decide how to call it: vue-router's next, mongoose and fastify's next/done)
 const CALLBACK = /^(?:next|done|cb|callback|resolve|reject)$/
 const shape = (t0: string, p: string) => {
@@ -2235,24 +2258,30 @@ const shape = (t0: string, p: string) => {
   const tail = t0.match(/\s*\[login: \w+\]\s*$/)?.[0] ?? '', t = t0.slice(0, t0.length - tail.length)
   // (parsed as what the file is: a `<string>x` cast in a .ts file read as TSX turns the rest into JSX text. Code that doesn't parse cleanly isn't cut)
   const kind = /\.[cm]?ts$/.test(p) ? ts.ScriptKind.TS : /\.[cm]?jsx?$/.test(p) ? ts.ScriptKind.JSX : ts.ScriptKind.TSX
-  const sf = ts.createSourceFile(`x.${kind === ts.ScriptKind.TS ? 'ts' : kind === ts.ScriptKind.JSX ? 'jsx' : 'tsx'}`, t, ts.ScriptTarget.Latest, true, kind), cuts: [number, number][] = []
+  const sf = ts.createSourceFile(`x.${kind === ts.ScriptKind.TS ? 'ts' : kind === ts.ScriptKind.JSX ? 'jsx' : 'tsx'}`, t, ts.ScriptTarget.Latest, true, kind), cuts: [number, number, string][] = []
   if ((sf as ts.SourceFile & { parseDiagnostics?: unknown[] }).parseDiagnostics?.length) return t0
   const visit = (n: ts.Node) => {
     // (a function handed to a call only when that call is a wrapper known not to count parameters: libraries do count them,
     // Svelte's derived, vue-router guards, mongoose hooks, Ramda's curry)
+    // (then/catch/finally only as a method, `p.then(...)`: jest-cucumber's bare `then(step, fn)` counts them)
     const passed = !!n.parent && ts.isCallExpression(n.parent) && n.parent.arguments.includes(n as ts.Expression), callee = passed ? (n.parent as ts.CallExpression).expression.getText(sf).split('.').at(-1)! : ''
-    if (ts.isFunctionLike(n) && 'body' in n && n.body && !ts.isSetAccessor(n) && (!passed || SAFE_WRAPPER.test(callee)) && !reads(n.body, 'arguments') && !reads(n.body, 'eval')) {
-      const ps = n.parameters
+    const method = passed && ts.isPropertyAccessExpression((n.parent as ts.CallExpression).expression)
+    if (ts.isFunctionLike(n) && 'body' in n && n.body && !ts.isSetAccessor(n) && (!passed || SAFE_WRAPPER.test(callee) && (method || !/^(?:then|catch|finally)$/.test(callee))) && !reads(n.body, 'arguments') && !reads(n.body, 'eval')) {
+      const ps = n.parameters, bare = ts.isArrowFunction(n) && ps.length === 1 && !sf.text.slice(n.getStart(sf), ps[0].getStart(sf)).includes('(')
+      const before_ = cuts.length
       for (let i = ps.length - 1; i >= 0; i--) {
         const q = ps[i]
         if (!ts.isIdentifier(q.name) || CALLBACK.test(q.name.text) || q.initializer || q.dotDotDotToken || ts.getModifiers(q)?.length || ts.getDecorators(q)?.length || ps.length >= 4 || reads(n.body, q.name.text)) break
-        cuts.push([i ? ps[i - 1].end : q.getStart(sf), q.end])
+        // (`_ => x` has no parentheses: it reads as `() => x`)
+        cuts.push([i ? ps[i - 1].end : q.getStart(sf), q.end, bare ? '()' : ''])
       }
+      // (and a kept `r => r` reads as `(r) => r`, the way `(r, _x) => r` reads once `_x` is cut)
+      if (bare && cuts.length === before_) cuts.push([ps[0].getStart(sf), ps[0].end, `(${ps[0].getText(sf)})`])
     }
     ts.forEachChild(n, visit)
   }
   visit(sf)
-  let out = t; for (const [x, y] of cuts.sort((a, b) => b[0] - a[0])) out = out.slice(0, x) + out.slice(y); return out + tail
+  let out = t; for (const [x, y, r] of cuts.sort((a, b) => b[0] - a[0])) out = out.slice(0, x) + r + out.slice(y); return out + tail
 }
 // (JavaScript and TypeScript only, Vue and Svelte read as TypeScript; never PHP, Go or Python text)
 // (Ruby, C#, Python... keep their code without comments and with spaces squeezed: a comment removed at the very top leaves a space)
@@ -3976,7 +4005,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const said = newOnly(a?.texts, b.texts).filter(t => t !== '[price]' && !oldTexts.has(t) && ![...b.ui].some(u => u.includes(t)) && !goneKeys.has(key(t)) && /[a-z]{4}/i.test(t) && !/^[^\w"“(]|[,:;]$/.test(t.trim()))
     const q_ = (t: string) => `"${t.length > 60 ? t.slice(0, 57) + '…' : t}"`
     const parts = [ui.length ? `${a ? 'now has' : 'has'} ${list(ui.slice(0, 3))}${a && goneUi.length === 1 && ui.length === 1 ? ` in place of ${goneUi[0]}` : ''}` : '',
-      said.length ? `${a ? 'now shows' : 'shows'} ${list(said.slice(0, 2).map(q_))}${a && gone.length && said.length === 1 && gone.length === 1 ? ` in place of ${q_(gone[0])}` : ''}` : ''].filter(Boolean)
+      said.length ? `${a ? 'now shows' : 'shows'} ${list([...said.slice(0, 2).map(q_), ...said.length > 2 ? [`${said.length - 2} more`] : []])}${a && gone.length && said.length === 1 && gone.length === 1 ? ` in place of ${q_(gone[0])}` : ''}` : ''].filter(Boolean)
     return parts.length ? list(parts) : '' }
   const vis = new Map(real.filter(q => !q.includes('#') && after.has(q)).map(q => [q, visible(q)] as const).filter(([, v]) => v))
   for (const [q, v] of vis) changes.push({ group: 'Other files', isNew: !before.has(q), text: `The agent ${before.has(q) ? 'changed' : 'added'} ${q}: it ${v}.` })

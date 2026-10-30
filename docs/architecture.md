@@ -80,7 +80,7 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 `analyze(before, after)` finds what's new, removed and changed. A JS/TS file whose code is the same once comments and
 formatting are set aside, or the same apart from parameters nobody reads at the end of a function's list (`async (event)`
 becoming `async ()`), counts as unchanged. It applies to functions defined on their own and to callbacks of wrappers known not to
-count parameters (Nuxt's `defineEventHandler`), never to other callbacks: libraries count them (Express error handlers,
+count parameters (Nuxt's `defineEventHandler`, a promise's `.then`/`.catch`/`.finally`; `_ => x` reads as `() => x`), never to other callbacks: libraries count them (Express error handlers,
 vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to setters, constructor parameter properties or decorated parameters. Then it checks for problems:
 
 - **An admin check dropped.** An address that was admins-only now lets anyone with an account in
@@ -184,7 +184,8 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
 - **What's new on screen in a component.** A changed or added component (not a page, route, test, story or email) that gains
   buttons, boxes or text says so: "The agent changed IntegrationRow.tsx: it now shows "Test connection"" or "…now has a
   "Save changes" button in place of a "Save" button". Not text the app already had anywhere (moved code), not pieces cut
-  around `{expressions}`, and not a component a page the card describes already uses.
+  around `{expressions}`, and not a component a page the card describes already uses. Text around
+  `{a ? 'Turso' : 'D1'}` reads whole, each way it shows ("Turso database"); a longer list ends "and 2 more".
 - **Files the card doesn't explain.** When the card says something else, existing code files that changed but that it
   doesn't cover another way get one line: "The agent also changed X and Y, in ways plain can't describe yet." Covered:
   routes and files that declare them, models, schemas, migrations, types, config, seeds, tests, and files a route or page

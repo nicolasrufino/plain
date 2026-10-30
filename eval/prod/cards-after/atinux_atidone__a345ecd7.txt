@@ -1,4 +1,4 @@
-plain · 4 files changed since a345ecd7~1
+plain · 3 files changed since a345ecd7~1
 You asked: "chore: lint and link to turso"
 
   Nothing flagged
@@ -7,9 +7,7 @@ You asked: "chore: lint and link to turso"
 WHAT CHANGED
   Other files
     • The agent changed app.vue: it now shows "GitHub" and "Twitter".
-    • The agent changed components/LoginForm.vue: it now shows "database" in place of "D1
-      database".
-    • The agent also changed .eslintrc.cjs and composables/session.ts, in ways plain can't
-      describe yet.
+    • The agent changed components/LoginForm.vue: it now shows "Turso database".
+    • The agent also changed .eslintrc.cjs, in a way plain can't describe yet.
 
-(Hidden: 2 files whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)
+(Hidden: 3 files whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)
