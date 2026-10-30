@@ -12,8 +12,9 @@ WHAT CHANGED
 
 BEFORE YOU SHIP
   1. Apply prisma/migrations/20261029000000_session_impersonated_by to your live database
-     before the new code goes live (`npx prisma migrate deploy`), or the parts that use it
-     will fail.
+     before the new code goes live (`npx prisma migrate deploy`), or logging in can fail for
+     everyone, not just the new parts: your login library loads sessions, and Prisma asks
+     for every column.
   2. Test anything that uses better-auth: it was upgraded from ^1.6.22 to ^1.7.14.
 
 (Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

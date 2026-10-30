@@ -2843,10 +2843,27 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     // anywhere, not just in the new parts (`ALTER TABLE "Workspace" ADD COLUMN "plan"`, the table named for its model, no @@map, and the
     // column a plain field of it: Prisma never asks for an Unsupported("tsvector") or @ignore field, or one only the SQL has)
     const schemaText = after.get(B.schemaPath ?? '') ?? ''
-    const plainField = (t: string, col: string) => { const body = schemaText.match(new RegExp(String.raw`\bmodel\s+${t}\s*\{([^}]*)\}`))?.[1] ?? ''
-      const line = body.split('\n').find(l => new RegExp(String.raw`^\s*${col}\s+\w`).test(l)); return !!line && !/Unsupported\s*\(|@ignore\b/.test(line) }
+    // (each model's body up to the `}` that closes it on its own line, comments out: a `@default("{}")` or a commented-out @@map
+    // doesn't cut or rename it)
+    const bodies = new Map([...schemaText.replace(/\/\/[^\n]*/g, '').matchAll(/^\s*model\s+(\w+)\s*\{([\s\S]*?)^\s*\}/gm)].map(x => [x[1], x[2]] as [string, string]))
+    // (a column is a plain field by its name, or by the name it's mapped to: `impersonatedBy String? @map("impersonated_by")`)
+    const plainField = (t: string, col: string) => { const body = bodies.get(t) ?? ''
+      const line = body.split('\n').find(l => new RegExp(String.raw`^\s*${col}\s+\w`).test(l) || /^\s*\w+\s+\w/.test(l) && l.includes(`@map("${col}")`)); return !!line && !/Unsupported\s*\(|@ignore\b/.test(line) }
+    // (a table renamed with @@map("session") is its model's: model Session)
+    const mapped = new Map([...bodies].flatMap(([m, b]) => { const t = b.match(/@@map\(\s*(?:name\s*:\s*)?"(\w+)"\s*\)/)?.[1]; return t ? [[t, m] as [string, string]] : [] }))
+    const modelOf = (t: string) => mapped.get(t) ?? ([...mapped.values()].includes(t) ? '' : t)
     const widened = [...new Set(newMigrations.flatMap(m => [...(after.get(m) ?? '').replace(/--[^\n]*/g, '').matchAll(/ALTER TABLE\s+["`]?(?:\w+["`]?\.["`]?)?(\w+)["`]?\s+((?:ADD COLUMN\s+["`]?\w+["`]?[^,;]*,?\s*)+)/gi)]
-      .filter(x => A.models.has(x[1]) && B.models.has(x[1]) && [...x[2].matchAll(/ADD COLUMN\s+["`]?(\w+)/gi)].some(c => plainField(x[1], c[1]))).map(x => x[1])))]
+      .map(x => [x[0], modelOf(x[1]), x[2]]).filter(x => A.models.has(x[1]) && B.models.has(x[1]) && [...x[2].matchAll(/ADD COLUMN\s+["`]?(\w+)/gi)].some(c => plainField(x[1], c[1]))).map(x => x[1])))]
+    // (the tables a login library reads through its Prisma adapter, wired in the code: every sign-in loads them. better-auth's
+    // prismaAdapter: users, sessions, accounts; Auth.js's PrismaAdapter: users and accounts, sessions too unless it keeps them in
+    // a cookie (strategy "jwt"); Lucia's: users and sessions. Not a CRM's own Account model, nor a library that uses another adapter)
+    const code = [...after].filter(([p]) => CODE.test(p)).map(([, t]) => t)
+    const loginModels = new Set(code.flatMap(t => [
+      ...(/from\s+['"]better-auth\/adapters\/prisma['"]/.test(t) && /\bprismaAdapter\s*\(/.test(t) ? ['user', 'session', 'account'] : []),
+      ...(/from\s+['"]@(?:auth|next-auth)\/prisma-adapter['"]/.test(t) && /\bPrismaAdapter\s*\(/.test(t) ? ['user', 'account', ...(/strategy\s*:\s*['"]jwt['"]/.test(t) ? [] : ['session'])] : []),
+      ...(/from\s+['"]@lucia-auth\/adapter-prisma['"]/.test(t) ? ['user', 'session'] : [])]))
+    const loginTable = widened.find(m => loginModels.has(m.toLowerCase().replace(/s$/, '')))
+    const others = widened.filter(m => m !== loginTable)
     // the project's own migrate script is `prisma migrate dev`: that's for your computer (it can offer to wipe the database), not a live one
     const root = newMigrations[0].replace(/prisma\/migrations\/.*$/, ''), scripts = (() => { try { return JSON.parse(after.get(`${root}package.json`) ?? '{}').scripts ?? {} } catch { return {} } })() as Record<string, string>
     const devOnly = Object.entries(scripts).filter(([, c]) => /\bprisma\s+migrate\s+dev\b/.test(c)).sort(([, a], [, b]) => +/--create-only/.test(a) - +/--create-only/.test(b)).map(([k]) => k), deploys = Object.values(scripts).some(c => /\bprisma\s+migrate\s+deploy\b/.test(c))
@@ -2856,7 +2873,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       return st.length > 0 && st.every(x => /^CREATE\s+INDEX\b/i.test(x) || /^DROP\s+INDEX\b/i.test(x) && /_idx["`]?\s*(?:ON\b|$)/i.test(x)) })   // (a plain index as Prisma names it: not `_key`, nor a custom-named unique one)
     ship.push(rulesOnly ? `Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database (\`npx prisma migrate deploy\`). It only adds or removes indexes, which make lookups faster, so the new code doesn't need it first.`
       + (devOnly.length && !deploys ? ` Don't use the \`${devOnly[0]}\` script there: it runs \`prisma migrate dev\`, which is for your own computer and can offer to wipe the database.` : '')
-      : `Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database before the new code goes live (\`npx prisma migrate deploy\`), or ${widened.length ? `pages that load ${list(widened.map(things))} can fail too, not just the new parts (Prisma asks for every column).` : 'the parts that use it will fail.'}`
+      : `Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database before the new code goes live (\`npx prisma migrate deploy\`), or ${loginTable ? `logging in can fail for everyone, not just the new parts: your login library loads ${things(loginTable)}, and Prisma asks for every column.${others.length ? ` Pages that load ${list(others.map(things))} can fail too.` : ''}` : widened.length ? `pages that load ${list(widened.map(things))} can fail too, not just the new parts (Prisma asks for every column).` : 'the parts that use it will fail.'}`
       + (devOnly.length && !deploys ? ` Don't use the \`${devOnly[0]}\` script there: it runs \`prisma migrate dev\`, which is for your own computer and can offer to wipe the database.` : ''))
   }
   // A new "no duplicates" rule (a unique index) on a table that already has rows fails to apply if the live data has duplicates

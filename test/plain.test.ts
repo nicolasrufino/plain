@@ -3680,10 +3680,26 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   const both = { ...pkg('"db:migrate":"prisma migrate dev","db:deploy":"prisma migrate deploy"'), ...schema('') }
   c = card(both, { ...both, ...schema('  plan String @default("free")\n'), ...mig('ALTER TABLE "Workspace" ADD COLUMN "plan" TEXT;\n') })
   assert.ok(!c.includes("Don't use"), c)
-  // a table named apart from its model (@@map): plain doesn't guess
+  // a table named apart from its model (@@map) is that model's; a model's own name, once it's mapped elsewhere, isn't a table
   const mapped = { ...base, 'prisma/schema.prisma': 'model Workspace {\n  id String @id\n  @@map("workspaces")\n}\n' }
   c = card(mapped, { ...mapped, 'prisma/schema.prisma': 'model Workspace {\n  id String @id\n  plan String?\n  @@map("workspaces")\n}\n', ...mig('ALTER TABLE "workspaces" ADD COLUMN "plan" TEXT;\n') })
+  assert.ok(c.includes('or pages that load workspaces can fail too'), c)
+  c = card(mapped, { ...mapped, 'prisma/schema.prisma': 'model Workspace {\n  id String @id\n  plan String?\n  @@map("workspaces")\n}\n', ...mig('ALTER TABLE "Workspace" ADD COLUMN "plan" TEXT;\n') })
   assert.ok(c.includes('or the parts that use it will fail.'), c)
+  // a table renamed with @@map is its model's; the sessions table of a login library that reads it through Prisma (nextcrm's
+  // better-auth session.impersonatedBy): logging in fails for everyone until it's applied
+  const sess = (auth: string, extra: string, more = '') => ({ 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0","better-auth":"1.7.0","next-auth":"5.0.0"}}', 'lib/auth.ts': auth,
+    'prisma/schema.prisma': `model Session {\n  id String @id\n  meta Json @default("{}")\n  // @@map("sessions")\n${extra}  @@map(name: "session")\n}\n${more}` })
+  const better = 'import { betterAuth } from "better-auth"\nimport { prismaAdapter } from "better-auth/adapters/prisma"\nexport const auth = betterAuth({ database: prismaAdapter(prisma, { provider: "postgresql" }) })\n'
+  const addCol = mig('ALTER TABLE "session" ADD COLUMN "impersonated_by" TEXT;\n'), col = '  impersonatedBy String? @map("impersonated_by")\n'
+  c = card(sess(better, ''), { ...sess(better, col), ...addCol })
+  assert.ok(c.includes('or logging in can fail for everyone, not just the new parts: your login library loads sessions'), c)
+  // (review 93) installed but not wired through Prisma, Auth.js keeping sessions in a cookie: the pages wording. Another widened table stays.
+  for (const auth of ['export const x = 1\n', 'import NextAuth from "next-auth"\nimport { PrismaAdapter } from "@auth/prisma-adapter"\nexport const { auth } = NextAuth({ adapter: PrismaAdapter(prisma), session: { strategy: "jwt" } })\n']) {
+    c = card(sess(auth, ''), { ...sess(auth, col), ...addCol }); assert.ok(c.includes('or pages that load sessions can fail too') && !c.includes('logging in'), c) }
+  const ws = 'model Workspace {\n  id String @id\n}\n'
+  c = card(sess(better, '', ws), { ...sess(better, col, ws.replace('}', '  plan String?\n}')), ...mig('ALTER TABLE "session" ADD COLUMN "impersonated_by" TEXT;\nALTER TABLE "Workspace" ADD COLUMN "plan" TEXT;\n') })
+  assert.ok(c.includes('logging in can fail') && c.includes('Pages that load workspaces can fail too.'), c)
   // (review 34) a column Prisma never asks for (Unsupported, @ignore, only in the SQL), or one only in a comment: the new parts
   for (const [extra, sql] of [['  search Unsupported("tsvector")?\n', 'ALTER TABLE "Workspace" ADD COLUMN "search" tsvector;\n'], ['  legacy String? @ignore\n', 'ALTER TABLE "Workspace" ADD COLUMN "legacy" TEXT;\n'],
     ['', 'ALTER TABLE "Workspace" ADD COLUMN "search" tsvector;\n'], ['  plan String?\n', '-- was: ALTER TABLE "Workspace" ADD COLUMN "plan" TEXT;\nCREATE TABLE "Label" ("id" TEXT);\n']]) {
