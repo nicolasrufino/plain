@@ -130,6 +130,8 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
     receives it. Not `checkout.session.async_payment_succeeded`/`_failed` when every Checkout the app makes takes cards
     only (each `checkout.sessions.create(...)` in the app's code, not tests, says `payment_method_types: ["card"]`, and
     nothing else makes Checkouts: Payment Links, a pricing table, another SDK): card payments are never "pending".
+  - Code-style settings (`.eslintrc.*`, `eslint.config.*`, `.prettierrc*`, `biome.json`, `.editorconfig`) read "the settings for
+    code style checks (not what the app does)", not "changed in a way plain can't describe".
   - A stylesheet's new `@media (max-width: ...)` block reads "changed how the app looks on small screens like phones" only
     when nothing outside those blocks changed (comments aside; spaces only where they don't matter). With rules for every
     screen size too: "on every screen size and on small screens like phones".

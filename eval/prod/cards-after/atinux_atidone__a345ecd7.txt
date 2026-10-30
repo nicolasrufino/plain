@@ -6,8 +6,9 @@ You asked: "chore: lint and link to turso"
 
 WHAT CHANGED
   Other files
+    • The agent changed .eslintrc.cjs, the settings for code style checks (not what the app
+      does).
     • The agent changed app.vue: it now shows "GitHub" and "Twitter".
     • The agent changed components/LoginForm.vue: it now shows "Turso database".
-    • The agent also changed .eslintrc.cjs, in a way plain can't describe yet.
 
 (Hidden: 3 files whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

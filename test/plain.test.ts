@@ -8301,3 +8301,11 @@ console.log('ok (page words)')
   assert.ok(x.includes('3 files changed') && x.includes('next.config.js') && x.includes('Hidden: 1 file'), x)
 }
 console.log('ok (count and config)')
+// Code-style settings (atidone's .eslintrc.cjs) are said for what they are, not "changed in a way plain can't describe"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', '.eslintrc.cjs': 'module.exports = { rules: {} }\n', 'eslint.config.js': 'export default []\n', 'app/page.tsx': 'export default function P() { return <main><h1>Home</h1><p>Hi</p></main> }\n' }
+  const x = c(base, { ...base, '.eslintrc.cjs': 'module.exports = { rules: { semi: 2 } }\n', 'eslint.config.js': 'export default [{ rules: { semi: 2 } }]\n', 'app/page.tsx': base['app/page.tsx'].replace('Hi', 'Hello there') })
+  assert.ok(x.includes('The agent changed .eslintrc.cjs, the settings for code style checks (not what the app does)') && x.includes('eslint.config.js, the settings for code style checks') && !x.includes("eslint.config.js, in"), x)
+}
+console.log('ok (style settings)')

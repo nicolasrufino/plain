@@ -2797,7 +2797,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // files that aren't code
   // (an Angular component's template is part of that component's page)
   const templates = new Set([...after, ...before].flatMap(([q, t]) => [...t.matchAll(/templateUrl\s*:\s*['"`]([^'"`]+)['"`]/g)].map(m => join(q, '..', m[1]))))
-  for (const p of real) if (!p.includes('#') && !CODE.test(p) && !templates.has(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p) && !B.goMigrations.includes(p) && !A.goMigrations.includes(p) && !/(^|\/)go\.sum$|\.down\.sql$/.test(p))
+  // (and code-style settings, .eslintrc.cjs / eslint.config.js / prettier.config.mjs: code by name, but never what the app does)
+  const STYLE = /(?:^|\/)(?:\.eslintrc(?:\.[\w]+)?|eslint\.config\.[cm]?[jt]s|\.prettierrc(?:\.[\w]+)?|prettier\.config\.[cm]?[jt]s|\.stylelintrc(?:\.[\w]+)?|stylelint\.config\.[cm]?[jt]s|biome\.jsonc?|\.editorconfig)$/
+  for (const p of real) if (!p.includes('#') && (!CODE.test(p) || STYLE.test(p)) && !templates.has(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p) && !B.goMigrations.includes(p) && !A.goMigrations.includes(p) && !/(^|\/)go\.sum$|\.down\.sql$/.test(p))
   {
     const MEDIA = /@media(?=[^{]*max-width)[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g
     const media = (t = '') => new Set(t.match(MEDIA) ?? [])
@@ -2807,7 +2809,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const small = /\.(css|scss)$/.test(p) && !!after.get(p) && [...media(after.get(p))].some(m => !media(before.get(p)).has(m)), phones = small && rest(after.get(p)) === rest(before.get(p))
     changes.push({ group: 'Other files', isNew: !before.has(p), text: phones ? `The agent changed how the app looks on small screens like phones (in ${p}).`
       : small ? (before.has(p) ? `The agent changed how the app looks, on every screen size and on small screens like phones (in ${p}).` : `The agent added ${p}: it sets how the app looks, on every screen size and on small screens like phones.`)
-      : `The agent ${!before.has(p) ? 'added' : !after.has(p) ? 'deleted' : 'changed'} ${p}${/\.md$/i.test(p) ? ', a notes file (not code)' : ''}.` })
+      : `The agent ${!before.has(p) ? 'added' : !after.has(p) ? 'deleted' : 'changed'} ${p}${/\.md$/i.test(p) ? ', a notes file (not code)' : STYLE.test(p) ? ', the settings for code style checks (not what the app does)' : ''}.` })
   }
 
   // database
@@ -4102,7 +4104,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     return parts.length ? list(parts) : '' }
   const vis = new Map(real.filter(q => !q.includes('#') && after.has(q)).map(q => [q, visible(q)] as const).filter(([, v]) => v))
   for (const [q, v] of vis) changes.push({ group: 'Other files', isNew: !before.has(q), text: `The agent ${before.has(q) ? 'changed' : 'added'} ${q}: it ${v}.` })
-  const quiet = real.filter(p => !p.includes('#') && !vis.has(p) && (p.endsWith('.py') || otherCode(p)) && !route(p) && ![...B.routes.keys(), ...A.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
+  const quiet = real.filter(p => !p.includes('#') && !vis.has(p) && !STYLE.test(p) && (p.endsWith('.py') || otherCode(p)) && !route(p) && ![...B.routes.keys(), ...A.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
     && !/(^|\/)(migrations|alembic)\/|(^|\/)__init__\.py$|(^|\/)(apps|asgi|wsgi|manage)\.py$/.test(p))
   for (const tests of [false, true]) for (const [verb, xs] of [['added', quiet.filter(q => !before.has(q))], ['changed', quiet.filter(q => before.has(q) && after.has(q))], ['deleted', quiet.filter(q => !after.has(q))]] as const) {
     const ys = xs.filter(q => TESTS.test(q) === tests), names = ys.length > 6 ? [...ys.slice(0, 5), `${ys.length - 5} more files`] : ys
