@@ -61,6 +61,7 @@ const EMAIL = new Set(['Resend', 'SendGrid', 'Postmark', 'email'])
 const AI = new Set(['OpenAI', 'Anthropic', 'Google Gemini', 'Groq', 'Mistral', 'Replicate'])
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
+const TESTS = /(^|\/)(tests?|__tests__|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(tests?(_\w+)?|conftest)\.py$|_test\.(go|py|rb)$|_spec\.rb$/
 const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java|rb|go)$|(?<!\.blade)\.php$/   // (Blade and ERB templates aren't read)
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
@@ -775,10 +776,25 @@ function returnsLiteralOnly(fn: ts.Node): boolean {
   // a calculator (getPrice(rate, hours) => ({ total: rate * hours })) computes from its inputs: not made-up data
   const params = ts.isFunctionLike(fn) ? (fn as ts.SignatureDeclaration).parameters.map(p => p.name.getText()) : []
   const calc = (e: ts.Node) => params.some(x => new RegExp(`\\b${x}\\b`).test(e.getText())) && !/['"`]/.test(e.getText())
+  // (made up: nothing in it reads a value from somewhere, apart from Date, Math, undefined or a mock list; not
+  // `{ termsUrl: config.TERMS_URL }` or `{ ...settings }`, which read settings)
+  const fixed = (e: ts.Node): boolean => {
+    let ok = true
+    const walk = (n: ts.Node) => {
+      if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) && !(ts.isPropertyAssignment(n.parent) && n.parent.name === n)
+        && !/^(Date|Math|Set|Map|Array|Object|String|Number|Boolean|undefined|NaN|Infinity)$/.test(n.text) && !/mock|fake|dummy|sample|demo|placeholder/i.test(n.text)) ok = false
+      if (ts.isSpreadAssignment(n) || ts.isShorthandPropertyAssignment(n) || ts.isFunctionLike(n)) ok = false
+      if (ok && !ts.isTypeNode(n)) ts.forEachChild(n, walk)   // (`as Status`, `satisfies O`, `<string>` name types, not values)
+    }
+    walk(e)
+    return ok
+  }
+  const bare = (e: ts.Expression): ts.Expression => ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isParenthesizedExpression(e) ? bare(e.expression) : e
+  const made = (e: ts.Expression) => (ts.isArrayLiteralExpression(bare(e)) || ts.isObjectLiteralExpression(bare(e))) && !calc(e) && fixed(e)
   const visit = (n: ts.Node) => {
     if (ts.isAwaitExpression(n) || (ts.isCallExpression(n) && /prisma|fetch|supabase|db\./.test(n.expression.getText()))) real = true
-    if (ts.isReturnStatement(n) && n.expression && (ts.isArrayLiteralExpression(n.expression) || ts.isObjectLiteralExpression(n.expression)) && !calc(n.expression)) literal = true
-    if (ts.isArrowFunction(n) && (ts.isArrayLiteralExpression(n.body) || ts.isObjectLiteralExpression(n.body)) && !calc(n.body)) literal = true
+    if (ts.isReturnStatement(n) && n.expression && made(n.expression)) literal = true
+    if (ts.isArrowFunction(n) && !ts.isBlock(n.body) && made(n.body)) literal = true
     ts.forEachChild(n, visit)
   }
   visit(fn)
@@ -972,6 +988,8 @@ export function appFacts(snap: Snap) {
     const checks = (g?: FileFacts) => !!g && !early(g) && !/\bswitch\s*\(/.test(g.printed)
       && (g.authIfs.some(x => !x.g && x.req) && reqOk(g) || testsSession(g, f.binds) || lead(g))
     let yes: boolean
+    // (a method exported under another name, `export { remove as DELETE }`, `export const DELETE = remove`: plain may not see it)
+    const hidden = /export\s*\{[^}]*\b(?:GET|POST|PUT|PATCH|DELETE)\b|export\s*\*\s*from|export\s+const\s+(?:GET|POST|PUT|PATCH|DELETE)\s*=\s*[\w$.]+\s*;?\s*$|export\s+const\s+[^;]*,\s*(?:GET|POST|PUT|PATCH|DELETE)\s*=/m.test(t)
     if (/^(?:src\/)?pages\/api\//.test(p)) {
       // the default-exported handler: export default function handler(req, res) / export default handler / export default async (req, res) => ...
       // (read from the printed file: no comments, so a commented-out check is gone). Not next-connect's chain: a check in .get()
@@ -980,11 +998,24 @@ export function appFacts(snap: Snap) {
       yes = !f.exportChain && checks(name ? f.locals.get(name) : f.exportG)
     } else {
       const ms = METHODS.filter(m => f.fns.has(m)), writes = ms.filter(m => m !== 'GET'), deciding = writes.length ? writes : ms
-      // (a method exported under another name, `export { remove as DELETE }`, `export const DELETE = remove`: plain may not see it)
-      yes = deciding.length > 0 && deciding.every(m => checks(f.locals.get(m)))
-        && !/export\s*\{[^}]*\b(?:GET|POST|PUT|PATCH|DELETE)\b|export\s*\*\s*from|export\s+const\s+(?:GET|POST|PUT|PATCH|DELETE)\s*=\s*[\w$.]+\s*;?\s*$|export\s+const\s+[^;]*,\s*(?:GET|POST|PUT|PATCH|DELETE)\s*=/m.test(t)
+      yes = deciding.length > 0 && deciding.every(m => checks(f.locals.get(m))) && !hidden
     }
-    if (!yes && (f.auth || f.sbAuth)) (f as FileFacts & { guardUnknown?: boolean }).guardUnknown = true
+    // A check plain can see but not prove: `const session = await getMobileCompatibleSession(req); if (!session?.user) return 401`,
+    // the helper imported from a module about auth or sessions. No ✓, but no "anyone can use" either. The same rules as a ✓ otherwise:
+    // nothing hands the request off before it (early, a switch), and inside a try it returns (a throw there may be caught). The
+    // helper is named like a session getter (not hashPassword), takes the request (not parsed options), and its name isn't set again.
+    const seen = (g?: FileFacts) => !!g && !early(g) && !/\bswitch\s*\(/.test(g.printed) && [...g.printed.matchAll(/\b(?:const|let)\s+([\w$]+)\s*(?::[^=]+)?=\s*await\s+([\w$]+)\s*\(([^()]*)\)/g)]
+      .some(m => AUTHY.test(f.binds.get(m[2]) ?? '') && /session|user|auth|current|viewer|me$/i.test(m[2]) && !/hash|password|create|update|delete|sign(?:in|up|out)|log(?:in|out)|register/i.test(m[2])
+        && (!m[3].trim() || m[3].split(',').every(a => /^(?:req|request|ctx|context|event|(?:await\s+)?(?:headers|cookies)\(\))$/.test(a.trim())))
+        && (g.printed.match(new RegExp(String.raw`(?<![\w$.])${m[1].replace(/\$/g, '\\$')}\s*(?:[-+*/|&?]{0,2})=(?![=>])`, 'g')) ?? []).length <= 1
+        // (and the check is the very next statement: nothing writes before it, and it isn't inside a loop a guest can skip)
+        && new RegExp(String.raw`^\s*;?\s*if\s*\(\s*(?:!\s*\(?\s*${m[1].replace(/\$/g, '\\$')}\b|${m[1].replace(/\$/g, '\\$')}\b[\w$?.\s]*===?\s*(?:null|undefined)\b)`).test(g.printed.slice(m.index! + m[0].length))
+        && g.authIfs.some(x => {
+        const n = m[1].replace(/\$/g, '\\$'), inTry = (g.tries ?? []).some(([a, b]) => x.at > a && x.at < b)
+        return !x.g && !x.noReturn && (x.ret || !inTry) && !!x.cond && new RegExp(String.raw`!\s*\(?\s*${n}\b|(?<![\w$.])${n}\b[\w$?.\s]*===?\s*(?:null|undefined)\b`).test(x.cond) }))
+    const handlers = /^(?:src\/)?pages\/api\//.test(p) ? [f.exportG ?? f.locals.get(f.printed.match(/export\s+default\s+(?:async\s+)?function\s+(\w+)/)?.[1] ?? f.printed.match(/export\s+default\s+(\w+)\s*;?\s*$/m)?.[1] ?? '')]
+      : (ms => (ms.some(m => m !== 'GET') ? ms.filter(m => m !== 'GET') : ms).map(m => f.locals.get(m)))(METHODS.filter(m => f.fns.has(m)))
+    if (!yes && (f.auth || f.sbAuth || !hidden && !f.exportChain && handlers.length > 0 && handlers.every(seen))) (f as FileFacts & { guardUnknown?: boolean }).guardUnknown = true
     f.auth = yes
   }
   // TanStack Start: route files are pages (or server routes); a login check on a parent layout covers its children.
@@ -2151,12 +2182,8 @@ const norm = (u: string) => u.replace(/\[[^\]]*\]/g, '*')
 
 // ---------- the diff ----------
 
-const STOP = new Set(['with', 'that', 'this', 'from', 'make', 'code', 'codes', 'page', 'some', 'please', 'have', 'into', 'when', 'also', 'should', 'want'])
-const keywords = (asked: string) =>
-  asked.toLowerCase().match(/[a-z]{4,}/g)?.filter(w => !STOP.has(w)).map(w => w.replace(/(es|s)$/, '')) ?? []
-
 export type Change = { group: 'Pages' | 'Server' | 'Database' | 'Outside services' | 'Other files'; isNew?: boolean; text: string; detail?: string; name?: string; money?: boolean; vague?: boolean }
-export type Problem = { kind: 'Broken' | 'Unsafe' | 'Check' | 'Unasked'; text: string }
+export type Problem = { kind: 'Broken' | 'Unsafe' | 'Check'; text: string }
 // ponytail: name-based guess at what's sensitive; a config file can override it later
 const SENSITIVE = /admin|account|user|order|payment|coupon|refund|checkout|settings/i
 // Addresses that have to work before you're logged in (or are called by other services): never "missing a login check".
@@ -2768,35 +2795,19 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const users = usersOf(n, p)
     if (users.length) problems.push({ kind: 'Broken', text: `${n}() was deleted from ${p}, but ${list(users)} still ${users.length > 1 ? 'use' : 'uses'} it, so that will break.` })
   }
-  const kw = opts.asked ? keywords(opts.asked) : []
-  // Linked to the request through names this change adds: a file that adds isGuest or imageId, which a file of the request
-  // (it names what was asked for, or it's a page or an address) adds too
-  // (only names new to the whole app: not `error`, `async`, `data` or any word the app already had)
-  const ids = (t = '') => new Set(t.match(/[A-Za-z_]\w{3,}/g) ?? [])
-  const known = new Set([...before.values()].flatMap(t => [...ids(t)]))
-  const added_ = (a?: string, b?: string) => { const was = ids(a); return [...ids(b)].filter(x => !was.has(x) && !known.has(x) && !/^(async|await|const|function|return|export|import|static|class|self|this|true|false|null|None|True|False|error|data|value|result|items?)$/.test(x)) }
-  const ownFiles = real.filter(p => !p.includes('#') && (route(p) || kw.some(k => (after.get(p) ?? '').toLowerCase().includes(k))))
-  const askedIds = new Set(ownFiles.flatMap(p => added_(before.get(p), after.get(p))))
-  const linked = (a?: string, b?: string) => added_(a, b).some(x => askedIds.has(x))
+  // A migration that starts with terminal output pasted in ("Already up to date", "Done in 225ms using pnpm"): applying it fails.
+  // (Only output plain recognizes: T-SQL, SQL*Plus, DuckDB and others start migrations with lines no keyword list covers.
+  // No check for imports of missing files either: generated, gitignored files look the same as missing ones.)
+  const CLI_OUTPUT = /^(?:Already up[- ]to[- ]date\b|Done in \d|(?:npm|pnpm|yarn|npx|bunx?|git|prisma|drizzle-kit)\s+(?:run|exec|dlx|install|i|add|migrate|generate|push|db|warn|ERR!|WARN)\b|Environment variables loaded\b|Prisma schema loaded\b|Datasource "|(?:\$|❯|➜)\s+\S)/
+  for (const m of real.filter(q => /\.sql$/i.test(q) && /migrat/i.test(q) && after.get(q) !== undefined && after.get(q) !== before.get(q))) {
+    const first = (after.get(m) ?? '').replace(/^\uFEFF/, '').split('\n').map(l => l.trim()).find(Boolean)
+    if (first && CLI_OUTPUT.test(first)) problems.push({ kind: 'Broken', text: `${m} starts with "${first.slice(0, 60)}", which is terminal output, not SQL, so applying it will fail. Remove the lines that aren't SQL.` })
+  }
+
+  // (No "doesn't look related to what you asked for" guess: on 70 real commits it was wrong 42 times in 45, mostly on the
+  // file that was the fix. See docs/production-eval.md.)
   for (const p of real) {
     const a = A.files.get(p), b = B.files.get(p)
-    if (kw.length && a && b && !route(p) && !kw.some(k => (after.get(p) ?? '').toLowerCase().includes(k))) {
-      const fns = [...b.fns].filter(([n, s]) => a.fns.has(n) && a.fns.get(n) !== s).map(([n]) => n)
-      // Part of the feature if it adds something new (ApiError) that the rest of this change uses.
-      const added = [...b.exports].filter(x => !a.exports.has(x))
-      const feature = added.some(x => [...B.files].some(([q, f]) => q !== p && real.includes(q) && (f.used.has(x) || f.jsx.has(x))))
-      // (or it adds an address that another file of this change calls: the new endpoint a changed page now loads)
-      const newUrls = [...B.routes].filter(([k]) => k.startsWith(p + '#') && !A.routes.has(k)).map(([, r]) => norm(r.url))
-      // (through a wrapper too, `api(\`/rooms/${id}\`)` adding /api itself: the address's path written in another changed file)
-      const pathRe = (u: string) => new RegExp(String.raw`['"\`](?:/api)?` + u.replace(/^\/api(?=\/)/, '').split('/').map(seg => /^\[/.test(seg) ? String.raw`(?:\$\{[^}]+\}|:\w+)` : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('/') + String.raw`['"\`?]`)
-      const called = newUrls.length > 0 && real.some(q => q !== p && ([...B.files.get(q)?.fetches ?? []].some(x => newUrls.includes(norm(x.slice(x.indexOf(' ') + 1))))
-        || [...B.routes].filter(([k]) => k.startsWith(p + '#') && !A.routes.has(k)).some(([, r]) => pathRe(r.url).test(after.get(q) ?? ''))))
-      if (!fns.length && !feature && !called && !linked(before.get(p), after.get(p))) problems.push({ kind: 'Unasked', text: `The agent also changed ${p}, which doesn't look related to what you asked for.` })
-      for (const n of fns.filter(n => !added.some(x => new RegExp(`\\b${x}\\b`).test(b.fns.get(n) ?? '')) && !linked(a.fns.get(n), b.fns.get(n)))) {
-        const u = usersOf(n, p)
-        problems.push({ kind: 'Unasked', text: `The agent also changed ${n}() in ${p}, which doesn't look related to what you asked for.${u.length ? ` It's used by ${list(u)}, so check that ${u.length > 1 ? 'they' : 'it'} still ${u.length > 1 ? 'work' : 'works'}.` : ''}` })
-      }
-    }
     if (!b || p.includes('#')) continue
     for (const t of b.todos.filter(t => !a?.todos.includes(t))) unfinished.push(`The agent left a to-do: "${t.replace(/^(TODO|FIXME|HACK):?\s*/, '')}" (in ${p}).`)
     for (const h of b.hardcoded.filter(h => !a?.hardcoded.includes(h))) unfinished.push(`${h}() returns made-up data instead of reading your database.`)
@@ -3381,15 +3392,28 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const label = d && x[3].match(new RegExp(`\\(\\s*['"]${esc(d[2])}['"]\\s*,\\s*(?:_\\()?['"]([^'"]+)['"]`))?.[1]   // choices: ('sm', 'Small') -> Small
     if (d && d[2] && model) problems.push({ kind: 'Check', text: `Every ${singular(things(model))} you already have gets "${label ?? d[2]}" as its ${fieldName(x[2]) || words(x[2])}. Change the ones that should be different. (in ${m})` })
   }
-  // Python files the card doesn't mention otherwise (services.py, API files, tests): say they changed. Not the ones the card already
-  // covers another way: models (Database), files that only wire up routers or urls, files a problem names.
-  // ponytail: TypeScript components and helpers already show up through the pages that use them
+  // Python files the card doesn't mention otherwise (services.py, API files, tests): say they changed, and that plain can't say how.
+  // Not the ones the card already covers another way: models (Database), files that only wire up routers or urls, files a problem names.
+  // ponytail: in other languages, models, route files and components show up through what they declare, so their files are listed
+  // only when the card has nothing else to say (below); listing them all named files the card had described.
   const shown = [...changes.map(c => `${c.text} ${c.detail ?? ''}`), ...problems.map(x => x.text), ...ship, ...unfinished].join('\n')
-  const wiring = (f?: FileFacts) => { const x = f as PyFacts | undefined; return !!x && (x.models.size > 0 || x.mounts.length > 0 || x.servers.size > 0 || x.dj.urls.length > 0 || x.dj.routers.size > 0) }
+  const wiring = (f?: FileFacts) => { const x = f as PyFacts | undefined; return !!x?.models && (x.models.size > 0 || x.mounts.length > 0 || x.servers.size > 0 || x.dj.urls.length > 0 || x.dj.routers.size > 0) }
   const quiet = real.filter(p => !p.includes('#') && p.endsWith('.py') && !route(p) && ![...B.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
     && !/(^|\/)(migrations|alembic)\/|(^|\/)__init__\.py$|(^|\/)(apps|asgi|wsgi|manage)\.py$/.test(p))
-  for (const [verb, xs] of [['added', quiet.filter(q => !before.has(q))], ['changed', quiet.filter(q => before.has(q) && after.has(q))], ['deleted', quiet.filter(q => !after.has(q))]] as const)
-    if (xs.length) changes.push({ group: 'Other files', text: `The agent also ${verb} ${list(xs)}${xs.every(q => /(^|\/)tests?(_\w+)?\.py$|(^|\/)tests?\//.test(q)) ? ' (tests)' : ''}.` })
+  for (const tests of [false, true]) for (const [verb, xs] of [['added', quiet.filter(q => !before.has(q))], ['changed', quiet.filter(q => before.has(q) && after.has(q))], ['deleted', quiet.filter(q => !after.has(q))]] as const) {
+    const ys = xs.filter(q => TESTS.test(q) === tests), names = ys.length > 6 ? [...ys.slice(0, 5), `${ys.length - 5} more files`] : ys
+    if (ys.length) changes.push({ group: 'Other files', text: `The agent also ${verb} ${list(names)}${tests ? ' (tests)' : verb === 'changed' ? `, in ${ys.length > 1 ? 'ways' : 'a way'} plain can't describe yet` : ''}.` })
+  }
+  // nothing else to say, but app files changed (a component, a helper plain doesn't read): not "Nothing about the app changed"
+  // (that was wrong 7 times in 11 on real commits)
+  const unsaid = real.filter(p => !p.includes('#') && !TESTS.test(p) && !shown.includes(p) && !quiet.includes(p))
+  if (!changes.length && !problems.length && !unfinished.length && !ship.length && unsaid.length)
+    for (const [verb, xs] of [['added', unsaid.filter(q => !before.has(q))], ['changed', unsaid.filter(q => before.has(q) && after.has(q))], ['deleted', unsaid.filter(q => !after.has(q))]] as const) {
+      const names = xs.length > 6 ? [...xs.slice(0, 5), `${xs.length - 5} more files`] : xs
+      if (xs.length) changes.push({ group: 'Other files', text: verb === 'changed'
+        ? `The agent changed ${list(names)} in ${xs.length > 1 ? 'ways' : 'a way'} plain can't describe yet. Ask the agent what ${xs.length > 1 ? 'they do' : 'it does'} differently.`
+        : `The agent ${verb} ${list(names)}. plain can't describe ${xs.length > 1 ? 'them' : 'it'} yet.` })
+    }
   if (NOT_RUN.test(said(opts.agentSaid)))
     ship.unshift("The agent says it didn't run or test this. Try it yourself before you ship.")
 
@@ -3416,19 +3440,21 @@ export function render(r: {
   if (!r.changes.length && !r.problems.length && !r.unfinished.length && !r.ship.length)
     return [...out, '', 'Nothing about the app changed.'].join('\n')
 
-  // an unasked change is a guess ("?"), not a problem: it's for the owner to decide
-  const checks = r.problems.filter(p => p.kind === 'Check' || p.kind === 'Unasked').length, bad = r.problems.length - checks
+  const checks = r.problems.filter(p => p.kind === 'Check').length, bad = r.problems.length - checks
   out.push('', '  ' + [
-    bad ? red(`⚠ ${plural(bad, 'problem')}`) : checks ? '' : green('✓ No problems spotted'),   // never "no problems" above something to look at
+    bad ? red(`⚠ ${plural(bad, 'problem')}`) : checks ? '' : 'Nothing flagged',   // never above something to look at; no green ✓, it isn't a safety check
     checks ? yellow(`${plural(checks, 'thing')} to decide`) : '',
     r.unfinished.length ? yellow(`${plural(r.unfinished.length, 'loose end')}`) : '',
     r.ship.length ? `${plural(r.ship.length, 'step')} before you ship` : '',
   ].filter(Boolean).join('  ·  '))
+  // ("✓ No problems spotted" read as "this is safe": on 70 real commits it sat above broken builds, XSS, an unscoped search and a
+  // webhook that swallows errors. Say what plain is, not that the change is fine.)
+  if (!r.problems.length) out.push(dim("    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs."))
 
   if (r.problems.length) {
     out.push('', bold('LOOK AT THIS FIRST'))
-    const icon = { Broken: red('✖'), Unsafe: red('⚠'), Check: yellow('!'), Unasked: yellow('?') }
-    for (const p of r.problems) out.push(...wrap(p.text + (p.kind === 'Unasked' ? ' (This is a guess.)' : ''), `  ${icon[p.kind]} `, '    '))
+    const icon = { Broken: red('✖'), Unsafe: red('⚠'), Check: yellow('!') }
+    for (const p of r.problems) out.push(...wrap(p.text, `  ${icon[p.kind]} `, '    '))
   }
   if (r.changes.length) {
     out.push('', bold('WHAT CHANGED'))

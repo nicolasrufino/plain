@@ -110,7 +110,7 @@ export function recap(cwd: string, steps: { prompt: string; before: string; afte
   }
   const asked = per.flatMap(x => x.a.problems.filter(p => p.text.startsWith('You asked')).map(p => ({ ...p, n: x.n })))
   const open = [
-    ...total.problems.filter(p => p.kind !== 'Unasked').map(p => `${p.kind === 'Check' ? yellow('!') : red('⚠')} ${p.text}${from(p.text)}`),
+    ...total.problems.map(p => `${p.kind === 'Check' ? yellow('!') : red('⚠')} ${p.text}${from(p.text)}`),
     ...asked.map(p => `${yellow('!')} ${p.text}${dim(` (request ${p.n})`)}`),
     ...total.unfinished.map(u => `${yellow('◐')} ${u}${from(u)}`),
     ...total.ship.map(s => `☐ ${s}${from(s)}`),

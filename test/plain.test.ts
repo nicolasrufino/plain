@@ -7,6 +7,8 @@ import { join, dirname } from 'node:path'
 import { report, snapshot, tanstackRoute, appFacts, things, type FileFacts } from '../src/plain.ts'
 import { recapCli } from '../src/session.ts'
 import { readDb, findings } from '../src/supabase.ts'
+// the line under "Nothing flagged": words like "payments" in it aren't the card talking about this app
+const NOTE = "plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs."
 
 const dir = mkdtempSync(join(tmpdir(), 'plain-test-'))
 const write = (files: Record<string, string>) => {
@@ -20,6 +22,7 @@ write({
   'prisma/schema.prisma': 'model Order {\n  id Int @id\n  total Int\n  discount Int\n}\n',
   'lib/money.ts': 'export function calculateTotal(xs: number[]) { return Math.round(xs.reduce((a, b) => a + b, 0)) }\nexport function oldDiscount(t: number) { return t }\n',
   'lib/format.ts': 'export const formatPrice = (c: number) => `$${c / 100}`\n',
+  'lib/prisma.ts': 'export const prisma = {} as any\n',
   'app/api/checkout/route.ts': "import { calculateTotal } from '@/lib/money'\nimport { stripe } from '@/lib/stripe'\nexport async function POST() { const t = calculateTotal([1]); await stripe.checkout.sessions.create({ amount: t }) }\n",
   'app/admin/refunds/page.tsx': "import { oldDiscount } from '@/lib/money'\nimport { auth } from '@/lib/auth'\nexport default async function Page() { await auth(); return <p>{oldDiscount(1)}</p> }\n",
 })
@@ -48,11 +51,9 @@ for (const e of ['plain recap · 1 request', 'YOUR APP NOW', '1. "add coupon cod
 rmSync(dir, { recursive: true, force: true })
 
 const expect = [
-  '⚠ 2 problems  ·  1 thing to decide  ·  5 loose ends  ·  4 steps before you ship',           // verdict first
+  '⚠ 2 problems  ·  5 loose ends  ·  4 steps before you ship',           // verdict first
   '⚠ Anyone can use the coupon part of your server without logging in.',  // no login check
   '✖ oldDiscount() was deleted from lib/money.ts, but the admin refunds page still uses it',
-  '? The agent also changed calculateTotal() in lib/money.ts',             // unasked change...
-  "It's used by the checkout part of your server",                         // ...and what it affects
   '+ New server code that looks up coupons.',
   'The checkout part of your server now reads coupons. This is the code that charges your',
   '+ Your database now stores coupons: code and percent off.',
@@ -233,9 +234,9 @@ create policy "Temp" on public.reviews for delete using (true);
 drop policy "Temp" on public.reviews;
 create function public.f() returns void language plpgsql as $$ begin execute 'create policy y on public.reviews for update using (true)'; end $$;
 `,
-  'supabase/migrations/20260304000000_broken.sql': 'this is not sql (',
+  'supabase/migrations/20260304000000_broken.sql': 'create policy (',
 })
-assert.ok(good.includes('1 thing to decide') && !good.includes('No problems spotted') && good.includes('! Anyone, even without logging in, can read all reviews'), good)
+assert.ok(good.includes('1 thing to decide') && !good.includes('Nothing flagged') && good.includes('! Anyone, even without logging in, can read all reviews'), good)
 assert.ok(!/⚠|Temp|"y"|"x"/.test(good), `careful app should have no warnings\n${good}`)
 
 // Turning RLS off later is caught, even though the table was created long before.
@@ -1198,7 +1199,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
     assert.ok(!c.includes('Database') && !c.includes('migrations add'), `review 17: entity\n${c}`)
   }
   // a local database password in appsettings isn't a leaked secret; a live key in appsettings.Development.json is
-  assert.ok(!card(proj, { ...proj, 'A/appsettings.json': '{ "ConnectionStrings": { "Default": "Server=localhost;Database=a;User Id=sa;Password=devpass;" } }\n' }).includes('secret'), 'review 17: localhost')
+  assert.ok(!card(proj, { ...proj, 'A/appsettings.json': '{ "ConnectionStrings": { "Default": "Server=localhost;Database=a;User Id=sa;Password=devpass;" } }\n' }).includes('A secret key or password'), 'review 17: localhost')
   assert.ok(card(proj, { ...proj, 'A/appsettings.Development.json': '{ "Stripe": { "SecretKey": "sk_live_51Habcdefghijklmnop" } }\n' }).includes('A secret key or password is written'), 'review 17: dev live key')
   console.log('ok (review 17)')
 }
@@ -1340,7 +1341,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   const orders = ctl('OrderController', "  public function index() { return Order::all(); }\n  public function store(Request $request) { return Order::create($request->validated()); }\n  public function cancel(Order $order) { $order->update(['status' => 'cancelled']); }")
   const lv = (extra: Record<string, string>) => card(L, { ...L, 'app/Http/Controllers/OrderController.php': orders, ...extra })
   const has = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(c.includes(x), `laravel: missing "${x}"\n${c}`) }
-  const not = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(!c.includes(x), `laravel: unexpected "${x}"\n${c}`) }
+  const not = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(!c.replace(NOTE, '').includes(x), `laravel: unexpected "${x}"\n${c}`) }
 
   // login from middleware: a group, the route's own, guest (the opposite), withoutMiddleware (exact names only)
   let c = lv(web("Route::middleware(['auth', 'verified'])->group(function () {\n  Route::post('/orders', [OrderController::class, 'store']);\n});\nRoute::get('/menu', [OrderController::class, 'index']);\n"))
@@ -1643,7 +1644,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   const routes = (r: string) => ({ 'config/routes.rb': `Rails.application.routes.draw do\n  devise_for :users\n${r}\nend\n` })
   const rs = (extra: Record<string, string>) => card(R, { ...R, 'app/controllers/orders_controller.rb': orders(''), ...extra })
   const has = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(c.includes(x), `rails: missing "${x}"\n${c}`) }
-  const not = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(!c.includes(x), `rails: unexpected "${x}"\n${c}`) }
+  const not = (c: string, ...xs: string[]) => { for (const x of xs) assert.ok(!c.replace(NOTE, '').includes(x), `rails: unexpected "${x}"\n${c}`) }
   const appCtl = (body: string) => ({ 'app/controllers/application_controller.rb': `class ApplicationController < ActionController::Base\n${body}\nend\n` })
   const res = routes('  resources :orders, only: [:index, :create]\n  delete "orders/:id", to: "orders#destroy"')
 
@@ -1711,7 +1712,7 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   const E: Record<string, string[]> = {'P1.1': ['Anyone can use the admin orders part'], 'P1.1!': [],'P1.2a': ['Anyone can use the order part'], 'P1.2a!': [],'P1.2b': ['/orders/[id]/refund'], 'P1.2b!': [],'P1.3': [], 'P1.3!': ['requires login ✓'],'P1.4': ['Anyone can use the order part'], 'P1.4!': ['requires login ✓'],'P1.5': [], 'P1.5!': ['requires login ✓'],'P1.6': ['Anyone can use the order cancel part'], 'P1.6!': ['works without logging in'],'P1.7': ['Anyone can use the order part'], 'P1.7!': ['requires login ✓'],'P1.8': [], 'P1.8!': ['requires login ✓'],'P1.9': [], 'P1.9!': ['requires login ✓'],'P1.10': ['Anyone can use the admin order part'], 'P1.10!': ['requires login ✓'],'P1.11': ['Anyone can'], 'P1.11!': [],'P2.1': [], 'P2.1!': ['silently ignored'],'P2.3a': ['requires login ✓'], 'P2.3a!': ['Anyone can'],'P2.3b': [], 'P2.3b!': ['Anyone can'],'P2.4': ['requires login ✓'], 'P2.4!': ['Anyone can'],'P3.1': ['bin/rails db:migrate'], 'P3.1!': ['will change your live database by itself'],'P3.2': ['Add STRIPE_SECRET_KEY to your hosting settings'], 'P3.2!': [],'P3.3': ['all orders will be deleted for good'], 'P3.3!': [],'P4.1': ['requires login ✓'], 'P4.1!': ['Anyone can']}
   const chk2 = (id: string, before: Record<string, string>, after: Record<string, string>) => { const c = card(before, after)
     for (const x of E[id] ?? []) assert.ok(c.includes(x), `review 23 ${id}: missing "${x}"\n${c}`)
-    for (const x of E[id + '!'] ?? []) assert.ok(!c.includes(x), `review 23 ${id}: unexpected "${x}"\n${c}`) }
+    for (const x of E[id + '!'] ?? []) assert.ok(!c.replace(NOTE, '').includes(x), `review 23 ${id}: unexpected "${x}"\n${c}`) }
   const chk = (id: string, extra: Record<string, string>) => chk2(id, R2, { ...R2, ...extra })
   const O = (head: string, tail = '') => `class OrdersController < ApplicationController\n${head}\n  def index\n    @orders = Order.all\n  end\n  def destroy\n    Order.find(params[:id]).destroy\n    head :no_content\n  end\n${tail}\nend\n`
 const res = routes('  resources :orders, only: [:index, :destroy]'), ctl = (h: string, t = '') => ({ 'app/controllers/orders_controller.rb': O(h, t) })
@@ -1914,8 +1915,8 @@ F.push(['5 router func returns requireAuth(mux)', 'requires login ✓', () => gc
 F.push(['5 sub-mux wrapped: mux.Handle("/admin/", requireAuth(admin))', 'admin route requires login ✓, no phantom /admin', () => gc(app('', '\tadmin := http.NewServeMux()\n\tadmin.HandleFunc("POST /admin/orders", createOrder)\n\tmux := http.NewServeMux()\n\tmux.Handle("/admin/", requireAuth(admin))\n\thttp.ListenAndServe(":8080", mux)')), c => c.includes('Anyone can use the admin orders')])
 F.push(['5 StripPrefix mount (dead branch)', '/api/orders requires login ✓', () => gc(app('', '\tapi := http.NewServeMux()\n\tapi.HandleFunc("GET /orders", listOrders)\n\tmux := http.NewServeMux()\n\tmux.Handle("/api/", http.StripPrefix("/api", requireAuth(api)))\n\thttp.ListenAndServe(":8080", mux)')), c => !c.includes('/api/orders')])
 F.push(['5 chi Mount("/admin", requireAuth(adminRoutes()))', 'requires login ✓', () => gc(app(chi, '\tr := chi.NewRouter()\n\tr.Mount("/admin", requireAuth(adminRoutes()))\n\thttp.ListenAndServe(":8080", r)', '\nfunc adminRoutes() http.Handler {\n\tr := chi.NewRouter()\n\tr.Get("/orders", listOrders)\n\treturn r\n}\n')), OPEN])
-// 6 public write routes vanish (card: "No problems spotted")
-const gone = (c: string) => !c.includes('/orders') && c.includes('No problems spotted')
+// 6 public write routes vanish (card: "Nothing flagged")
+const gone = (c: string) => !c.includes('/orders') && c.includes('Nothing flagged')
 F.push(['6 http.HandleFunc (DefaultServeMux)', '⚠ Anyone can use orders', () => gc(app('', '\thttp.HandleFunc("POST /orders", createOrder)\n\tlog.Fatal(http.ListenAndServe(":8080", nil))', '', false)), gone])
 F.push(['6 r.With(mw).Post(...) inline', '⚠ Anyone can use orders', () => gc(app(chi + '\n\t"github.com/go-chi/chi/v5/middleware"', '\tr := chi.NewRouter()\n\tr.With(middleware.Logger).Post("/orders", createOrder)\n\thttp.ListenAndServe(":8080", r)')), gone])
 F.push(['6 http.ListenAndServe(addr, newRouter())', '⚠', () => gc(app(chi, '\tlog.Fatal(http.ListenAndServe(":8080", newRouter()))', '\nfunc newRouter() http.Handler {\n\tr := chi.NewRouter()\n\tr.Post("/orders", createOrder)\n\treturn r\n}\n')), gone])
@@ -2478,7 +2479,7 @@ console.log('ok (review 26)')
   const g1 = { ...g0, 'lib/types.ts': 'export type User = { id: string; anonymousHandle: string }\n', 'app/api/guest/route.ts': 'export async function POST() { return Response.json({ anonymousHandle: "x" }) }\n' }
   assert.ok(!card(g0, g1, 'can people chat without signing up').includes("doesn't look related"), 'linked through a name the change adds')
   const g2 = { ...g1, 'app/api/guest/route.ts': g0['app/api/guest/route.ts'].replace('{}', '{ ok: true }') }
-  assert.ok(card(g0, g2, 'can people chat without signing up').includes("doesn't look related"), 'control: nothing links it, still flagged')
+  assert.ok(!card(g0, g2, 'can people chat without signing up').includes("doesn't look related"), 'the guess is gone (wrong 42 of 45 on real commits)')
   console.log('ok (round 10 fixes)')
 }
 // Review 27 (round 10 fixes): a login ✓ only from a real check in the page or action itself, Clerk and Next's own stops,
@@ -2516,11 +2517,11 @@ console.log('ok (review 26)')
   // "didn't run or test": feature sentences aren't about the tests
   for (const said of ['Done. Free users get 3 rewrites a day; after that, AI generation is not available until tomorrow. All tests pass.', 'Health checks are not available on the free tier, so the status page hides them. Tests pass.', 'Guests can now chat. Email verification isn’t available for guest accounts. Ran the test suite: all green.', 'Search is in. Ran npm test, 12 passed. Builds are not possible without Docker, which is expected.'])
     assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts', 'export const a = 2\n']]), { ref: 'main', agentSaid: said }).includes("didn't run or test"), `r27 untested: ${said}`)
-  // unrelated: a common new word (error, async) doesn't link a change to the request
+  // a pricing change next to a contact form: no "doesn't look related" guess any more
   const b0 = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/pricing.ts': 'export function discount(total: number) {\n  return total * 0.9\n}\n', 'app/page.tsx': 'export default function Home() { return <main><h1>Home</h1></main> }\n' }
   const contact = '"use client"\nexport default function Contact() {\n  const [error, setError] = useState("")\n  return <main><h1>Contact us</h1>{error && <p>{error}</p>}</main>\n}\n'
   for (const d of ['export function discount(total: number) {\n  console.error("x")\n  return total * 0.8\n}\n', 'export async function discount(total: number) {\n  return total * 0.8\n}\n'])
-    assert.ok(card(b0, { ...b0, 'lib/pricing.ts': d, 'app/contact/page.tsx': contact }, { asked: 'add a contact form' }).includes("doesn't look related"), 'r27: common words don\'t link')
+    { const c = card(b0, { ...b0, 'lib/pricing.ts': d, 'app/contact/page.tsx': contact }, { asked: 'add a contact form' }); assert.ok(!c.includes("doesn't look related"), c) }
   // verbs per handler: POST updates, DELETE deletes
   const ro = { 'package.json': '{"dependencies":{"next":"15.0.0","@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model Order {\n  id Int @id\n}\n' }
   const route = 'import { prisma } from "@/lib/prisma"\nexport async function POST(req: Request) { const s = await auth(); if (!s) return new Response("no", { status: 401 }); await prisma.order.update({ where: { id: 1 }, data: {} }); return Response.json({}) }\nexport async function DELETE(req: Request) { const s = await auth(); if (!s) return new Response("no", { status: 401 }); await prisma.order.delete({ where: { id: 1 } }); return Response.json({}) }\n'
@@ -7246,3 +7247,64 @@ console.log('ok (review 59)')
   assert.ok(n >= 6, `only ${n} of 6 parsed trees were freed`)
 }
 console.log('ok (trees freed)')
+
+// Production pilot (docs/production-eval.md): say what was checked, never "nothing changed" over app files, no false
+// "made-up data" or "anyone can use" on checks plain can see, and catch two kinds of broken commit.
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'components/Badge.tsx': 'export const Badge = () => <b>new</b>\n', 'lib/api.js': 'export const get = (u) => fetch(u)\n' }
+  // the header says what plain looked at
+  const h = c(nx, { ...nx, 'lib/api.js': 'export const get = (u) => { console.log(u); return fetch(u) }\n' })
+  assert.ok(h.includes('Nothing flagged') && !h.includes('✓') && h.includes(NOTE) && !h.includes('No problems spotted'), h)
+  assert.ok(h.includes("The agent changed lib/api.js in a way plain can't describe yet. Ask the agent what it does differently."), h)
+  // only a component changed: listed, not "Nothing about the app changed"; only tests: that's still true
+  const comp = c(nx, { ...nx, 'components/Badge.tsx': 'export const Badge = () => <b>NEW</b>\n' })
+  assert.ok(comp.includes("The agent changed components/Badge.tsx in a way plain can't describe yet. Ask the agent what it does differently.") && !comp.includes('Nothing about the app changed'), comp)
+  assert.ok(!report(new Map([['svc/specs/schema.py', 'A = 1\n']]), new Map([['svc/specs/schema.py', 'A = 2\n']]), { ref: 'x' }).includes('(tests)'), 'specs/ is not tests')
+  { const { 'components/Badge.tsx': _, ...gone } = nx; const d = c(nx, gone); assert.ok(d.includes("The agent deleted components/Badge.tsx. plain can't describe it yet."), d) }
+  assert.ok(c(nx, { ...nx, 'lib/api.test.js': 'test("x", () => {})\n' }).includes('Nothing about the app changed'), 'tests only: still true')
+  // made-up data: written-out values or a mock list, not an object built from settings
+  const made = (body: string) => c(nx, { ...nx, 'lib/terms.ts': `import { config } from './config'\nexport function getTerms() {\n${body}\n}\n`, 'lib/config.ts': 'export const config = {} as any\n' }).includes('returns made-up data')
+  assert.ok(!made('  return { url: config.TERMS_URL, version: config.TERMS_VERSION }'), 'settings are not made up')
+  assert.ok(!made('  return { ...config.terms }') && !made('  const v = config.v\n  return { v }'), 'spread and shorthand read values')
+  for (const body of ['  return [{ id: 1, name: "Demo", price: 9.99 }]', '  return { items: MOCK_TERMS }', '  return [{ id: 1, title: "Welcome post", createdAt: new Date("2024-01-01") }]',
+    '  return [{ name: "Jane Doe", avatar: undefined }]', '  return { plan: "pro", renewsAt: Date.now() + 86400000 }',
+    '  return { status: "paid" as Status }', '  return { orders: [] as Order[], total: 0 }', '  return { tags: new Set<string>(["a"]) }', '  return { id: 1 } satisfies O'])
+    assert.ok(made(body), `still made up: ${body}`)
+  // ponytail: `{ status: Status.Paid }` reads like `{ url: Config.URL }`, so an enum member isn't counted as made up
+  // a login check plain can see but not prove: no "anyone can use" warning, and no ✓ either
+  const prefs = (imp: string, pre: string, cond: string) => ({ 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'src/shared/api/mobile-auth.ts': 'export async function getMobileCompatibleSession(req: any) { return null }\n',
+    'app/api/user/preferences/route.ts': `import { NextRequest, NextResponse } from "next/server"\n${imp}\nimport { prisma } from "@/lib/prisma"\nexport async function PUT(req: NextRequest) {\n  try {\n    ${pre}\n${cond}    await prisma.user.update({ where: { id: session.user.id }, data: {} })\n    return NextResponse.json({ ok: true })\n  } catch (e) { console.warn(e) }\n  return NextResponse.json({ ok: false })\n}\n`, 'lib/prisma.ts': 'export const prisma = {} as any\n' })
+  const IMP = 'import { getMobileCompatibleSession } from "@/shared/api/mobile-auth"', PRE = 'const session = await getMobileCompatibleSession(req)', COND = '    if (!session?.user) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 })\n'
+  const base = { 'package.json': '{"dependencies":{"next":"15.0.0"}}' }
+  const seen = c(base, prefs(IMP, PRE, COND))
+  assert.ok(!seen.includes('Anyone can use') && !seen.includes('requires login ✓'), seen)
+  for (const [name, f] of [['handed off first', prefs(IMP, PRE, '    if (req.nextUrl.searchParams.get("all")) return purge(req)\n' + COND)],
+    ['a switch first', prefs(IMP, PRE, '    switch (req.method) { case "X": return bulk(req) }\n' + COND)],
+    ['a throw inside the try', prefs(IMP, PRE, '    if (!session?.user) throw new Error("UNAUTHORIZED")\n')],
+    ['no check', prefs(IMP, PRE, '')], ['from the body', prefs(IMP, 'const session = await req.json()', COND)], ['not an auth module', prefs('import { getMobileCompatibleSession } from "@/lib/cache"', PRE, COND)],
+    ['not a session getter', prefs('import { hashPassword } from "@/lib/auth"', 'const session = await hashPassword(req)', COND)],
+    ['parsed options passed', prefs(IMP, 'const session = await getMobileCompatibleSession(options)', COND)],
+    ['set again before the check', prefs(IMP, 'let session = await getMobileCompatibleSession(req)\n    if (!session?.user) session = { user: { id: "guest" } }', COND)],
+    ['a write before the check', prefs(IMP, PRE + '\n    await prisma.user.update({ where: { id: "x" }, data: {} })', COND)],
+    ['the check inside a loop', prefs(IMP, PRE + '\n    for (const i of [] as number[]) {', COND + '    }\n')]] as const)
+    assert.ok(c(base, f).includes('Anyone can use the user preferences part of your server without logging in'), `control: ${name}`)
+  // a write method exported under another name, or a next-connect chain: the check in GET (or .get) says nothing about it
+  { const r = prefs(IMP, PRE, COND)['app/api/user/preferences/route.ts'].replace('export async function PUT', 'export async function GET') + 'async function update(req: NextRequest) { await prisma.user.update({ where: { id: "x" }, data: {} }) }\nexport { update as PUT }\n'
+    assert.ok(c(base, { ...prefs(IMP, PRE, COND), 'app/api/user/preferences/route.ts': r }).includes('Anyone can use'), 'export alias') }
+  { const nc = { 'package.json': '{"dependencies":{"next":"15.0.0","next-connect":"1.0.0"}}', 'src/shared/api/mobile-auth.ts': 'export async function getMobileCompatibleSession(req: any) { return null }\n', 'lib/prisma.ts': 'export const prisma = {} as any\n',
+      'pages/api/orders.ts': `import nc from "next-connect"\n${IMP}\nimport { prisma } from "@/lib/prisma"\nexport default nc().get(async (req, res) => { ${PRE}; if (!session) return res.status(401).end(); res.json(await prisma.order.findMany()) }).post(async (req, res) => { res.json(await prisma.order.create({ data: req.body })) })\n` }
+    assert.ok(c(base, nc).includes('Anyone can use'), 'next-connect chain') }
+  // no "won't build" for imports: a generated, gitignored file (Wayfinder's @/routes, openapi types) looks like a missing one
+  { const app = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'ee/features/billing/plan.ts': 'export const plan = 1\n', 'app/page.tsx': 'export default function P() { return <main /> }\n' }
+    assert.ok(!c(app, { ...app, 'app/page.tsx': 'import { R } from "@/ee/features/redaction/r"\nexport default function P() { return <main /> }\n' }).includes("won't build"), 'no import check') }
+  // a migration that starts with terminal output; real SQL dialects that start with anything else aren't flagged
+  const pm = { 'package.json': '{"dependencies":{"@prisma/client":"6.0.0"}}', 'prisma/schema.prisma': 'model A {\n  id Int @id\n}\n' }
+  const mig = (sql: string) => c(pm, { ...pm, 'prisma/migrations/20261011000000_a/migration.sql': sql })
+  assert.ok(mig('Already up to date\nDone in 225ms using pnpm v11.20.0\n-- CreateTable\nCREATE TABLE "B" ("id" INTEGER);\n').includes('starts with "Already up to date", which is terminal output, not SQL'), 'pasted terminal output')
+  assert.ok(mig('$ npx prisma migrate dev\nCREATE TABLE "B" ("id" INTEGER);\n').includes('terminal output'), 'pasted prompt')
+  for (const sql of ['-- CreateTable\nCREATE TABLE "B" ("id" INTEGER);\n', '﻿\n\nCREATE TABLE "B" ("id" INTEGER);\n', '/* x */\nALTER TABLE "A" ADD COLUMN "b" TEXT;\n', 'begin;\ncreate table b (id int);\ncommit;\n',
+    "PRINT N'Adding status'\nGO\n", "sp_rename 'a.b', 'c', 'COLUMN';\n", 'WHENEVER SQLERROR EXIT\n', 'PROMPT adding\n', 'REM x\n', ':setvar x 1\n', 'INSTALL spatial;\n', 'ATTACH TABLE x\n', 'SHOW search_path;\n', 'Done\n'])
+    assert.ok(!mig(sql).includes('not SQL'), `control: ${JSON.stringify(sql.slice(0, 20))}`)
+}
+console.log('ok (production pilot fixes)')

@@ -4,7 +4,7 @@ The trials ([round 1](trials.md) to [round 10](trials-saas-chat-ai.md)) tested p
 for us. This pilot asks the other question: what does plain say about **real commits in real apps** that nobody built
 for it?
 
-**Short answer:** plain didn't crash, and it never gave a false login ✓. But its "✓ No problems spotted" header was
+**Short answer** (before the fixes [below](#what-changed-in-plain-because-of-it)): plain didn't crash, and it never gave a false login ✓. But its "✓ No problems spotted" header was
 wrong or misleading 13 times out of 46. Its "doesn't look related" flags were wrong 42 times out of 45. Nearly half the
 cards (46%) said nothing useful. The descriptions it does give are mostly right (158 of 184 fully right).
 
@@ -96,17 +96,46 @@ To rerun it, clone the repos (`--depth 300`) into `eval/prod/repos/` and run `no
 - **The harness first gave plain only files with known extensions.** Fixing that changed 19 of 70 cards, and those 19
   were regraded. plain's own snapshot reads every file, and the numbers above use that full input.
 
-## What to fix, in order
+## What changed in plain because of it
 
-1. **Make the header say what was checked.** Keep the ✓ only for what plain read, e.g. "Nothing flagged in logins,
-   money, data or secrets". Never claim the change is safe in general. Most of the 13 wrong reassurances were about
-   things plain never checks, and this makes them true. Not the webhook, the search API or the deploy typo: those
-   need checks of their own.
-2. **Drop or narrow "doesn't look related".** At 3 right in 45 it costs more trust than it earns.
-3. **Say "changed in ways plain can't describe" instead of "Nothing about the app changed"** whenever app files
-   changed.
-4. **Fix the false statements:** the made-up-data flag on config reads; login checks that return inside a `try`, with a session read from a helper whose
-   module is about auth; and the file hidden as formatting.
-5. **Cheap broken-code checks:** a relative import of a file that isn't there, and a migration `.sql` file whose lines
-   aren't SQL.
-6. **Coverage, the biggest gap but the slowest to close:** CSS and frontend behaviour, and deploy and config files.
+The numbers above are for the cards from **before** these fixes. Cards from after are in
+[eval/prod/cards-after/](../eval/prod/cards-after).
+
+| Problem | Before | After |
+|---|---|---|
+| "? doesn't look related" | 45 flags, 42 wrong | **gone**: the guess is removed (it was also the top false alarm in [round 10](trials-saas-chat-ai.md)) |
+| "Nothing about the app changed" | 11 cards, 7 wrong | 2 cards, both test-only and right. The others now list the files, "in ways plain can't describe yet. Ask the agent what they do differently." An independent grader checked all 9 new lines: all true |
+| "✓ No problems spotted" | 46 headers, 13 wrong or misleading | now "Nothing flagged", no green ✓, under it: "plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs." |
+| False "anyone can use" (workout-cool) | ⚠ | no warning and no ✓: a check plain can see but not prove (`if (!session?.user) return 401` right after a session getter from an auth module). Three review rounds (7, 6, 2 findings) made sure it can't hide a route that's really open |
+| False "returns made-up data" (logtide) | ◐ | gone: an object built from settings isn't made up |
+| Migration that's terminal output (nextcrm) | missed | **✖ ... starts with "Already up to date", which is terminal output, not SQL** |
+
+An independent grader rechecked the 13 wrong headers. With a first wording of the note ("plain checks who can use what,
+money, saved data and secrets"), 6 were right and 7 still wrong or misleading. The note promised checks plain doesn't
+fully do. The 7 problems:
+- `javascript:` links and SVG uploads, both stored XSS (LinkStack ×2);
+- a search API that lists every user's playlists (blackcandy);
+- inflated spend totals (expense.fyi);
+- a webhook that swallows errors (chadnext);
+- plain-text bank numbers (captable);
+- account deletion with no password check (instagram-mern).
+
+The note now says plain can miss bugs, and the green ✓ is gone, so the header no longer claims the change is safe.
+Those 7 are still **misses**: plain doesn't catch them yet.
+
+Tried and dropped after review:
+- **A "won't build" check for imports of files that aren't in the project.** It caught papermark, but it also fired on
+  generated, gitignored files (Laravel Wayfinder's `@/routes`, openapi types) and on imports inside code samples.
+- **A keyword list for "this isn't SQL".** It flagged real T-SQL, SQL*Plus and DuckDB migrations. Only pasted terminal
+  output is flagged now.
+
+## Still open
+
+1. **The 7 misses above.** Unscoped queries in a new search endpoint; `href` from user input; webhook handlers that
+   catch and still answer 200; destructive self-service endpoints.
+2. **Silent cards (32 of 70).** Frontend behaviour, CSS, mobile apps, config and deploy scripts. Outside Python, a code
+   file plain can't describe is listed only when the card has nothing else to say. Listing them always named files the
+   card had already described another way (models, route files).
+3. **Wrong descriptions (26 of 184).** For example "changed in a way plain can't describe" on pure refactors, verbs
+   like "lists users" guessed from table names, and a new page described from components that weren't in the commit
+   (papermark).

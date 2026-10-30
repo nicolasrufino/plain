@@ -13,15 +13,12 @@ A real card (shortened):
 plain · 7 files changed since main
 You asked: "add coupon codes at checkout"
 
-  ⚠ 3 problems  ·  5 loose ends  ·  4 steps before you ship
+  ⚠ 2 problems  ·  5 loose ends  ·  4 steps before you ship
 
 LOOK AT THIS FIRST
   ⚠ Anyone can use the coupon part of your server without logging in.
   ✖ oldDiscount() was deleted from lib/money.ts, but the admin refunds page still uses it,
     so that will break.
-  ? The agent also changed calculateTotal() in lib/money.ts, which doesn't look related to
-    what you asked for. It's used by the checkout part of your server, so check that it
-    still works. (This is a guess.)
 
 WHAT CHANGED
   Server

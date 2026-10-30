@@ -42,7 +42,7 @@ Most of it is in [src/plain.ts](../src/plain.ts). Per language or format:
 | Server addresses | Next.js `app/**/route.ts` and `pages/api/*`; Express-style `router.post('/x', requireAuth, handler)` |
 | Mounts | `app.use('/api/admin', requireAuth, adminRouter)`, `app.use('/api/x', require('./x'))` |
 | Pages | Next.js `app/**/page.tsx` and `pages/*`; React Router `<Route path element>` and `{ path, element }` |
-| Login checks | an `if` that turns guests away, guard middleware (`requireAuth`, `verifyToken`), wrappers like `<RequireAuth>`. Next.js route handlers and pages/api get "requires login ✓" only when each method's own `if` tests a name set from an awaited session call (`const session = await auth()`, `getServerSession`, `supabase.auth.getUser()`, ...), or awaits a `require*()` / helper plain can find whose check throws or redirects. Calling `auth()` and ignoring it isn't one. Where plain can't tell (a wrapper, a switch, a check inside `try`, a helper it can't find), it says neither ✓ nor ⚠. |
+| Login checks | an `if` that turns guests away, guard middleware (`requireAuth`, `verifyToken`), wrappers like `<RequireAuth>`. Next.js route handlers and pages/api get "requires login ✓" only when each method's own `if` tests a name set from an awaited session call (`const session = await auth()`, `getServerSession`, `supabase.auth.getUser()`, ...), or awaits a `require*()` / helper plain can find whose check throws or redirects. Calling `auth()` and ignoring it isn't one. Where plain can't tell (a wrapper, a switch, a check inside `try`, a helper it can't find), it says neither ✓ nor ⚠. So does a check it can see but not prove: `if (!session) return 401` on a name from an awaited session getter imported from an auth or session module (`getMobileCompatibleSession(req)`), as the very next statement, with nothing handing the request off first. |
 | Admin-only | a login check whose deciding line turns away non-admins (`!u.IsAdmin`, `unless current_user&.admin?`, `role !== 'admin'`, Spatie's `role:admin`). This is read in Go, Rails, Laravel, and Express middleware written in the app. Elsewhere, an admin check still reads as "requires login". |
 | Database | `prisma.<table>.<call>`, `db.<table>.<call>` and `supabase.from('<table>').<call>`: which tables are read, which are written and how |
 | Talks to the server | `fetch('/api/x', { method })`, `axios.post('/x')`, and your own helpers like `api('/x')` |
@@ -80,9 +80,11 @@ and an unprotected admin `DELETE` in the same file are judged separately.
   ⚠ if the address or table sounds sensitive (admin, orders, payments, ...), and as a "thing to
   decide" otherwise. Addresses that must be public (login, register, webhooks, ...) are never
   flagged.
-- **Broken.** A function was deleted but other code still uses it.
-- **Unasked.** Code changed that doesn't match what you asked for. This one is a guess, and the
-  card says so.
+- **Broken.** A function was deleted but other code still uses it, or a migration starts with terminal output pasted in
+  ("Already up to date", "$ npx prisma migrate dev").
+- **No "doesn't look related" guess.** It used to flag code that didn't seem to match the request. On 70 real commits it was
+  wrong 42 times in 45, mostly on the file that was the fix, so it's gone ([production pilot](production-eval.md)). There's
+  also no check for imports of missing files: a generated, gitignored file looks the same as a missing one.
 - **Guesses about money, worded as questions.** Each one says it's a guess:
   - A cancel status with no refund anywhere.
   - A sign-up discount that people can claim again with another email.
