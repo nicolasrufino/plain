@@ -16,4 +16,4 @@ BEFORE YOU SHIP
      will fail.
   2. Test anything that uses better-auth: it was upgraded from ^1.6.22 to ^1.7.14.
 
-(Hidden: 1 file with only formatting changes, or lockfiles.)
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

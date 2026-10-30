@@ -17,4 +17,4 @@ WHAT CHANGED
       backend/common/tests/test_request_meta.py and
       backend/invoices/tests/test_invoices_api.py (tests).
 
-(Hidden: 2 files with only formatting changes, or lockfiles.)
+(Hidden: 2 files whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

@@ -75,7 +75,11 @@ and an unprotected admin `DELETE` in the same file are judged separately.
 
 ## 3. Compare and 4. English
 
-`analyze(before, after)` finds what's new, removed and changed. Then it checks for problems:
+`analyze(before, after)` finds what's new, removed and changed. A JS/TS file whose code is the same once comments and
+formatting are set aside, or the same apart from parameters nobody reads at the end of a function's list (`async (event)`
+becoming `async ()`), counts as unchanged. It applies to functions defined on their own and to callbacks of wrappers known not to
+count parameters (Nuxt's `defineEventHandler`), never to other callbacks: libraries count them (Express error handlers,
+vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to setters, constructor parameter properties or decorated parameters. Then it checks for problems:
 
 - **An admin check dropped.** An address that was admins-only now lets anyone with an account in
   (login kept). This is a thing to decide.

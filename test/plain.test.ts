@@ -66,7 +66,7 @@ const expect = [
   'run `npx prisma migrate dev`',
   "Add COUPON_SALT to your hosting settings (like Vercel). It's also missing from",
   'it was upgraded from 14.0.0 to 16.0.0.',
-  '(Hidden: 1 file with only formatting changes, or lockfiles.)',          // lib/format.ts
+  '(Hidden: 1 file whose changes don\'t change what the code does (formatting, unused parameters), or lockfiles.)',          // lib/format.ts
 ]
 for (const e of expect) assert.ok(out.includes(e), `missing: ${e}`)
 assert.ok(!out.includes('lib/format.ts'), 'reformatted file should be hidden')
@@ -7664,3 +7664,53 @@ console.log('ok (review 71)')
   assert.ok(x.includes('The monitors sessions part of your server') && x.includes('/…/monitors/sessions'), x)
 }
 console.log('ok (settings prefix)')
+// dropping a parameter nobody reads, at the end of the list, changes nothing (atidone); one in the middle or one that's read does
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nu = { 'package.json': '{"dependencies":{"nuxt":"3.0.0"}}', 'server/api/todos/stats.ts': 'export default defineEventHandler(async (event) => {\n  return { todos: 1 }\n})\n' }
+  const dropped = c(nu, { ...nu, 'server/api/todos/stats.ts': 'export default defineEventHandler(async () => {\n  return { todos: 1 }\n})\n' })
+  assert.ok(!dropped.includes("can't describe") && dropped.includes('Nothing about the app changed'), dropped)
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0"}}', 'lib/x.js': 'exports.f = (a, b) => a + 1\n' }
+  const mid = { ...ex, 'lib/x.js': 'exports.f = (a, b) => b + 1\n' }
+  assert.ok(!c(mid, { ...mid, 'lib/x.js': 'exports.f = (b) => b + 1\n' }).includes('(Hidden'), 'a parameter in the middle moves the next one')
+  assert.ok(!c(ex, { ...ex, 'lib/x.js': 'exports.f = (a) => a + 2\n' }).includes('(Hidden'), 'a real change')
+}
+console.log('ok (unused parameters)')
+// Express error handlers are told apart by their 4 parameters: dropping an unused `next` changes what it does
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0"}}', 'server.js': 'const express = require("express")\nconst app = express()\napp.use((err, req, res, next) => res.status(500).json({ error: "x" }))\napp.listen(3000)\n' }
+  assert.ok(!c(ex, { ...ex, 'server.js': ex['server.js'].replace('(err, req, res, next)', '(err, req, res)') }).includes('Nothing about the app changed'), 'error handler arity')
+  const cls = { 'package.json': '{"dependencies":{"express":"4.0.0"}}', 'lib/s.ts': 'export class S {\n  constructor(private db: any) {}\n  get() { return this.db }\n}\n' }
+  assert.ok(!c(cls, { ...cls, 'lib/s.ts': cls['lib/s.ts'].replace('constructor(private db: any) {}', 'constructor() {}') }).includes('Nothing about the app changed'), 'parameter property')
+}
+console.log('ok (unused parameters 2)')
+// Review 72: a parameter read by a spread, a $name, PHP code, a setter: not "unchanged"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'components/Box.tsx': 'export function Box(props: any) { return <main {...props} /> }\n' }
+  assert.ok(!c(nx, { ...nx, 'components/Box.tsx': 'export function Box() { return <main {...props} /> }\n' }).includes('Nothing about the app changed'), 'spread')
+  const d = { ...nx, 'lib/d.ts': 'export const f = ($el: any) => $el.focus()\n' }
+  assert.ok(!c(d, { ...d, 'lib/d.ts': 'export const f = () => $el.focus()\n' }).includes('Nothing about the app changed'), '$name')
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'routes/web.php': "<?php\nRoute::get('/me', function (Request $request) { return $request->user(); });\n" }
+  assert.ok(!c(lv, { ...lv, 'routes/web.php': "<?php\nRoute::get('/me', function () { return $request->user(); });\n" }).includes('Nothing about the app changed'), 'php')
+  const st = { ...nx, 'lib/s.ts': 'export class S { set v(x: any) { } }\n' }
+  assert.ok(!c(st, { ...st, 'lib/s.ts': 'export class S { set v() { } }\n' }).includes('Nothing about the app changed'), 'setter')
+}
+console.log('ok (review 72)')
+// Review 73: a .ts file parsed as TypeScript (a `<string>x` cast isn't JSX); callbacks whose parameter count a library reads
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/load.ts': 'export function load(path: string, config: any) {\n  const p = <string>path\n  return config[p]\n}\n' }
+  assert.ok(!c(nx, { ...nx, 'lib/load.ts': 'export function load(path: string) {\n  const p = <string>path\n  return config[p]\n}\n' }).includes('Nothing about the app changed'), 'ts cast')
+  const vr = { 'package.json': '{"dependencies":{"vue":"3.0.0"}}', 'src/router.ts': 'router.beforeEach((to, from, next) => {\n  console.log(to)\n})\n' }
+  assert.ok(!c(vr, { ...vr, 'src/router.ts': 'router.beforeEach((to, from) => {\n  console.log(to)\n})\n' }).includes('Nothing about the app changed'), 'vue-router next')
+}
+console.log('ok (review 73)')
+// Review 74: a callback handed to a library keeps its parameters (Svelte's derived counts them)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const sv = { 'package.json': '{"devDependencies":{"@sveltejs/kit":"2.0.0"}}', 'src/lib/stores.ts': 'export const doubled = derived(count, ($count, set) => $count * 2)\n' }
+  assert.ok(!c(sv, { ...sv, 'src/lib/stores.ts': 'export const doubled = derived(count, ($count) => $count * 2)\n' }).includes('Nothing about the app changed'), 'svelte derived')
+}
+console.log('ok (review 74)')

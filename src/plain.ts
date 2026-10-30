@@ -2200,6 +2200,46 @@ const PUBLIC = /^(login|log in|register|registration|signup|sign up|signin|sign 
 const isPublic = (url: string) => url === '/session' || /^\/passwords(\/|$)/.test(url) || !/admin/i.test(url) && (   // /session: Rails 8's login (resource :session)
   named(url).some(s => /\b(webhooks?|callback|oauth)\b/.test(s)) || PUBLIC.test(named(url).at(-1) ?? ''))
 
+// The same code, or the same apart from parameters nobody reads at the end of a function's list (`async (event) => {...}` ->
+// `async () => {...}`): dropping those changes nothing when the function runs. Not one in the middle (the ones after it move),
+// a destructured one or one with a default, nor in a function that reads `arguments`. Not in a function of 4 or more
+// (Express tells error handlers by their 4 parameters), nor a constructor's `private db: Db` or a decorated one.
+// (whether a name is read is decided on the syntax tree: `...props` and `$request` count, a property name `x.event` doesn't)
+const reads = (body: ts.Node, name: string) => { let hit = false
+  const v = (x: ts.Node) => { if (hit) return
+    if (ts.isIdentifier(x) && x.text === name && !(x.parent && (ts.isPropertyAccessExpression(x.parent) && x.parent.name === x || ts.isPropertyAssignment(x.parent) && x.parent.name === x))) hit = true
+    else ts.forEachChild(x, v) }
+  v(body); return hit }
+const SAFE_WRAPPER = /^(?:defineEventHandler|eventHandler|defineCachedEventHandler|defineNitroPlugin|defineNuxtPlugin|defineNuxtRouteMiddleware|defineWebSocketHandler)$/
+// (libraries that count a callback's parameters to decide how to call it: vue-router's next, mongoose and fastify's next/done)
+const CALLBACK = /^(?:next|done|cb|callback|resolve|reject)$/
+const shape = (t0: string, p: string) => {
+  // (plain's own `[login: …]` note at the end isn't code: set aside, and kept, so a login change still counts)
+  const tail = t0.match(/\s*\[login: \w+\]\s*$/)?.[0] ?? '', t = t0.slice(0, t0.length - tail.length)
+  // (parsed as what the file is: a `<string>x` cast in a .ts file read as TSX turns the rest into JSX text. Code that doesn't parse cleanly isn't cut)
+  const kind = /\.[cm]?ts$/.test(p) ? ts.ScriptKind.TS : /\.[cm]?jsx?$/.test(p) ? ts.ScriptKind.JSX : ts.ScriptKind.TSX
+  const sf = ts.createSourceFile(`x.${kind === ts.ScriptKind.TS ? 'ts' : kind === ts.ScriptKind.JSX ? 'jsx' : 'tsx'}`, t, ts.ScriptTarget.Latest, true, kind), cuts: [number, number][] = []
+  if ((sf as ts.SourceFile & { parseDiagnostics?: unknown[] }).parseDiagnostics?.length) return t0
+  const visit = (n: ts.Node) => {
+    // (a function handed to a call only when that call is a wrapper known not to count parameters: libraries do count them,
+    // Svelte's derived, vue-router guards, mongoose hooks, Ramda's curry)
+    const passed = !!n.parent && ts.isCallExpression(n.parent) && n.parent.arguments.includes(n as ts.Expression), callee = passed ? (n.parent as ts.CallExpression).expression.getText(sf).split('.').at(-1)! : ''
+    if (ts.isFunctionLike(n) && 'body' in n && n.body && !ts.isSetAccessor(n) && (!passed || SAFE_WRAPPER.test(callee)) && !reads(n.body, 'arguments') && !reads(n.body, 'eval')) {
+      const ps = n.parameters
+      for (let i = ps.length - 1; i >= 0; i--) {
+        const q = ps[i]
+        if (!ts.isIdentifier(q.name) || CALLBACK.test(q.name.text) || q.initializer || q.dotDotDotToken || ts.getModifiers(q)?.length || ts.getDecorators(q)?.length || ps.length >= 4 || reads(n.body, q.name.text)) break
+        cuts.push([i ? ps[i - 1].end : q.getStart(sf), q.end])
+      }
+    }
+    ts.forEachChild(n, visit)
+  }
+  visit(sf)
+  let out = t; for (const [x, y] of cuts.sort((a, b) => b[0] - a[0])) out = out.slice(0, x) + out.slice(y); return out + tail
+}
+// (JavaScript and TypeScript only, Vue and Svelte read as TypeScript; never PHP, Go or Python text)
+const same = (p: string, a?: string, b?: string) => a === b || a !== undefined && b !== undefined && /\.(?:[cm]?[jt]sx?|vue|svelte)$/.test(p.split('#')[0]) && shape(a, p.split('#')[0]) === shape(b, p.split('#')[0])
+
 export type Analysis = ReturnType<typeof analyze>
 type Opts = { ref: string; asked?: string; color?: boolean; agentSaid?: string }   // agentSaid: the agent's last message, if known
 export const report = (before: Snap, after: Snap, opts: Opts) => render(analyze(before, after, opts))
@@ -2227,12 +2267,12 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const noise: string[] = [], real: string[] = []
   for (const p of changed) {
     const a = A.files.get(p), b = B.files.get(p)
-    if (NOISE.test(p) || (a && b && a.printed === b.printed)) noise.push(p)
+    if (NOISE.test(p) || (a && b && same(p, a.printed, b.printed))) noise.push(p)
     else real.push(p)
   }
   // Pages and addresses can change without their file changing: an Express route ("file#/api/x") inside a bigger file,
   // or a login check added or removed where the route is declared (a mount, a <RequireAuth> wrapper).
-  for (const k of new Set([...A.routes.keys(), ...B.routes.keys()])) if (!real.includes(k) && A.files.get(k)?.printed !== B.files.get(k)?.printed) real.push(k)
+  for (const k of new Set([...A.routes.keys(), ...B.routes.keys()])) if (!real.includes(k) && !same(k, A.files.get(k)?.printed, B.files.get(k)?.printed)) real.push(k)
   const usersOf = (name: string, self: string) =>
     [...B.files].filter(([p, f]) => p !== self && (f.used.has(name) || f.jsx.has(name))).map(([p]) => placeName(p))
   const mainTable = (f: FileFacts, url: string) =>
@@ -3637,7 +3677,7 @@ export function render(r: {
     r.ship.forEach((s, i) => out.push(...wrap(s, `  ${i + 1}. `, '     ')))
   }
   for (const n of r.notes ?? []) out.push('', ...wrap(n, dim(''), '').map(dim))
-  if (r.noise) out.push('', dim(`(Hidden: ${plural(r.noise, 'file')} with only formatting changes, or lockfiles.)`))
+  if (r.noise) out.push('', dim(`(Hidden: ${plural(r.noise, 'file')} whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)`))
   return out.join('\n')
 }
 

@@ -47,4 +47,4 @@ BEFORE YOU SHIP
   4. Test anything that uses @trigger.dev/sdk: it was upgraded from 4.5.3 to 4.5.5.
   5. Test anything that uses @trigger.dev/build: it was upgraded from 4.5.3 to 4.5.5.
 
-(Hidden: 1 file with only formatting changes, or lockfiles.)
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

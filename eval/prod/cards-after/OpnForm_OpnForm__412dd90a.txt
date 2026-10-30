@@ -14,4 +14,4 @@ WHAT CHANGED
     • The agent changed api/composer.lock.
     • The agent changed docs/deployment/docker.mdx.
 
-(Hidden: 1 file with only formatting changes, or lockfiles.)
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

@@ -23,4 +23,4 @@ BEFORE YOU SHIP
   6. Test anything that uses next: it was upgraded from 13.4.12 to 13.4.13.
   7. Test anything that uses eslint-config-prettier: it was upgraded from ^8.10.0 to ^9.0.0.
 
-(Hidden: 1 file with only formatting changes, or lockfiles.)
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)
