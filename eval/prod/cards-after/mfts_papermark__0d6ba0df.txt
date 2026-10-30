@@ -1,0 +1,25 @@
+plain · 8 files changed since 0d6ba0df~1
+You asked: "feat(embed): support custom-domain embeds so downloads work first-party"
+
+  Nothing flagged  ·  1 loose end
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Pages
+    + The view domain embed page is new, titled "Page not found.". It has sections for
+      Welcome, New Question, Frequently Asked Questions, Frequently Asked Questions and
+      Frequently Asked Questions. It has boxes for "Select country", "name", "password" and
+      4 more and an email box, sends verification tokens, agreement responses, data, chats,
+      links, views, documents, feedback responses and reactions to your server, loads links,
+      data, verification tokens and views from your server, deletes data on your server and
+      links to the home page, each document page, each documents tree[…] page, each dataroom
+      document page and each dataroom documents[…] page.
+      /view/domains/[domain]/[slug]/embed
+  Server
+    • The views part of your server changed in a way plain can't describe yet. Ask the agent
+      what it does differently.
+      /api/views
+
+LOOSE ENDS
+  ◐ Type checking is turned off in 2 spots in pages/view/domains/[domain]/[slug]/embed.tsx
+    (`any`).

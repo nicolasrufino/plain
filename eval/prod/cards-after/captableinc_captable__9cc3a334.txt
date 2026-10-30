@@ -1,0 +1,10 @@
+plain · 2 files changed since 9cc3a334~1
+You asked: "fix: pagination issues"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • There's now a default pagination limit of 50.
+      src/server/api/schema/pagination.ts

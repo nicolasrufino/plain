@@ -1,0 +1,10 @@
+plain · 4 files changed since a3ae8bb8~1
+You asked: "Prepare for AWS deployment"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    + New server code that lists data and works without logging in.
+      /api/user/status

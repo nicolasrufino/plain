@@ -1,0 +1,18 @@
+plain · 4 files changed since 74f6d85a~1
+You asked: "feat: model for bank account"
+
+  Nothing flagged  ·  1 step before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Database
+    + Your database now stores bank accounts: beneficiary name, beneficiary address, bank
+      name, bank address, account number, routing number, account type, swift code, primary,
+      date created and date updated. Each one belongs to a company.
+    • Companies are now linked to bank accounts.
+
+BEFORE YOU SHIP
+  1. Apply prisma/migrations/20240718223224_add_bank_account to your live database before
+     the new code goes live (`npx prisma migrate deploy`), or the parts that use it will
+     fail. Don't use the `db:migrate` script there: it runs `prisma migrate dev`, which is
+     for your own computer and can offer to wipe the database.

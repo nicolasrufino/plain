@@ -1,0 +1,16 @@
+plain · 6 files changed since 933b3558~1
+You asked: "require terms acceptance when configured"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent added packages/backend/src/modules/users/terms.ts. plain can't describe it
+      yet.
+    • The agent changed packages/backend/src/config/index.ts,
+      packages/backend/src/modules/audit-log/actions.ts,
+      packages/backend/src/modules/settings/routes.ts,
+      packages/backend/src/modules/users/routes.ts and
+      packages/backend/src/modules/users/service.ts in ways plain can't describe yet. Ask
+      the agent what they do differently.

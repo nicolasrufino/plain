@@ -1,0 +1,14 @@
+plain · 10 files changed since 20ae849a~1
+You asked: "fix: use nuqs prevent infinite re-render loop (#2868)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed apps/remix/app/routes/_authenticated+/admin+/claims.tsx,
+      apps/remix/app/routes/_authenticated+/admin+/email-transports._index.tsx,
+      apps/remix/app/routes/_authenticated+/admin+/organisation-stats._index.tsx,
+      apps/remix/app/routes/_authenticated+/admin+/organisations._index.tsx,
+      apps/remix/app/routes/_authenticated+/o.$orgUrl.settings.members.tsx and 5 more files
+      in ways plain can't describe yet. Ask the agent what they do differently.

@@ -1,0 +1,20 @@
+plain · 3 files changed since e56ebd3e~1
+You asked: "update reqs"
+
+  Nothing flagged  ·  7 steps before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed docker/containers/tactical-nats/dockerfile.
+    • The agent also changed api/tacticalrmm/tacticalrmm/settings.py, in a way plain can't
+      describe yet.
+
+BEFORE YOU SHIP
+  1. Test anything that uses cryptography: it was upgraded from 50.0.0 to 50.0.1.
+  2. Test anything that uses nats-py: it was upgraded from 2.15.0 to 2.16.0.
+  3. Test anything that uses packaging: it was upgraded from 25.0 to 26.3.
+  4. Test anything that uses psycopg: it was upgraded from 3.3.4 to 3.3.5.
+  5. Test anything that uses tldextract: it was upgraded from 5.3.1 to 5.3.2.
+  6. Test anything that uses uvicorn: it was upgraded from 0.52.1 to 0.53.0.
+  7. Test anything that uses markdown: it was upgraded from 3.10.2 to 3.10.3.

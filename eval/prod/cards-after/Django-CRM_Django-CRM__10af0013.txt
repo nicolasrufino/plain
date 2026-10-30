@@ -1,0 +1,16 @@
+plain · 10 files changed since 10af0013~1
+You asked: "feat(import): handle archived tags as row errors in CSV imports"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed backend/uv.lock.
+    • The agent changed docs/integrations/csv-import.md, a notes file (not code).
+    • The agent also changed backend/cases/services/csv_import.py,
+      backend/contacts/services/csv_import.py and backend/leads/csv_import.py, in ways plain
+      can't describe yet.
+    • The agent also changed backend/cases/tests/test_import.py,
+      backend/contacts/tests/test_import.py and backend/leads/tests/test_lead_import.py
+      (tests).

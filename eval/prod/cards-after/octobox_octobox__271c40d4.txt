@@ -1,0 +1,13 @@
+plain · 3 files changed since 271c40d4~1
+You asked: "Keep draft navigation within filtered results"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The notification show part of your server changed in a way plain can't describe yet.
+      Ask the agent what it does differently.
+      /notifications/[id]/show
+  Other files
+    • The agent changed app/views/notifications/_filter-list.html.erb.

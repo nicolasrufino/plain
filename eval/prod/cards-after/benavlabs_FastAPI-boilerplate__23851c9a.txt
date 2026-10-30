@@ -1,0 +1,15 @@
+plain · 14 files changed since 23851c9a~1
+You asked: "draw every module of the composition root in both guides, and say what writes..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed docs/user-guide/composable-features.md, a notes file (not code).
+    • The agent changed docs/user-guide/project-structure.md, a notes file (not code).
+    • The agent also changed backend/scripts/seeders.py, backend/src/wiring/admin.py,
+      backend/src/wiring/app.py, backend/src/wiring/cache.py, backend/src/wiring/email.py
+      and 5 more files, in ways plain can't describe yet.
+    • The agent also added backend/tests/unit/test_docs_wiring.py (tests).
+    • The agent also changed backend/tests/wiring.py (tests).

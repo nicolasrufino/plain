@@ -1,0 +1,12 @@
+plain · 3 files changed since 914e3254~1
+You asked: "docs(trpc): add openapi descriptions to envelope cancel, delete and update ro..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed packages/trpc/server/envelope-router/cancel-envelope.types.ts,
+      packages/trpc/server/envelope-router/delete-envelope.types.ts and
+      packages/trpc/server/envelope-router/update-envelope.types.ts in ways plain can't
+      describe yet. Ask the agent what they do differently.

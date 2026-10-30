@@ -1,0 +1,14 @@
+plain · 11 files changed since 43185fca~1
+You asked: "feat: add exercise selection during workout creation (step 3)"
+
+  Nothing flagged  ·  1 loose end
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed how the app looks on small screens like phones (in
+      src/shared/styles/globals.css).
+
+LOOSE ENDS
+  ◐ Type checking is turned off in 1 spot in
+    src/features/workout-builder/model/workout-builder.store.ts (`any`).

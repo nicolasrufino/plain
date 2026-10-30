@@ -1,0 +1,11 @@
+plain · 2 files changed since 45036c1f~1
+You asked: "delete profile endpoint"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The v1 me part of your server changed in a way plain can't describe yet. Ask the agent
+      what it does differently.
+      /api/v1/me

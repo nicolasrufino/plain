@@ -1,0 +1,26 @@
+plain · 20 files changed since 8d6a714f~1
+You asked: "fix: :bug: fix imageupload on no image account"
+
+  ⚠ 1 problem
+
+LOOK AT THIS FIRST
+  ⚠ Anyone can use the "get user subscription plan" action on your server without logging
+    in.
+
+WHAT CHANGED
+  Pages
+    • The dashboard billing page changed in a way plain can't describe yet. Ask the agent
+      what it does differently.
+      /[locale]/dashboard/billing
+  Server
+    + New server code that looks up users.
+      (server action) getUserSubscriptionPlan in src/actions/subscription.ts
+    • The stripe part of your server changed in a way plain can't describe yet. This is the
+      code that charges your customers 💰 Make a test payment before you ship.
+      /api/stripe
+    • The agent changed the auth login github callback, auth login send OTP, auth login
+      verify OTP, uploadthing, webhooks stripe, generate email verification code, verify
+      verification code, create project, check if free plan limit reached, get projects, get
+      project by id, update project by id, delete project by id, update user and remove user
+      old image from cdn parts of your server in ways plain can't describe yet. Ask the
+      agent what they do differently.

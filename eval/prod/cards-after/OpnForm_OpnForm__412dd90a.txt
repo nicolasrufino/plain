@@ -1,0 +1,17 @@
+plain · 6 files changed since 412dd90a~1
+You asked: "Remove Vapor Core and update vulnerable dependencies (#1365)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The vapor signed storage URL part of your server changed in a way plain can't describe
+      yet. Ask the agent what it does differently.
+      /vapor/signed-storage-url
+  Other files
+    • The agent changed api/composer.json.
+    • The agent changed api/composer.lock.
+    • The agent changed docs/deployment/docker.mdx.
+
+(Hidden: 1 file with only formatting changes, or lockfiles.)

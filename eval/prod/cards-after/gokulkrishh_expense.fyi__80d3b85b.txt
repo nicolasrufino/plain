@@ -1,0 +1,26 @@
+plain · 9 files changed since 80d3b85b~1
+You asked: "Fix subscription estimated paid amount in overview+upgrade libs (#17)"
+
+  Nothing flagged  ·  8 steps before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Pages
+    • The app page now says "Estimated spent amount for selected date range.".
+      /app
+  Server
+    • The agent changed the subscriptions all and subscriptions update parts of your server
+      in ways plain can't describe yet. Ask the agent what they do differently.
+  Database
+    • Subscriptions now also store the cancelled date.
+
+BEFORE YOU SHIP
+  1. Update your database: run `npx prisma migrate dev` (on your live site: `npx prisma
+     migrate deploy`). The database's structure changed, but no migration was created.
+  2. Test anything that uses @heroicons/react: it was upgraded from ^2.0.14 to ^2.0.15.
+  3. Test anything that uses @prisma/client: it was upgraded from ^4.10.0 to ^4.10.1.
+  4. Test anything that uses @react-email/container: it was upgraded from ^0.0.6 to ^0.0.7.
+  5. Test anything that uses @react-email/section: it was upgraded from ^0.0.6 to ^0.0.8.
+  6. Test anything that uses resend: it was upgraded from ^0.10.0 to ^0.11.0.
+  7. Test anything that uses prisma: it was upgraded from ^4.10.0 to ^4.10.1.
+  8. Test anything that uses tailwindcss: it was upgraded from ^3.2.4 to ^3.2.6.

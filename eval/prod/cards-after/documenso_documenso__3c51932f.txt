@@ -1,0 +1,14 @@
+plain · 11 files changed since 3c51932f~1
+You asked: "fix: keep previous table data during pagination (#3073)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed apps/remix/app/components/tables/admin-claims-table.tsx,
+      apps/remix/app/components/tables/admin-document-jobs-table.tsx,
+      apps/remix/app/components/tables/admin-email-transports-table.tsx,
+      apps/remix/app/components/tables/admin-organisation-stats-table.tsx,
+      apps/remix/app/components/tables/admin-organisations-table.tsx and 6 more files in
+      ways plain can't describe yet. Ask the agent what they do differently.

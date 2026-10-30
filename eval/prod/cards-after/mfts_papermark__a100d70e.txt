@@ -1,0 +1,10 @@
+plain · 6 files changed since a100d70e~1
+You asked: "fix: strip trailing spaces from link passcodes"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The agent changed the views dataroom and views parts of your server in ways plain
+      can't describe yet. Ask the agent what they do differently.

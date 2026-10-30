@@ -1,0 +1,13 @@
+plain · 5 files changed since a345ecd7~1
+You asked: "chore: lint and link to turso"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The todos stats part of your server changed in a way plain can't describe yet. Ask the
+      agent what it does differently.
+      /api/todos/stats
+
+(Hidden: 1 file with only formatting changes, or lockfiles.)

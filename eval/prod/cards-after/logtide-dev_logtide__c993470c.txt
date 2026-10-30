@@ -1,0 +1,11 @@
+plain · 3 files changed since c993470c~1
+You asked: "hide null quotas only under a telemetry cap"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed packages/frontend/src/lib/utils/usage-capabilities.ts and
+      packages/frontend/src/routes/dashboard/settings/usage/+page.svelte in ways plain can't
+      describe yet. Ask the agent what they do differently.

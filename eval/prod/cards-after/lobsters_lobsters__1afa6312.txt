@@ -1,0 +1,11 @@
+plain · 5 files changed since 1afa6312~1
+You asked: "add PWA support, fix #1287"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    + The agent added public/manifest.json.
+    + The agent added public/touch-icon-512.png.
+    • The agent changed app/views/layouts/application.html.erb.

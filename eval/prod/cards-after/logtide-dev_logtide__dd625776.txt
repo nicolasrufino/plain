@@ -1,0 +1,15 @@
+plain · 7 files changed since dd625776~1
+You asked: "add metrics datapoint quota"
+
+  Nothing flagged  ·  2 loose ends
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed CHANGELOG.md, a notes file (not code).
+
+LOOSE ENDS
+  ◐ Type checking is turned off in 1 spot in
+    packages/backend/src/modules/otlp/metric-routes.ts (`any`).
+  ◐ Type checking is turned off in 3 spots in
+    packages/backend/src/tests/modules/capabilities/ingestion-quota.test.ts (`any`).

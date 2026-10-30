@@ -1,0 +1,30 @@
+plain · 23 files changed since 7010af09~1
+You asked: "refactor(config): route every environment read through Settings (#2187)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    + The agent added openspec/changes/env-reads-through-settings/proposal.md, a notes file
+      (not code).
+    + The agent added
+      openspec/changes/env-reads-through-settings/specs/deployment-installation/spec.md, a
+      notes file (not code).
+    + The agent added
+      openspec/changes/env-reads-through-settings/specs/user-documentation/spec.md, a notes
+      file (not code).
+    + The agent added openspec/changes/env-reads-through-settings/tasks.md, a notes file
+      (not code).
+    • The agent changed docs/reference/settings.md, a notes file (not code).
+    • The agent changed openspec/specs/deployment-installation/context.md, a notes file (not
+      code).
+    • The agent also changed app/core/config/settings.py,
+      app/core/middleware/trusted_proxy_headers.py,
+      app/modules/usage/additional_quota_keys.py and scripts/generate_settings_reference.py,
+      in ways plain can't describe yet.
+    • The agent also added tests/unit/test_settings_promoted_env.py (tests).
+    • The agent also changed tests/integration/test_api_firewall_middleware.py,
+      tests/unit/test_additional_model_limits.py, tests/unit/test_additional_usage_repo.py,
+      tests/unit/test_db_migrate.py, tests/unit/test_firewall_raw_peer.py and 5 more files
+      (tests).

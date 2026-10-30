@@ -1,0 +1,10 @@
+plain · 4 files changed since 2eac19a0~1
+You asked: "Add arrow key navigation shortcuts"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed README.md, a notes file (not code).
+    • The agent changed app/views/shared/_keyboard_mappings.html.erb.

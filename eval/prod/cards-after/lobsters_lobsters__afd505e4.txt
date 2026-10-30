@@ -1,0 +1,10 @@
+plain · 2 files changed since afd505e4~1
+You asked: "Related fix to story.rb to remove an unneeded include"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed app/models/story.rb in a way plain can't describe yet. Ask the agent
+      what it does differently.

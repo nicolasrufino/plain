@@ -1,0 +1,11 @@
+plain · 8 files changed since 688e497f~1
+You asked: "feat(locales): add Portuguese language support and donation banner in release..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed locales/en.ts, locales/es.ts, locales/fr.ts, locales/pt.ts,
+      locales/ru.ts and 3 more files in ways plain can't describe yet. Ask the agent what
+      they do differently.

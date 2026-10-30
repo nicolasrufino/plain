@@ -1,0 +1,24 @@
+plain · 9 files changed since d1411725~1
+You asked: "require the update permission of a scoped credential editing its owner's own ..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The main part of your server changed in a way plain can't describe yet. Ask the agent
+      what it does differently.
+      /[username]
+  Other files
+    • The agent changed docs/changelog.md, a notes file (not code).
+    • The agent changed docs/user-guide/authentication/api-keys.md, a notes file (not code).
+    • The agent changed docs/user-guide/authentication/permissions.md, a notes file (not
+      code).
+    • The agent changed docs/user-guide/authentication/user-management.md, a notes file (not
+      code).
+    • The agent also changed backend/src/modules/user/service.py, in a way plain can't
+      describe yet.
+    • The agent also changed
+      backend/tests/integration/api/v1/api_keys/test_effective_permissions.py,
+      backend/tests/integration/api_keys_rbac/test_effective_permissions.py and
+      backend/tests/unit/modules/user/test_service.py (tests).

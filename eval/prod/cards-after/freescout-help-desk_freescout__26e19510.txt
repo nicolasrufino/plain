@@ -1,0 +1,10 @@
+plain · 4 files changed since 26e19510~1
+You asked: "Conversation split view"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed public/css/style.css.
+    • The agent changed resources/views/conversations/partials/conv_list.blade.php.

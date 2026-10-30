@@ -1,0 +1,14 @@
+plain · 10 files changed since 9921987a~1
+You asked: "Remove target=_blank from non-external links - closes #5086"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed resources/views/conversations/partials/prev_convs_short.blade.php.
+    • The agent changed resources/views/conversations/search.blade.php.
+    • The agent changed resources/views/layouts/app.blade.php.
+    • The agent changed resources/views/modules/modules.blade.php.
+    • The agent changed resources/views/secure/logs.blade.php.
+    • The agent changed resources/views/users/subscriptions_table.blade.php.

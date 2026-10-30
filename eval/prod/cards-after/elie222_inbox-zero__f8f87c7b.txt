@@ -1,0 +1,12 @@
+plain · 7 files changed since f8f87c7b~1
+You asked: "fix(bulk-unsubscribe): only suggest senders that have an unsubscribe link (#4..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed apps/web/app/(app)/[emailAccountId]/bulk-unsubscribe/suggestions.ts,
+      apps/web/app/api/resend/inbox-health/helpers.ts,
+      apps/web/app/api/resend/inbox-health/route.ts and apps/web/utils/sender-stats.ts in
+      ways plain can't describe yet. Ask the agent what they do differently.

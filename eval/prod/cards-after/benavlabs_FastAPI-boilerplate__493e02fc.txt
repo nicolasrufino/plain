@@ -1,0 +1,16 @@
+plain · 5 files changed since 493e02fc~1
+You asked: "record an address a usage row cannot hold as none instead of failing the request"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • There's now a maximum address length of 45.
+      backend/src/modules/api_keys/usage.py
+  Other files
+    • The agent changed docs/changelog.md, a notes file (not code).
+    • The agent changed docs/user-guide/authentication/api-keys.md, a notes file (not code).
+    • The agent also added backend/tests/unit/modules/api_keys/test_usage.py (tests).
+    • The agent also changed backend/tests/integration/api/v1/api_keys/test_usage.py
+      (tests).

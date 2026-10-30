@@ -1,0 +1,26 @@
+plain · 11 files changed since e148078c~1
+You asked: "Fix subscriptions from & to + upgrade pkgs"
+
+  Nothing flagged  ·  7 steps before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Pages
+    • The dashboard subscriptions page changed in a way plain can't describe yet. Ask the
+      agent what it does differently.
+      /dashboard/subscriptions
+  Server
+    • The subscriptions part of your server changed in a way plain can't describe yet. Ask
+      the agent what it does differently.
+      /api/subscriptions
+
+BEFORE YOU SHIP
+  1. Test anything that uses @supabase/supabase-js: it was upgraded from ^2.31.0 to ^2.32.0.
+  2. Test anything that uses @tremor/react: it was upgraded from ^3.6.0 to ^3.6.1.
+  3. Test anything that uses @types/node: it was upgraded from 20.4.8 to 20.4.9.
+  4. Test anything that uses @types/react: it was upgraded from 18.2.18 to 18.2.20.
+  5. Test anything that uses eslint-config-next: it was upgraded from 13.4.12 to 13.4.13.
+  6. Test anything that uses next: it was upgraded from 13.4.12 to 13.4.13.
+  7. Test anything that uses eslint-config-prettier: it was upgraded from ^8.10.0 to ^9.0.0.
+
+(Hidden: 1 file with only formatting changes, or lockfiles.)

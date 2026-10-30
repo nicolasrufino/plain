@@ -1,0 +1,16 @@
+plain · 11 files changed since 8ccdee47~1
+You asked: " JulianPrieber committed 1 hour ago Create global validation endpoint"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The agent changed the admin edit user, admin site, studio page, studio background and
+      import data parts of your server in ways plain can't describe yet. Ask the agent what
+      they do differently.
+  Other files
+    • The agent changed composer.json.
+    • The agent changed resources/views/panel/edit-user.blade.php.
+    • The agent changed resources/views/studio/page.blade.php.
+    • The agent changed resources/views/studio/theme.blade.php.

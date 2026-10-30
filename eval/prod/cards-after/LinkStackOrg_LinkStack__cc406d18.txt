@@ -1,0 +1,11 @@
+plain · 2 files changed since cc406d18~1
+You asked: "Fix Updater"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed resources/views/components/pre-update.blade.php.
+    • The agent deleted
+      resources/views/components/updater/links-table-translation-layer.blade.php.

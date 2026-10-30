@@ -1,0 +1,17 @@
+plain · 5 files changed since fed54730~1
+You asked: "fix(metrics): bound request metric path and method label cardinality (#1967)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    + The agent added openspec/changes/bound-request-metric-label-cardinality/proposal.md, a
+      notes file (not code).
+    + The agent added
+      openspec/changes/bound-request-metric-label-cardinality/specs/proxy-runtime-observability/spec.md,
+      a notes file (not code).
+    + The agent added openspec/changes/bound-request-metric-label-cardinality/tasks.md, a
+      notes file (not code).
+    • The agent also changed app/core/metrics/middleware.py, in a way plain can't describe
+      yet.

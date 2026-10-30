@@ -1,0 +1,19 @@
+plain · 4 files changed since 8cd319db~1
+You asked: "fix(deps): upgrade better-auth to 1.7 (#419)"
+
+  Nothing flagged  ·  2 steps before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Database
+    • Sessions now also store the impersonated by.
+  Other files
+    • The agent changed apps/docs/content/docs/developers/auth-permissions.mdx.
+
+BEFORE YOU SHIP
+  1. Apply prisma/migrations/20261029000000_session_impersonated_by to your live database
+     before the new code goes live (`npx prisma migrate deploy`), or the parts that use it
+     will fail.
+  2. Test anything that uses better-auth: it was upgraded from ^1.6.22 to ^1.7.14.
+
+(Hidden: 1 file with only formatting changes, or lockfiles.)

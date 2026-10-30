@@ -1,0 +1,12 @@
+plain · 6 files changed since eda6167a~1
+You asked: "integrations: Add a test connection action for MCP integrations (#4216)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed apps/web/app/(app)/[emailAccountId]/integrations/IntegrationRow.tsx,
+      apps/web/utils/actions/mcp.ts, apps/web/utils/actions/mcp.validation.ts,
+      apps/web/utils/mcp/list-tools.ts and apps/web/utils/mcp/sync-tools.ts in ways plain
+      can't describe yet. Ask the agent what they do differently.

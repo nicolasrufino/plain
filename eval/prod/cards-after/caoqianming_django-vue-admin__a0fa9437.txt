@@ -1,0 +1,14 @@
+plain · 2 files changed since a0fa9437~1
+You asked: "同步一下数据库"
+
+  Nothing flagged  ·  1 step before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed server/db.sqlite3.
+
+BEFORE YOU SHIP
+  1. Apply server/apps/system/migrations/0003_auto_20220227_1732.py to your live database
+     before the new code goes live (`python manage.py migrate`), or the parts that use it
+     will fail.

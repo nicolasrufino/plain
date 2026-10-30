@@ -1,0 +1,15 @@
+plain · 3 files changed since 2f131403~1
+You asked: "fix: reject oversized file listing page numbers"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The agent files part of your server changed in a way plain can't describe yet. Ask the
+      agent what it does differently.
+      /agents/[agent_id]/files
+  Other files
+    • The agent also changed api/tacticalrmm/tacticalrmm/constants.py, in a way plain can't
+      describe yet.
+    • The agent also changed api/tacticalrmm/agents/tests/test_file_browser.py (tests).
