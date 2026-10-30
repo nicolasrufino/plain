@@ -98,6 +98,11 @@ officially documented. The surveys cover professional developers, not vibe coder
 - **Addresses** are built from the mounts: `app.use('/api/admin', adminRouter)` +
   `router.get('/users')` = `/api/admin/users`. `:id` is shown as `[id]`. Works with `import`
   and `require()`.
+- **Handlers in a controller file** (`router.get('/orders', ctrl.list)`) are read from what that
+  module exports as `list`, the way JavaScript ends up with it: `exports.list = ...`,
+  `module.exports.list = ...`, `module.exports = { list }` or `export default { list: fn }`
+  (a later `module.exports = {...}` replaces earlier ones). Not wrappers like
+  `catchAsync(async ...)`, classes, or `import * as ctrl`: those stay unread.
 - **Login check:** middleware whose name says so (`requireAuth`, `requireAdmin`,
   `verifyToken`, `passport.authenticate(...)`, `isLoggedIn`, ...). It can sit on the route,
   on the mount, or on the whole router (`router.use(requireAuth)`).

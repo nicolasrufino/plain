@@ -71,7 +71,7 @@ export type FileFacts = {
   fns: Map<string, string>; used: Set<string>; jsx: Set<string>; services: Set<string>
   tables: Set<string>; ops: Set<string>; writes: boolean; sbAuth: boolean; env: Set<string>; auth: boolean; admin?: boolean; money: boolean   // admin: the login check turns away everyone but admins. sbAuth: supabase.auth.getUser(), a real check only on a server
   emptyCatch: number; todos: string[]; hardcoded: string[]; anys: number; printed: string
-  texts: Set<string>; refuses: Set<string>; envReq: Set<string>; exports: Set<string>   // words on screen ("[price]" for a formatted price); "no" messages (4xx); env vars without a fallback
+  texts: Set<string>; refuses: Set<string>; envReq: Set<string>; exports: Set<string>; cjs?: Map<string, FileFacts>   // cjs: what a module exports by name, as JavaScript ends up with it (see fileFacts); words on screen ("[price]" for a formatted price); "no" messages (4xx); env vars without a fallback
   serverFns: Map<string, string>; serverRoute: boolean; serverGuard: boolean; pageGuard: boolean; middleware: Map<string, boolean>   // TanStack Start; middleware: name -> does it stop people?
   authStop: boolean; authReturn: boolean   // turns away people who aren't logged in (see loginGroups); authReturn: the same check ending in a return
   exportAuth?: boolean                    // Nuxt: the default-exported handler itself checks login
@@ -276,6 +276,23 @@ export function fileFacts(path: string, text: string): FileFacts {
       if (isExported(st)) addFn(name, node)
     }
   }
+  // what the module exports by name, for routes that name a controller's function (router.get("/x", ctrl.list)): exports.list = ...,
+  // module.exports.list = ..., and module.exports = { list, create: fn } / export default { list: listOrders } (which replace them)
+  // ponytail: not exports.x = catchAsync(async ...) wrappers, classes, or factories (require(x)(deps))
+  const cjs = new Map<string, FileFacts>()
+  let replaced = false   // (after module.exports = ..., a bare exports.x = ... goes to the old object nobody imports)
+  const fnFacts = (e: ts.Expression) => ts.isIdentifier(e) ? f.locals.get(e.text) : fnLike(e) ? collect(sf, e, empty(printer.printNode(ts.EmitHint.Unspecified, e, sf))) : undefined
+  for (const st of sf.statements) {
+    const e = ts.isExpressionStatement(st) && ts.isBinaryExpression(st.expression) && st.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken ? st.expression : undefined
+    const obj = e && e.left.getText(sf) === 'module.exports' ? e.right : ts.isExportAssignment(st) && !st.isExportEquals ? st.expression : undefined
+    if (obj) replaced = true
+    if (obj && ts.isObjectLiteralExpression(obj)) { cjs.clear()
+      for (const q of obj.properties) { const g = ts.isShorthandPropertyAssignment(q) ? f.locals.get(q.name.text) : ts.isPropertyAssignment(q) ? fnFacts(q.initializer) : ts.isMethodDeclaration(q) ? fnFacts(q as unknown as ts.Expression) : undefined
+        if (g && q.name && (ts.isIdentifier(q.name) || ts.isStringLiteral(q.name))) cjs.set(q.name.text, g) } }
+    else if (obj) cjs.clear()
+    else if (e && ts.isPropertyAccessExpression(e.left) && (e.left.expression.getText(sf) === 'module.exports' || e.left.expression.getText(sf) === 'exports' && !replaced)) { const g = fnFacts(e.right); if (g) cjs.set(e.left.name.text, g); else cjs.delete(e.left.name.text) }
+  }
+  if (cjs.size) f.cjs = cjs
   return f
 }
 
@@ -322,7 +339,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   const isGuard = (a: ts.Node) => !fnLike(a) && GUARD.test(a.getText(sf)) && !NOT_GUARD.test(a.getText(sf))
   const addHandler = (server: string, method: string, path: string, mw: readonly ts.Expression[], h: ts.Expression) =>
     f.handlers.push({ server, method: method.toUpperCase(), path, guard: guarded.has(server) || mw.some(isGuard), mw: [...guardMw.get(server) ?? [], ...mw.map(m => m.getText(sf))], adminInline: inlineMw.get(`${server}@${scopeAt(h)}`) ?? [],
-      handler: ts.isIdentifier(h) ? h.text : undefined, facts: fnLike(h) ? collect(sf, h, empty(printer.printNode(ts.EmitHint.Unspecified, h, sf))) : empty(h.getText(sf)) })
+      handler: ts.isIdentifier(h) ? h.text : ts.isPropertyAccessExpression(h) && ts.isIdentifier(h.expression) ? `${h.expression.text}.${h.name.text}` : undefined, facts: fnLike(h) ? collect(sf, h, empty(printer.printNode(ts.EmitHint.Unspecified, h, sf))) : empty(h.getText(sf)) })
   const labelFor = new Map<string, string>(), boxes: { id?: string; type: string; v?: string; aria: boolean }[] = []
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
     : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
@@ -1986,7 +2003,10 @@ export function appFacts(snap: Snap) {
       const url = py ? py.url : h.path.startsWith('(server action) ') ? `${h.path} in ${p}`
         : (pre!.path.replace(/\/$/, '') + (h.path === '/' ? '' : h.path)).replace(/:(\w+)\??/g, '[$1]') || '/'
       const key = `${p}#${url}`, unit = files.get(key) ?? empty()
-      const hf = h.handler ? f.locals.get(h.handler) ?? (target(p, h.handler) ? files.get(target(p, h.handler)!)?.locals.get(h.handler) : undefined) ?? h.facts : h.facts
+      // (ctrl.list: what the module ctrl comes from exports as `list`; a function imported by name: its own, or what its module exports)
+      const [ns, member] = h.handler?.includes('.') ? h.handler.split('.') : [], at = h.handler ? target(p, ns ?? h.handler) : undefined
+      const hf = member ? (at && files.get(at)?.cjs?.get(member)) || h.facts
+        : h.handler ? f.locals.get(h.handler) ?? (at ? files.get(at)?.locals.get(h.handler) ?? files.get(at)?.cjs?.get(h.handler) : undefined) ?? h.facts : h.facts
       for (const k of ['tables', 'written', 'ops', 'outside', 'env', 'envReq', 'services', 'fetches', 'refuses'] as const) for (const x of hf[k]) unit[k].add(x)
       unit.money ||= hf.money
       if (p.endsWith('.py')) pyFold(p, hf, unit, new Set())
@@ -2550,10 +2570,11 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const selfDelete = (url: string, a: FileFacts | undefined, b: FileFacts) => { const nm = named(url).join(' '), newDelete = b.fns.has('DELETE') && !a?.fns.has('DELETE')
     const deletesUser = b.ops.has('delete') && [...b.written].some(t => /^users?$/i.test(t))
     // (the address is only that: /api/me, /api/users/me, /settings/account; not /teams/[id]/members/me (leaving a team) or
-    // /api/stripe/account (disconnecting a service). A handler plain can read must delete something: clearing a photo isn't it)
+    // /api/stripe/account (disconnecting a service). A handler plain can read must delete something: clearing a photo isn't it;
+    // Mongoose/Sequelize's req.user.remove() / .destroy() is the logged-in person's own record)
     const segs = url.split('/').filter(Boolean), own = !url.includes('[') && segs.slice(0, -1).every(s => /^(?:api|v\d+|users?|auth|settings|me)$/.test(s))
     return !/admin/i.test(url) && !/\]$/.test(url) && (own && /(?:^|\s)(?:me|account|my account|profile|my profile|self|current user)$/.test(nm) && newDelete
-      && (b.ops.has('delete') && [...b.written].some(t => /^(?:users?|accounts?|profiles?)$/i.test(t)) || !b.ops.size && !b.written.size && !b.outside.size && !/cookie|session\.(?:destroy|delete|flush|invalidate|revoke|clear)|(?:invalidate|revoke|delete|destroy|end)_?Sessions?\b|\.del\s*\(|logout|log_out|sign_?out|signOut|storage|\.(?:remove|delete|destroy)\s*\(/i.test(b.fns.get('DELETE') ?? ''))
+      && (b.ops.has('delete') && [...b.written].some(t => /^(?:users?|accounts?|profiles?)$/i.test(t)) || /\breq\.user\.(?:remove|deleteOne|destroy|delete)\s*\(\s*\)/.test(b.fns.get('DELETE') ?? '') || !b.ops.size && !b.written.size && !b.outside.size && !/cookie|session\.(?:destroy|delete|flush|invalidate|revoke|clear)|(?:invalidate|revoke|delete|destroy|end)_?Sessions?\b|\.del\s*\(|logout|log_out|sign_?out|signOut|storage|\.(?:remove|delete|destroy)\s*\(/i.test(b.fns.get('DELETE') ?? ''))
       || /(?:^|\s)user$/.test(nm) && newDelete && deletesUser
       || !a && deletesUser && /(?:^|\s)(?:delete|remove|destroy) (?:my )?(?:account|profile|me|self)$|(?:^|\s)(?:account|profile|me) (?:delete|remove|destroy)$/.test(nm)) }
   const changes: Change[] = [], problems: Problem[] = [], unfinished: string[] = [], ship: string[] = []

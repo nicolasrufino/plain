@@ -6,5 +6,5 @@ You asked: "Prepare for AWS deployment"
 
 WHAT CHANGED
   Server
-    + New server code that lists data and works without logging in.
+    + New server code that answers requests and works without logging in.
       /api/user/status

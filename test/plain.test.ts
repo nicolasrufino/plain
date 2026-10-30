@@ -8201,3 +8201,30 @@ console.log('ok (request fields)')
   assert.ok(one('class AddUserParam(BaseModel):\n    roles: list[int] = Field(description="ids")\n', 'class AddUserParam(BaseModel):\n    role_ids: list[int] = Field(description="ids")\n').includes(`${E}: it now needs "role_ids" instead of "roles"`), 'Field() without a default is required')
 }
 console.log('ok (review 87)')
+// Express routes that name a controller's function (router.get("/status", userController.healthStatus)): plain reads that function
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const ex = { 'package.json': '{"dependencies":{"express":"4.0.0","@prisma/client":"5.0.0"}}', 'prisma/schema.prisma': 'model Order {\n  id Int @id\n  total Int\n}\n', 'lib/db.js': 'exports.prisma = {}\n',
+    'controllers/orders.js': 'const { prisma } = require("../lib/db")\nexports.health = (req, res) => res.status(200).json({ message: "Ok" })\nexports.list = async (req, res) => res.json(await prisma.order.findMany())\nmodule.exports.create = async function (req, res) { res.json(await prisma.order.create({ data: req.body })) }\n' }
+  const srv = (route: string) => ({ ...ex, 'server.js': `const express = require("express")\nconst ctrl = require("./controllers/orders")\nconst app = express()\nconst router = express.Router()\n${route}\napp.use("/api", router)\napp.listen(3000)\n` })
+  assert.ok(c(srv(''), srv('router.get("/status", ctrl.health)')).includes('New server code that answers requests and works without logging in'), 'health check')
+  assert.ok(c(srv(''), srv('router.get("/orders", ctrl.list)')).includes('New server code that lists orders'), 'exports.list')
+  assert.ok(c(srv(''), srv('router.post("/orders", ctrl.create)')).includes('New server code that saves new orders'), 'module.exports.create')
+}
+console.log('ok (express controllers)')
+// (review 99: the function the module really exports under that name: not a same-named helper, not one an export object replaced)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"express":"4.0.0","@prisma/client":"5.0.0"}}', 'prisma/schema.prisma': 'model Order {\n  id Int @id\n}\nmodel Upload {\n  id Int @id\n}\n', 'lib/db.js': 'exports.prisma = {}\n' }
+  const srv = (ctl: string, route = 'router.get("/orders", ctrl.list)') => ({ ...base, 'controllers/orders.js': `const { prisma } = require("../lib/db")\n${ctl}`, 'server.js': `const express = require("express")\nconst ctrl = require("./controllers/orders")\nconst app = express()\nconst router = express.Router()\n${route}\napp.use("/api", router)\napp.listen(3000)\n` })
+  const lists = (ctl: string) => c(srv(ctl, ''), srv(ctl))
+  const del = 'async function purge(where) { await prisma.upload.deleteMany({ where }) }\n', ok = 'async (req, res) => res.json(await prisma.order.findMany())'
+  for (const [name, ctl] of [
+    ['same-named helper', `async function list(where) { await prisma.upload.deleteMany({ where }) }\nexports.list = ${ok}\n`],
+    ['module.exports = { list: listOrders }', `${del}const listOrders = ${ok}\nconst list = purge\nmodule.exports = { list: listOrders }\n`],
+    ['module.exports = { list }', `const list = ${ok}\nmodule.exports = { list }\n`],
+    ['a dead exports.list after module.exports', `const listOrders = ${ok}\nmodule.exports = { list: listOrders }\nexports.list = async (req, res) => { await prisma.upload.deleteMany({}) }\n`],
+    ['exports.list twice: the last', `exports.list = async (req, res) => { await prisma.upload.deleteMany({}) }\nexports.list = ${ok}\n`],
+  ] as const) { const x = lists(ctl); assert.ok(x.includes('lists orders') && !x.includes('Anyone can use'), `${name}: ${x}`) }
+}
+console.log('ok (review 99)')
