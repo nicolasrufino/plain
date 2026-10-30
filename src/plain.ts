@@ -2794,12 +2794,39 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   if (verb && !writesNow && newViewOnly.length)
     problems.push({ kind: 'Check', text: `You asked to "${verb}", but nothing new lets you change anything: ${list(newViewOnly.map(placeName))} only ${newViewOnly.length > 1 ? 'show' : 'shows'} information. If you wanted buttons to act on things (like refunding or cancelling orders), ask for that. (This is a guess.)` })
 
+  // Translation files (workout-cool's locales/en.ts, a messages/en.json, config/locales/en.yml): the new English wording is what
+  // people will read, so say it, and that the same file in other languages changed with it. Wording: string values that read as
+  // words (not URLs, `true`, anchors, `{count, plural, ...}`, markup); a key that's new is added, one whose value changed is changed.
+  // Not vendored libraries' files, nor code that happens to sit in a messages/ folder (functions, classes).
+  const LOCALE = /(?:^|\/)(?:locales?|i18n|lang|langs|translations|messages)\/(?:([a-z]{2}(?:[-_][A-Za-z]{2,4})?)(?:\/[\w-]+)?|[\w-]+\/([a-z]{2}(?:[-_][A-Za-z]{2,4})?))\.(?:[cm]?[jt]s|json|ya?ml)$/
+  const langOf = (q: string) => { const m = q.match(LOCALE), t = after.get(q) ?? before.get(q) ?? ''
+    return m && !/(?:^|\/)(?:vendor|node_modules|public\/js|assets\/vendor|static\/vendor)\//.test(q) && !/\bfunction\b|=>|\bclass\s/.test(t.replace(/"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`/g, '""')) ? m[1] ?? m[2] : undefined }   // (code outside strings)
+  const WORDING = (v: string) => /[A-Za-z]{2}/.test(v.replace(/\{[^{}]*\}/g, '')) && !/^(?:https?:|\/|[&*]|<<|true$|false$|null$|~$)|<\/?\w|\{\s*\w+\s*,\s*(?:plural|select)/.test(v)
+  const pairsOf = (q: string, t = '') => [...(/\.ya?ml$/.test(q) ? t.matchAll(/^[ \t]*([\w.-]+):[ \t]*(["']?)(.+?)\2[ \t]*$/gm) : t.matchAll(/(["']?)([\w.-]+)\1\s*:\s*(["'`])((?:\\.|(?!\3)[^\\\n])*)\3/g))]
+    .map(m => (/\.ya?ml$/.test(q) ? [m[1], m[3]] : [m[2], m[4]]) as [string, string])
+  const locales = real.filter(p => !p.includes('#') && after.has(p) && before.has(p) && langOf(p)).map(p => {
+    // (a key is added when it's there more times than before: a new release note's `title` next to the old ones' titles)
+    const old = pairsOf(p, before.get(p)), now = pairsOf(p, after.get(p)), oldPairs = new Set(old.map(([k, v]) => k + '\0' + v))
+    const n = (xs: [string, string][], k: string) => xs.filter(x => x[0] === k).length
+    const fresh = now.filter(([k, v]) => !oldPairs.has(k + '\0' + v) && WORDING(v)).map(([k, v]) => [k, v.replace(/\\(["'`\\])/g, '$1')] as [string, string])
+    const isNew = ([k]: [string, string]) => n(now, k) > n(old, k)
+    return { p, lang: langOf(p)!, keys: new Set(fresh.map(([k]) => k)), added: fresh.filter(isNew).map(([, v]) => v), changed: fresh.filter(x => !isNew(x)).map(([, v]) => v) } })
+    .filter(x => x.added.length || x.changed.length)
+  const localeSaid = new Set<string>()
+  for (const e of locales.filter(x => /^en(?:$|[-_])/i.test(x.lang))) {
+    // (the same file in another language: locales/fr.ts for locales/en.ts, locales/fr/common.json for locales/en/common.json)
+    // (and only when it changed the same keys: an unrelated fix in fr.json isn't "the same")
+    const others = locales.filter(x => !/^en(?:$|[-_])/i.test(x.lang) && x.p === e.p.replace(new RegExp(`(^|/)${e.lang}(?=[./])`), `$1${x.lang}`) && [...x.keys].every(k => e.keys.has(k)))
+    const q_ = (t: string) => `"${t.length > 60 ? t.slice(0, 57) + '…' : t}"`, all = [...e.added, ...e.changed]
+    changes.push({ group: 'Other files', text: `The agent ${e.added.length && e.changed.length ? 'added and changed' : e.added.length ? 'added' : 'changed'} wording in the app (in ${e.p}): ${list([...all.slice(0, 3).map(q_), ...all.length > 3 ? [`${all.length - 3} more`] : []])}${others.length ? `, and the same in ${others.length} other language${others.length > 1 ? 's' : ''}` : ''}.` })
+    for (const x of [e, ...others]) localeSaid.add(x.p) }
+
   // files that aren't code
   // (an Angular component's template is part of that component's page)
   const templates = new Set([...after, ...before].flatMap(([q, t]) => [...t.matchAll(/templateUrl\s*:\s*['"`]([^'"`]+)['"`]/g)].map(m => join(q, '..', m[1]))))
   // (and code-style settings, .eslintrc.cjs / eslint.config.js / prettier.config.mjs: code by name, but never what the app does)
   const STYLE = /(?:^|\/)(?:\.eslintrc(?:\.[\w]+)?|eslint\.config\.[cm]?[jt]s|\.prettierrc(?:\.[\w]+)?|prettier\.config\.[cm]?[jt]s|\.stylelintrc(?:\.[\w]+)?|stylelint\.config\.[cm]?[jt]s|biome\.jsonc?|\.editorconfig)$/
-  for (const p of real) if (!p.includes('#') && (!CODE.test(p) || STYLE.test(p)) && !templates.has(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p) && !B.goMigrations.includes(p) && !A.goMigrations.includes(p) && !/(^|\/)go\.sum$|\.down\.sql$/.test(p))
+  for (const p of real) if (!p.includes('#') && !localeSaid.has(p) && (!CODE.test(p) || STYLE.test(p)) && !templates.has(p) && !/(^|\/)(package\.json|\.env\.example|schema\.prisma|\.gitignore|requirements[\w-]*\.txt|pyproject\.toml)$|prisma\/migrations\/|supabase\/migrations\/|\/meta\/(_journal|\d+_snapshot)\.json$/.test(p) && !B.dzMigrations.includes(p) && !A.dzMigrations.includes(p) && !B.goMigrations.includes(p) && !A.goMigrations.includes(p) && !/(^|\/)go\.sum$|\.down\.sql$/.test(p))
   {
     const MEDIA = /@media(?=[^{]*max-width)[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g
     const media = (t = '') => new Set(t.match(MEDIA) ?? [])
@@ -4104,7 +4131,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     return parts.length ? list(parts) : '' }
   const vis = new Map(real.filter(q => !q.includes('#') && after.has(q)).map(q => [q, visible(q)] as const).filter(([, v]) => v))
   for (const [q, v] of vis) changes.push({ group: 'Other files', isNew: !before.has(q), text: `The agent ${before.has(q) ? 'changed' : 'added'} ${q}: it ${v}.` })
-  const quiet = real.filter(p => !p.includes('#') && !vis.has(p) && !STYLE.test(p) && (p.endsWith('.py') || otherCode(p)) && !route(p) && ![...B.routes.keys(), ...A.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
+  const quiet = real.filter(p => !p.includes('#') && !vis.has(p) && !STYLE.test(p) && !localeSaid.has(p) && (p.endsWith('.py') || otherCode(p)) && !route(p) && ![...B.routes.keys(), ...A.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
     && !/(^|\/)(migrations|alembic)\/|(^|\/)__init__\.py$|(^|\/)(apps|asgi|wsgi|manage)\.py$/.test(p))
   for (const tests of [false, true]) for (const [verb, xs] of [['added', quiet.filter(q => !before.has(q))], ['changed', quiet.filter(q => before.has(q) && after.has(q))], ['deleted', quiet.filter(q => !after.has(q))]] as const) {
     const ys = xs.filter(q => TESTS.test(q) === tests), names = ys.length > 6 ? [...ys.slice(0, 5), `${ys.length - 5} more files`] : ys

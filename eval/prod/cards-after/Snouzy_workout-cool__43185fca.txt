@@ -6,10 +6,12 @@ You asked: "feat: add exercise selection during workout creation (step 3)"
 
 WHAT CHANGED
   Other files
+    • The agent added wording in the app (in locales/en.ts): "Add exercise", "{name} added
+      to workout" and "Close", and the same in 3 other languages.
     • The agent changed how the app looks, on every screen size and on small screens like
       phones (in src/shared/styles/globals.css).
-    • The agent also changed locales/en.ts, locales/es.ts, locales/fr.ts, locales/pt.ts,
-      locales/ru.ts and 2 more files, in ways plain can't describe yet.
+    • The agent also changed locales/ru.ts, locales/zh-CN.ts and
+      src/features/workout-builder/ui/workout-stepper.tsx, in ways plain can't describe yet.
 
 LOOSE ENDS
   ◐ Type checking is turned off in 1 spot in

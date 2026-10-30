@@ -6,6 +6,8 @@ You asked: "feat(locales): add Portuguese language support and donation banner i
 
 WHAT CHANGED
   Other files
-    • The agent changed locales/en.ts, locales/es.ts, locales/fr.ts, locales/pt.ts,
-      locales/ru.ts and 3 more files in ways plain can't describe yet. Ask the agent what
-      they do differently.
+    • The agent added wording in the app (in locales/en.ts): "🇵🇹 Portuguese Support &
+      Donation Banner", and the same in 2 other languages.
+    • The agent also changed locales/fr.ts, locales/ru.ts, locales/zh-CN.ts and
+      src/features/release-notes/ui/release-notes-dialog.tsx, in ways plain can't describe
+      yet.

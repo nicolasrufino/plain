@@ -130,6 +130,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
     receives it. Not `checkout.session.async_payment_succeeded`/`_failed` when every Checkout the app makes takes cards
     only (each `checkout.sessions.create(...)` in the app's code, not tests, says `payment_method_types: ["card"]`, and
     nothing else makes Checkouts: Payment Links, a pricing table, another SDK): card payments are never "pending".
+  - Translation files (`locales/en.ts`, `messages/en.json`, `config/locales/en.yml`; not vendored ones, not code in a
+    `messages/` folder): "The agent added wording in the app (in locales/en.ts): "Add exercise" ..., and the same in N other
+    languages". Wording is a string value that reads as words (not a URL, `true`, an anchor, a plural rule or markup); a key is
+    added when it's there more times than before, else changed. Other languages count only for the same file with the same keys.
   - Code-style settings (`.eslintrc.*`, `eslint.config.*`, `.prettierrc*`, `biome.json`, `.editorconfig`) read "the settings for
     code style checks (not what the app does)", not "changed in a way plain can't describe".
   - A stylesheet's new `@media (max-width: ...)` block reads "changed how the app looks on small screens like phones" only

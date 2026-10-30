@@ -8309,3 +8309,31 @@ console.log('ok (count and config)')
   assert.ok(x.includes('The agent changed .eslintrc.cjs, the settings for code style checks (not what the app does)') && x.includes('eslint.config.js, the settings for code style checks') && !x.includes("eslint.config.js, in"), x)
 }
 console.log('ok (style settings)')
+// Translation files: the new English wording, and how many other languages changed with it (workout-cool's locales/en.ts)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'locales/en.ts': 'export default {\n  save: "Save",\n}\n', 'locales/fr.ts': 'export default {\n  save: "Enregistrer",\n}\n',
+    'messages/en.json': '{ "hi": "Hello" }\n', 'config/locales/en.yml': 'en:\n  hello: "Hello world"\n', 'public/js/i18n/en.js': 'x({ a: "A b" })\n', 'app/page.tsx': 'export default function P() { return <main><h1>Home</h1></main> }\n' }
+  const ts = c(base, { ...base, 'locales/en.ts': 'export default {\n  save: "Save",\n  addExercise: "Add exercise",\n}\n', 'locales/fr.ts': 'export default {\n  save: "Enregistrer",\n  addExercise: "Ajouter un exercice",\n}\n' })
+  assert.ok(ts.includes('The agent added wording in the app (in locales/en.ts): "Add exercise", and the same in 1 other language.') && !ts.includes('locales/fr.ts'), ts)
+  assert.ok(c(base, { ...base, 'messages/en.json': '{ "hi": "Hello", "bye": "See you soon" }\n' }).includes('(in messages/en.json): "See you soon"'), 'json')
+  assert.ok(c(base, { ...base, 'config/locales/en.yml': 'en:\n  hello: "Hello world"\n  bye: Goodbye now\n' }).includes('(in config/locales/en.yml): "Goodbye now"'), 'yml')
+  assert.ok(!c(base, { ...base, 'public/js/i18n/en.js': 'x({ a: "A b", c: "New words" })\n' }).includes('wording in the app'), 'a vendored library')
+  assert.ok(!c(base, { ...base, 'locales/fr.ts': 'export default {\n  save: "Sauver",\n}\n' }).includes('wording in the app'), 'no English')
+  // (review: YAML stays on its line; not URLs or flags; a reworded value is changed; only the same file in another language counts;
+  // code in a messages/ folder isn't a translation)
+  const yml = c(base, { ...base, 'config/locales/en.yml': 'en:\n  hello: "Hello world"\n  settings:\n    title: Settings page\n    url: https://example.com\n    on: true\n' })
+  assert.ok(yml.includes('(in config/locales/en.yml): "Settings page".') && !yml.includes('title:'), yml)
+  const re = c(base, { ...base, 'locales/en.ts': 'export default {\n  save: "Save changes",\n}\n' })
+  assert.ok(re.includes('The agent changed wording in the app (in locales/en.ts): "Save changes".'), re)
+  const mono = c({ ...base, 'apps/admin/locales/fr.json': '{ "a": "Un" }\n' }, { ...base, 'messages/en.json': '{ "hi": "Hello", "bye": "See you soon" }\n', 'apps/admin/locales/fr.json': '{ "a": "Un", "b": "Deux mots" }\n' })
+  assert.ok(!mono.includes('other language') && mono.includes('apps/admin/locales/fr.json'), mono)
+  const unrelated = c(base, { ...base, 'locales/en.ts': 'export default {\n  save: "Save",\n  close: "Close it",\n}\n', 'locales/fr.ts': 'export default {\n  save: "Sauvegarder",\n}\n' })
+  assert.ok(!unrelated.includes('other language') && unrelated.includes('locales/fr.ts'), unrelated)
+  assert.ok(c(base, { ...base, 'locales/en.ts': 'export default {\n  save: "Save",\n  immune: "Decreased immune function => worse",\n}\n' }).includes('"Decreased immune function => worse"'), 'the word function in wording')
+  const notes = (extra: string) => ({ ...base, 'locales/en.ts': `export default {\n  notes: {\n${extra}    a: {\n      title: "First release",\n    },\n  },\n}\n` })
+  assert.ok(c(notes(''), notes('    b: {\n      title: "Second release",\n    },\n')).includes('The agent added wording in the app (in locales/en.ts): "Second release".'), 'a new entry with a key name other entries use')
+  const code = { ...base, 'src/messages/en.ts': 'export function send() { return fetch("/api/send", { method: "POST" }) }\n' }
+  assert.ok(!c(code, { ...code, 'src/messages/en.ts': 'export function send() { return fetch("/api/send", { method: "POST", mode: "cors" }) }\n' }).includes('wording'), 'code in messages/')
+}
+console.log('ok (translations)')
