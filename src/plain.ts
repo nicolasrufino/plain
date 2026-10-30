@@ -2052,8 +2052,18 @@ export function appFacts(snap: Snap) {
   const fold = (p: string, into: FileFacts, seen: Set<string>, page: boolean) => {
     for (const spec of files.get(p)!.imports) {
       const q = resolve(p, spec)
+      // (a local import plain can't find, a file not in the project: the page may do things plain can't see)
+      // (code only, with no file anywhere ending in that path: `~/components/Box` may live in app/, `./logo.svg?react` is an image,
+      // SvelteKit's `./$types` and React Router's `./+types/x` are made at build time)
+      const tail = spec.replace(/\?.*$/, '').replace(/^(?:\.{1,2}\/)+|^[@~]\//, '')
+      if (!q && /^(?:\.{1,2}\/|@\/|~\/)/.test(spec) && !/\.\w+$/.test(tail) && !/(?:^|\/)(?:\$types|\+types\/\S*)$/.test(tail) && ![...files.keys()].some(k => new RegExp(String.raw`(^|/)${tail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:/index)?\.(?:[cm]?[jt]sx?|vue|svelte)$`).test(k)))
+        (into as FileFacts & { unread?: boolean }).unread = true
       // lib/ and server code (server actions, server/, *.server.ts) aren't part of what the page shows; calls to them are
       if (!q || seen.has(q) || /(^|\/)lib\//.test(q) || page && (/(^|\/)server\/|\.server\.[jt]sx?$/.test(q) || files.get(q)!.serverFns.size)) continue
+      // the app's own frame isn't the page: a layout (or anything in layouts/), shell, sidebar, navbar, header or footer. (Not "used by
+      // many pages": shared buttons and boxes are too.)
+      // (papermark's AppLayout put every menu, billing button and settings link on a new redaction page)
+      if (page && (CHROME.test(q.split('/').pop()!.replace(/\..*$/, '')) || /(^|\/)layouts?\//.test(q))) continue
       seen.add(q)
       const c = files.get(q)!, self = files.get(p)!
       // useAuth() from a context: its login/logout calls are the whole app's, not this page's, unless the page renders the provider.
@@ -2068,6 +2078,8 @@ export function appFacts(snap: Snap) {
       fold(q, into, seen, page)
     }
   }
+  // (only bare frame names: Header, AppHeader, site-footer, Navbar; not PricingHeader or TableHeader, which are content)
+  const CHROME = /^(?:(?:app|site|main|root|page|dashboard|admin|top|global)[-_]?)?(?:layout|shell|sidebar|side-bar|navbar|nav-bar|navigation|topbar|top-bar|header|footer)$/i
   for (const p of files.keys()) if (routes.has(p) && !p.includes('#')) fold(p, files.get(p)!, new Set([p]), routes.get(p)!.kind === 'page')
   // <form method="POST"> sends to its own page: SvelteKit's form actions (also from a child component, folded in above); elsewhere it says nothing
   for (const [p, f] of files) for (const x of [...f.fetches]) if (x.endsWith(' @self')) { f.fetches.delete(x); if (svelteUrls.has(p)) f.fetches.add(`POST ${svelteUrls.get(p)}`) }
@@ -2370,7 +2382,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       const fs = writtenFields(x)
       return fs.length > 0 && fs.every(k => LINK_FIELD.test(k)) && !/updateMany|update_all|setattr|\$executeRaw|\$queryRaw|\bsql`|\bdata\s*:(?!\s*\{)|\bdata\s*:\s*\{[^{}]*\{/.test(x)
         && onlyKnownCalls(x) })
-  const viewOnly = (f: FileFacts) => ![...f.fetches, ...(f as FileFacts & { quiet?: Set<string> }).quiet ?? []].some(x => !x.startsWith('GET ')) && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
+  const viewOnly = (f: FileFacts) => !(f as FileFacts & { unread?: boolean }).unread && ![...f.fetches, ...(f as FileFacts & { quiet?: Set<string> }).quiet ?? []].some(x => !x.startsWith('GET ')) && !f.forms && !f.written.size && ![...f.ui].some(u => u.startsWith('button ') || u.startsWith('box '))
 
   // A new way to delete your own account: a DELETE on /me, /account, /profile (not /users/[id], not admin), or new server code
   // named for it (deleteAccount, /account/delete)

@@ -6,24 +6,7 @@ You asked: "feat(ee): add redactions"
 
 WHAT CHANGED
   Pages
-    + Each document redaction page is new, titled "Q1 2024 Financial Performance Report". It
-      has sections for Data Rooms Unlimited, Identity verification, Executive Summary,
-      Financial Highlights, Financial Results Summary, Outlook, Share Link to Your Data
-      Room, Link Configuration and Invite Visitors by Email. It has a box for "Drag and drop
-      or click to upload. Recommended: 1200 x 630 pixels (max 5MB) OG image upload", a box
-      for "OG image upload", a box for "file", a "Base" button, a "Plus" button, a "Premium"
-      button, a "Permissions" button, an "Analytics" button, a "Q&A" button, a "Settings"
-      button, an "Add another folder" button, a "Visitors" button and a "Set up" button,
-      shows teams, sends data, user teams, permission groups, domains, agreements, tags and
-      teams to your server, deletes permission groups on your server, updates permission
-      groups and agreements on your server, loads domains, agreements and data from your
-      server and links to the documents page, the datarooms page, the settings general page,
-      the settings billing page, the account general page, the visitors page, the dashboard
-      page, the welcome?type=dataroom trial page, the settings billing upgrade page, the
-      dataroom permissions page, the settings presets page, the settings domains page, each
-      document page, each documents tree[…] page, each dataroom document page, each dataroom
-      documents[…] page, the settings tags page, the branding page, the settings slack page
-      and the settings people page.
+    + Each document redaction page is new.
       /documents/[id]/redactions/[jobId]
     • Each document page now shows the redaction launcher.
       /documents/[id]

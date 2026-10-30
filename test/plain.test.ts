@@ -7757,3 +7757,24 @@ console.log('ok (setting limits)')
   assert.ok(!c(st, { ...st, 'app/views.py': 'from django.conf import settings\ndef v(n):\n    return n > settings.MAX_PAGE\n' }).includes('is gone'), 'read another way, not gone')
 }
 console.log('ok (review 76)')
+// A new page is described by its own content, not the app's frame (papermark's AppLayout); a component that isn't in the project
+// means plain can't say "it only shows information"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'components/layouts/app.tsx': 'export default function AppLayout({ children }: any) { return <div><h2>Billing</h2><button>Upgrade</button>{children}</div> }\n', 'pages/index.tsx': 'export default function H() { return <main /> }\n' }
+  const page = c(nx, { ...nx, 'pages/report.tsx': 'import AppLayout from "@/components/layouts/app"\nexport default function R() { return <AppLayout><h1>Report</h1></AppLayout> }\n' })
+  assert.ok(page.includes('titled "Report"') && !page.includes('Billing') && !page.includes('Upgrade'), page)
+  const missing = c(nx, { ...nx, 'pages/redact.tsx': 'import { Workspace } from "@/ee/features/redaction/workspace"\nexport default function R() { return <Workspace /> }\n' })
+  assert.ok(!missing.includes('only shows information'), missing)
+}
+console.log('ok (page frame)')
+// Review 77: a component named ...Header can be content (PricingHeader); an import that resolves isn't "unread"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'pages/index.tsx': 'export default function H() { return <main /> }\n', 'components/PricingHeader.tsx': 'export function PricingHeader() { return <button onClick={() => fetch("/api/checkout", { method: "POST" })}>Subscribe</button> }\n' }
+  const p = c(nx, { ...nx, 'pages/pricing.tsx': 'import { PricingHeader } from "@/components/PricingHeader"\nexport default function P() { return <main><h1>Pricing</h1><PricingHeader /></main> }\n' })
+  assert.ok(p.includes('"Subscribe" button') && !p.includes('only shows information'), p)
+  const rx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'pages/index.tsx': 'export default function H() { return <main /> }\n', 'app/components/Box.tsx': 'export function Box() { return <p>hi</p> }\n' }
+  assert.ok(c(rx, { ...rx, 'pages/t.tsx': 'import { Box } from "~/components/Box"\nimport Logo from "./logo.svg?react"\nexport default function T() { return <main><h1>T</h1><Box /><Logo /></main> }\n' }).includes('only shows information'), 'resolves elsewhere')
+}
+console.log('ok (review 77)')
