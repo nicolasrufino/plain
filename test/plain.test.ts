@@ -7912,3 +7912,26 @@ console.log('ok (removed packages)')
   assert.ok(c({ ...lo, 'package.json': pj(',"lodash":"4.0.0"') }, { ...lo, 'package.json': pj('') }).includes(`lodash ${R}`), 'a // inside a string')
 }
 console.log('ok (review 83)')
+// An existing route that gains a 403/404/401 check (OpnForm's export status) says so; "status" stays "status"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/db.ts': 'export const db = {} as any\n' }
+  const route = (body: string) => ({ ...nx, 'app/api/jobs/status/[id]/route.ts': `import { db } from "@/lib/db"\nexport async function GET(req: Request, { params }: any) {\n  const job = await db.job.findFirst({ where: { id: params.id } })\n${body}\n  return Response.json(job)\n}\n` })
+  const more = c(route(''), route('  if (job.formId !== params.form) return new Response(null, { status: 404 })'))
+  assert.ok(more.includes('turns away more requests than before (a new "not found" check)') && more.includes('jobs status part'), more)
+  assert.ok(!c(route('  if (!job) return new Response(null, { status: 404 })'), route('  if (!job) {\n    return new Response(null, { status: 404 })\n  }')).includes('turns away more'), 'same check, reformatted')
+}
+console.log('ok (new refusals)')
+// Review 84: a split, reworded or caught check isn't "turns away more"; a new method's own checks aren't either; emojis -> emoji
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const T = 'turns away more requests'
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/db.ts': 'export const db = {} as any\n' }
+  const r = (body: string, extra = '') => ({ ...nx, 'app/api/posts/[id]/route.ts': `import { db } from "@/lib/db"\nexport async function GET(req: Request, { params }: any) {\n  const post = await db.post.findFirst({ where: { id: params.id } })\n${body}\n  return Response.json(post)\n}\n${extra}` })
+  assert.ok(!c(r('  if (!post || post.hidden) return Response.json({}, { status: 404 })'), r('  if (!post) return Response.json({}, { status: 404 })\n  if (post.hidden) return Response.json({}, { status: 404 })')).includes(T), 'split')
+  assert.ok(!c(r('  if (post.locked) return Response.json({ error: "Not yours" }, { status: 403 })'), r('  if (post.locked) return Response.json({ error: "Forbidden" }, { status: 403 })')).includes(T), 'reworded')
+  assert.ok(!c(r(''), r('', 'export async function POST(req: Request) {\n  const s = await auth()\n  if (!s) return new Response(null, { status: 401 })\n  return Response.json(await db.comment.create({ data: {} }))\n}\n')).includes(T), 'a new method')
+  const { named } = await import('../src/plain.ts')
+  assert.equal(named('/emojis/[id]').join(' '), 'emoji'); assert.equal(named('/statuses/[id]').join(' '), 'status'); assert.equal(named('/menus/[id]').join(' '), 'menu')
+}
+console.log('ok (review 84)')

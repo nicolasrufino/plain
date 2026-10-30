@@ -2137,7 +2137,8 @@ export function appFacts(snap: Snap) {
 const ACRONYM: Record<string, string> = { ai: 'AI', api: 'API', sms: 'SMS', pdf: 'PDF', url: 'URL', faq: 'FAQ', csv: 'CSV', sso: 'SSO', otp: 'OTP' }
 const words = (s: string) => s.replace(/OAuth/g, 'Oauth').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').replace(/[-_]/g, ' ').toLowerCase()
   .split(' ').map(w => ACRONYM[w] ?? w).join(' ')
-const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : /(sses|xes|ches|shes)$/.test(s) ? s.slice(0, -2) : s.endsWith('s') ? s.slice(0, -1) : s   // boxes -> box
+const US = 'status|bus|campus|census|virus|bonus|corpus|focus|radius|syllabus|nexus|stimulus|genus|chorus|cactus|octopus|plus|surplus|consensus|abacus|onus|prospectus|thesaurus'
+const singular = (s: string) => s.endsWith('ies') ? s.slice(0, -3) + 'y' : new RegExp(`(?:${US})es$`, 'i').test(s) ? s.slice(0, -2) : /(sses|xes|ches|shes)$/.test(s) ? s.slice(0, -2) : new RegExp(`(?:ss|sis|axis|tennis|chassis)$|(?:${US})$`, 'i').test(s) ? s : s.endsWith('s') ? s.slice(0, -1) : s   // boxes -> box (status, address, analysis stay)
 // "owners and admins"; a role that isn't a kind of person reads as itself: "members with the billing or staff role"
 const roleWords = (roles: string[]) => { const w = roles.map(x => words(x))
   return w.every(x => /^(?:owner|admin|super admin|superadmin|editor|member|manager|moderator|viewer|maintainer|contributor|guest|writer|reader|collaborator|developer|analyst|author|reviewer)$/.test(x))
@@ -2503,6 +2504,25 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         if (!a.money && b.money) clauses.push('charges customers 💰')
         // only when there are more ways to say no than before: a reworded message isn't a new rule
         for (const m of newOnly(a.refuses, b.refuses).slice(0, Math.min(3, b.refuses.size - a.refuses.size))) clauses.push(`refuses with "${m}"`)
+        // a new condition that turns requests away with 401/403/404 (OpnForm's export status: abort_unless($token->can('forms-read'), 403)):
+        // often a security fix, worth saying even when plain can't say what it checks. Per method that was there before and still is
+        // (a new POST's own checks aren't stricter rules); compared as the conditions' parts split on ||, so splitting one check in
+        // two, rewording its message or reformatting it isn't new; never an error class matched in a catch.
+        const REJECT = /\babort(?:_unless|_if)?\s*\([^;\n]*\b(40[134])\b|\b(?:status(?:Code|_code)?\s*[:=(]\s*|\.status\s*\(\s*|sendStatus\s*\(\s*)(40[134])\b|HTTP_(40[134])|\braise\s+(?:PermissionDenied|Http404)\b|\bthrow\s+new\s+(?:Forbidden|NotFound|Unauthorized)\w*\s*\(|\b(?:Forbid|NotFound|Unauthorized|notFound|forbidden|unauthorized)\s*\(\s*\)|\bhead\s*\(?\s*:(forbidden|not_found|unauthorized)|status:\s*:(forbidden|not_found|unauthorized)/
+        const KIND = (m: RegExpMatchArray) => { const x = m.slice(1).find(Boolean) ?? m[0]; return /403|forbid|PermissionDenied/i.test(x) ? 403 : /401|unauthori/i.test(x) ? 401 : 404 }
+        const atoms = (t: string) => { const out = new Map<string, number>(), ls = t.split('\n')
+          ls.forEach((l, k) => { const m = l.match(REJECT); if (!m) return
+            const prev = ls.slice(0, k).reverse().find(x => x.trim()) ?? ''
+            const cond = l.match(/\babort_(?:unless|if)\s*\((.+),\s*40[134]/)?.[1] ?? l.match(/\bif\s*\(?(.+?)\)?\s*(?:\{|:|return\b|throw\b|raise\b|abort\b)/)?.[1] ?? prev.match(/\bif\s*\(?(.+?)\)?\s*[{:]?\s*$/)?.[1]
+            if (!cond || /instanceof|\bcatch\b|\bexcept\b/.test(cond)) return
+            for (const x of cond.split(/\|\||\bor\b/).map(y => y.replace(/[\s()]/g, '')).filter(Boolean)) out.set(x, KIND(m)) })
+          return out }
+        const fresh = new Set<number>()
+        for (const [mth, tb] of b.fns) { const ta = a.fns.get(mth); if (ta === undefined) continue
+          // (not 401s: login is read on its own, and `!session` -> `!session?.user` isn't a new rule; a 404 only when it compares,
+          // `job.form_id !== form.id`, the record isn't yours; `!program` is a row that isn't there)
+          const was = atoms(ta); for (const [x, k] of atoms(tb)) if (!was.has(x) && (k === 403 || k === 404 && /!==?|===?|<>/.test(x))) fresh.add(k) }
+        if (fresh.size && a.auth === b.auth) clauses.push(`turns away more requests than before (a new ${list([...fresh].sort().map(k => `"${({ 403: 'not allowed', 404: 'not found', 401: 'not logged in' } as Record<number, string>)[k]}"`))} check)`)
         // a DELETE where there was none (its handler may be elsewhere, a controller plain doesn't follow)
         if (b.fns.has('DELETE') && !a.fns.has('DELETE') && !clauses.some(c => /\bdeletes\b/.test(c)) && (selfDelete(r.url, a, b) || b.ops.has('delete'))) clauses.push(selfDelete(r.url, a, b) ? "lets people delete their own account" : `deletes ${noun}`)
       }

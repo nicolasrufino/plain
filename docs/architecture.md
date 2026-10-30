@@ -164,6 +164,11 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   still ask. Read-only server code with nothing login-ish anywhere says "anyone with the link, no login needed". An
   address ending in `/share` that only sets a link field (a token, a public id, an is-public flag) and calls nothing
   else "turns sharing on or off", not "deletes documents". When it's open, that's a ⚠.
+- **A new rule that turns requests away.** An existing route that gains a 403 check, or a 404 that compares ownership
+  (`job.form_id !== form.id`), says "now turns away more requests than before (a new 'not allowed' check)". That's often
+  a security fix (OpnForm's export status). It's compared per method that was there before and still is, using each
+  condition's parts split on `||`, so splitting a check in two or rewording its message isn't new. Not for 401s (login is
+  read on its own), nor a bare "row not there" 404.
 - **Saying what an address does, without overclaiming.** A GET that only answers with fixed values (a health check)
   "answers requests", not "lists data". Code that only reads and updates the logged-in person's own user row
   (`where: { id: session.user.id }`, behind a login check) "shows and updates the logged-in person's own account".

@@ -6,8 +6,8 @@ You asked: "Fix export status API docs and secure token polling (#1314)"
 
 WHAT CHANGED
   Server
-    • The open form submissions export statu part of your server changed in a way plain
-      can't describe yet. Ask the agent what it does differently.
+    • The open form submissions export status part of your server now turns away more
+      requests than before (a new "not allowed" check).
       /open/forms/[form]/submissions/export/status/[jobId]
   Other files
     • The agent changed docs/api-reference/changelog.mdx.
