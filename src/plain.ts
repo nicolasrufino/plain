@@ -2978,6 +2978,29 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const users = usersOf(n, p)
     if (users.length) problems.push({ kind: 'Broken', text: `${n}() was deleted from ${p}, but ${list(users)} still ${users.length > 1 ? 'use' : 'uses'} it, so that will break.` })
   }
+  // PHP: a global function defined before and nowhere now, still called as one (`block_asset(...)`, not `->x(` or `::x(`) in
+  // another PHP or Blade file: those pages crash (LinkStack deleted its block helpers from functions.php)
+  // (JavaScript in <script> blocks isn't PHP)
+  const noScript = (t: string) => t.replace(/<script\b[\s\S]*?<\/script>/gi, '')
+  const phpFns = (snap: Snap) => { const out = new Map<string, string>(); for (const [k, t0] of snap) if (/\.php$/.test(k) && !/\.blade\.php$/.test(k) && !k.includes('vendor/'))
+    for (const t of [noScript(t0)]) for (const m of t.matchAll(/^([ \t]*)function\s+(\w+)\s*\(/gm)) {
+      // (not a method: one with a visibility word, or an indented one in a file that declares a class; not a polyfill kept behind
+      // function_exists, which PHP itself may now provide)
+      if (/^[ \t]*(?:public|private|protected|static|abstract|final)\b/m.test(t.slice(t.lastIndexOf('\n', m.index!) + 1, m.index! + m[0].length))) continue
+      if (m[1] && /^[ \t]*(?:abstract\s+|final\s+|readonly\s+)*(?:class|trait|interface|enum)\s+\w+/m.test(t) || new RegExp(String.raw`function_exists\(\s*['"]${m[2]}['"]`).test(t)) continue
+      out.set(m[2], k) }
+    return out }
+  // (not when a Composer package was added: a helper may have moved into it, and vendor/ isn't in the project)
+  const pkgs = (snap: Snap) => new Set([...snap].filter(([k]) => /(^|\/)composer\.json$/.test(k)).flatMap(([, t]) => { try { const j = JSON.parse(t); return [...Object.keys(j.require ?? {}), ...Object.keys(j['require-dev'] ?? {})] } catch { return [] } }))
+  const pkgsBefore = pkgs(before), phpBefore = phpFns(before), phpAfter = phpFns(after), composerMoved = [...pkgs(after)].some(x => !pkgsBefore.has(x))
+  for (const [n, from] of phpBefore) if (!composerMoved && !phpAfter.has(n) && n.length > 2 && !/^(?:asset|route|config|url|trans|view|redirect|response|request|auth|session|now|today|collect|data_get|data_set|str|value|optional|env|app|abort|back|old|csrf_token|csrf_field|method_field|logger|report|rescue|retry|tap|throw_if|throw_unless|cache|cookie|encrypt|decrypt|bcrypt|event|dispatch|policy|resolve|public_path|storage_path|base_path|app_path|resource_path|database_path|config_path|mix|vite)$/.test(n)) {
+    const call = new RegExp(String.raw`(?<![\w$\\])(?<!(?:->|::)\s*)(?<!function\s+)${n}\s*\(`)   // (not a method call or a definition)
+    // (a class method of the same name is still a method, not this function: only files outside a class body count, roughly:
+    // calls not preceded by -> or ::)
+    // (strings taken out in PHP, not in Blade, where calls sit inside HTML attributes: src="{{ block_asset('a.png') }}")
+    const users = [...after].filter(([k, t]) => /\.php$/.test(k) && !k.includes('vendor/') && !TESTS.test(k) && call.test(/\.blade\.php$/.test(k) ? noScript(t).replace(/\{\{--[\s\S]*?--\}\}/g, '').replace(/\{\{[\s\S]*?\}\}|\{!![\s\S]*?!!\}/g, x => x.replace(/(['"])(?:\\.|(?!\1)[^\\])*\1/g, '""')) : noScript(t).replace(/\/\*[\s\S]*?\*\/|(?:\/\/|#)[^\n]*/g, '').replace(/(['"])(?:\\.|(?!\1)[^\\])*\1/g, '""'))).map(([k]) => k)
+    if (users.length) problems.push({ kind: 'Broken', text: `${n}() was deleted from ${from}, but ${list(users.length > 3 ? [...users.slice(0, 2), `${users.length - 2} more files`] : users)} still ${users.length > 1 ? 'use' : 'uses'} it, so those pages will crash.` })
+  }
   // A migration that starts with terminal output pasted in ("Already up to date", "Done in 225ms using pnpm"): applying it fails.
   // (Only output plain recognizes: T-SQL, SQL*Plus, DuckDB and others start migrations with lines no keyword list covers.
   // No check for imports of missing files either: generated, gitignored files look the same as missing ones.)

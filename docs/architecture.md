@@ -99,7 +99,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   newly reports "'}' expected.". For PHP, Java, C# and Go: the parser newly finds an error *and* the braces no longer
   balance, with strings, comments and heredocs taken out first. A newer language feature the parser doesn't know never
   unbalances braces. Not for PHP files with HTML after `?>`.
-- **Broken.** A function was deleted but other code still uses it, or a migration starts with terminal output pasted in
+- **Broken.** A function was deleted but other code still uses it, or a migration starts with terminal output pasted in.
+  For PHP: a global function defined before and nowhere now, still called as one in another PHP or Blade file (not a
+  method, a `function_exists` polyfill, a Laravel helper's name, JavaScript in `<script>`, or text in strings; held back
+  when a Composer package was added, since the helper may have moved into it)
   ("Already up to date", "$ npx prisma migrate dev").
 - **A package removed that code still uses.** A package no package.json lists any more (dependencies, dev, peer or optional)
   that the app's own code still imports or requires, read from the syntax tree. This is a thing to decide, since another

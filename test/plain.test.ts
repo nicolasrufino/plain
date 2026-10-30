@@ -7962,3 +7962,27 @@ console.log('ok (refusal messages, component lines)')
   assert.ok(c(note(''), note('  if (p.userId !== me.id) return Response.json({ error: "Not found" }, { status: 404 })')).includes('turns away more requests'), 'a reused generic message')
 }
 console.log('ok (review 85)')
+// PHP: a global helper deleted while other files still call it (LinkStack's block helpers)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const D = 'was deleted from app/helpers.php'
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'app/helpers.php': "<?php\nfunction block_asset($x) { return $x; }\nfunction other() { return 1; }\n", 'resources/views/b.blade.php': "<img src=\"{{ block_asset('a.png') }}\">\n" }
+  assert.ok(c(lv, { ...lv, 'app/helpers.php': "<?php\nfunction other() { return 1; }\n" }).includes(`block_asset() ${D}, but resources/views/b.blade.php still uses it`), 'deleted, still called')
+  assert.ok(!c(lv, { ...lv, 'app/helpers.php': "<?php\nfunction other() { return 1; }\n", 'app/assets.php': "<?php\nfunction block_asset($x) { return $x; }\n" }).includes(D), 'moved to another file')
+  assert.ok(!c(lv, { ...lv, 'app/helpers.php': "<?php\nfunction other() { return 1; }\n", 'resources/views/b.blade.php': "<img src=\"{{ $asset->block_asset('a.png') }}\">\n" }).includes(D), 'only a method call now')
+  assert.ok(!c(lv, { ...lv, 'app/helpers.php': "<?php\nfunction other() { return 1; }\n", 'resources/views/b.blade.php': "<p>{{ 'block_asset() was removed' }}</p>\n" }).includes(D), 'in a string')
+}
+console.log('ok (deleted php helpers)')
+// Review 86: a method definition, JS in <script>, a helper moved into a new Composer package, a name in translated text
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const D = 'was deleted from'
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'app/helpers.php': "<?php\nfunction slugify($x) { return $x; }\nfunction keep() { return 1; }\n" }
+  assert.ok(!c({ ...lv, 'app/Post.php': "<?php\nclass Post {\n  public function slugify($t) { return $t; }\n  public function save() { return $this->slugify('a'); }\n}\n" }, { ...lv, 'app/helpers.php': "<?php\nfunction keep() { return 1; }\n", 'app/Post.php': "<?php\nclass Post {\n  public function slugify($t) { return $t; }\n  public function save() { return $this->slugify('a'); }\n}\n" }).includes(D), 'a method definition')
+  const js = { ...lv, 'public/menu.php': "<?php echo 'x'; ?>\n<script>\nfunction toggleMenu() { }\n</script>\n", 'resources/views/nav.blade.php': '<button onclick="toggleMenu()">Menu</button>\n' }
+  assert.ok(!c(js, { ...js, 'public/menu.php': "<?php echo 'x'; ?>\n" }).includes(D), 'javascript')
+  assert.ok(!c(lv, { ...lv, 'composer.json': '{"require":{"laravel/framework":"^11.0","acme/money":"^1.0"}}', 'app/helpers.php': "<?php\nfunction keep() { return 1; }\n", 'app/Shop.php': "<?php\nclass Shop { public function t() { return slugify('a'); } }\n" }).includes(D), 'moved into a package')
+  const tr = { ...lv, 'resources/views/a.blade.php': "<p>{{ __('Run slugify() from the admin panel') }}</p>\n" }
+  assert.ok(!c(tr, { ...tr, 'app/helpers.php': "<?php\nfunction keep() { return 1; }\n" }).includes(D), 'translated text')
+}
+console.log('ok (review 86)')
