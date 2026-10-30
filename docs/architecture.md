@@ -167,6 +167,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   still ask. Read-only server code with nothing login-ish anywhere says "anyone with the link, no login needed". An
   address ending in `/share` that only sets a link field (a token, a public id, an is-public flag) and calls nothing
   else "turns sharing on or off", not "deletes documents". When it's open, that's a ⚠.
+- **Renamed request fields.** A Pydantic request model (`AddUserParam`, `UpdateRoleMenuParam`) whose one field was renamed
+  to a required one: "The data your server expects changed: it now needs "role_ids" instead of "roles"". Anything that
+  still sends the old name is turned away. Not removals or optional fields (Pydantic ignores fields it doesn't know),
+  classes with aliases, dataclasses, response models, migrations or docstrings.
 - **A new rule that turns requests away.** An existing route that gains a 403 check, or a 404 that compares ownership
   (`job.form_id !== form.id`), says "now turns away more requests than before (a new 'not allowed' check)". That's often
   a security fix (OpnForm's export status). It's compared per method that was there before and still is, using each

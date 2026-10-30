@@ -7995,3 +7995,27 @@ console.log('ok (review 86)')
   assert.ok(r.includes('setBlockAssetContext() was deleted') && !r.includes('str_contains() was deleted'), r)
 }
 console.log('ok (function_exists helpers)')
+// Python request models whose fields were renamed (fastapi-best-architecture: roles -> role_ids)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const E = 'The data your server expects changed'
+  const fa = { 'requirements.txt': 'fastapi\npydantic\n', 'app/schema/user.py': 'from pydantic import BaseModel, Field\n\nclass AddUserParam(BaseModel):\n    name: str\n    roles: list[int] = Field(description="ids")\n\nclass GetUserDetail(BaseModel):\n    name: str\n    roles: list[int]\n' }
+  assert.ok(c(fa, { ...fa, 'app/schema/user.py': fa['app/schema/user.py'].replace('    roles: list[int] = Field', '    role_ids: list[int] = Field') }).includes(`${E}: it now needs "role_ids" instead of "roles"`), 'rename')
+  assert.ok(!c(fa, { ...fa, 'app/schema/user.py': fa['app/schema/user.py'].replace('    roles: list[int]\n', '    role_ids: list[int]\n') }).includes(E), 'a response model')
+  assert.ok(!c(fa, { ...fa, 'app/schema/user.py': fa['app/schema/user.py'].replace('    name: str\n    roles', '    name: str\n    email: str | None = None\n    roles') }).includes(E), 'a field added')
+}
+console.log('ok (request fields)')
+// Review 87: aliases, docstrings, optional new fields, response models and dataclasses aren't "the data your server expects changed"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const E = 'The data your server expects changed'
+  const one = (a: string, b: string) => c({ 'requirements.txt': 'fastapi\n', 'app/schemas/u.py': `from pydantic import BaseModel, Field\n\n${a}` }, { 'requirements.txt': 'fastapi\n', 'app/schemas/u.py': `from pydantic import BaseModel, Field\n\n${b}` })
+  for (const [name, a, b] of [['alias', 'class AddUserParam(BaseModel):\n    roles: list[int]\n', "class AddUserParam(BaseModel):\n    role_ids: list[int] = Field(alias='roles')\n"],
+    ['docstring', 'class AddUserParam(BaseModel):\n    """\n    Note: x\n    """\n    name: str\n', 'class AddUserParam(BaseModel):\n    """\n    Remark: x\n    """\n    name: str\n'],
+    ['optional new field', 'class AddUserParam(BaseModel):\n    roles: list[int]\n', 'class AddUserParam(BaseModel):\n    role_ids: list[int] | None = None\n'],
+    ['response model', 'class UpdateResult(BaseModel):\n    ok: bool\n', 'class UpdateResult(BaseModel):\n    success: bool\n'],
+    ['Address', 'class Address(BaseModel):\n    street: str\n', 'class Address(BaseModel):\n    line1: str\n']] as const)
+    assert.ok(!one(a, b).includes(E), `control: ${name}`)
+  assert.ok(one('class AddUserParam(BaseModel):\n    roles: list[int] = Field(description="ids")\n', 'class AddUserParam(BaseModel):\n    role_ids: list[int] = Field(description="ids")\n').includes(`${E}: it now needs "role_ids" instead of "roles"`), 'Field() without a default is required')
+}
+console.log('ok (review 87)')

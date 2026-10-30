@@ -3001,6 +3001,32 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const users = [...after].filter(([k, t]) => /\.php$/.test(k) && !k.includes('vendor/') && !TESTS.test(k) && call.test(/\.blade\.php$/.test(k) ? noScript(t).replace(/\{\{--[\s\S]*?--\}\}/g, '').replace(/\{\{[\s\S]*?\}\}|\{!![\s\S]*?!!\}/g, x => x.replace(/(['"])(?:\\.|(?!\1)[^\\])*\1/g, '""')) : noScript(t).replace(/\/\*[\s\S]*?\*\/|(?:\/\/|#)[^\n]*/g, '').replace(/(['"])(?:\\.|(?!\1)[^\\])*\1/g, '""'))).map(([k]) => k)
     if (users.length) problems.push({ kind: 'Broken', text: `${n}() was deleted from ${from}, but ${list(users.length > 3 ? [...users.slice(0, 2), `${users.length - 2} more files`] : users)} still ${users.length > 1 ? 'use' : 'uses'} it, so those pages will crash.` })
   }
+  // Python request models (Pydantic `class AddUserParam(SchemaBase): roles: list[int]`) whose field was renamed: anything that still
+  // sends the old name (an admin screen, a mobile app) is turned away until it changes at the same time (fastapi-best-architecture
+  // renamed roles/menus/scopes/rules to *_ids).
+  // (a rename only, one field out and one in, and only when the new one is required: Pydantic ignores fields it doesn't know, so a
+  // removed or optional one breaks nothing. Never a class with aliases, a dataclass, a response model or a private attribute.)
+  const REQ = /^(?:\w*(?:Param|Params|Request|Body|Input|Payload)|(?:Create|Update|Add|Edit)(?=[A-Z])\w*)$/
+  const reqFields = (t = '') => { const out = new Map<string, Map<string, boolean>>()
+    if (!/\bfrom\s+(?:pydantic|ninja)\b|\bimport\s+pydantic\b/.test(t)) return out
+    for (const m of t.matchAll(/^(@[^\n]*\n)?class\s+(\w+)\s*\(([^)]+)\)\s*:\s*\n((?:[ \t]+[^\n]*\n|[ \t]*\n)*)/gm)) {
+      if (!REQ.test(m[2]) || /(?:Result|Response|Out|Detail|Info|Read|View)$/.test(m[2]) || /dataclass/.test(m[1] ?? '') || /Enum\b|Exception\b|Error\b|\bBase\b|db\.Model|models\.Model|TypedDict|DeclarativeBase/.test(m[3])) continue
+      const body = m[4].replace(/(?:"""|''')[\s\S]*?(?:"""|''')/g, '')
+      if (/alias/.test(body)) continue
+      out.set(m[2], new Map([...body.matchAll(/^[ \t]{4}([a-z]\w*)[ \t]*:[ \t]*([^\n]+)/gm)].filter(x => !/ClassVar/.test(x[2]) && x[1] !== 'model_config')
+        // (required: no default, or a Field(...) with no default; `x: str = 'a'`, Field(default=...) or `| None` aren't)
+        .map(x => { const [type, val] = x[2].split(/=(.*)/s), field = /^\s*Field\s*\(/.test(val ?? '')
+          return [x[1], !/\bOptional\b|\|\s*None\b|None\s*\|/.test(type) && (val === undefined || field && !/\bdefault(?:_factory)?\s*=|Field\s*\(\s*(?!\.\.\.)[^\s,)a-z_]/.test(val))] as const }))) }
+    return out }
+  const renamed: string[] = []
+  for (const p of real.filter(q => q.endsWith('.py') && !TESTS.test(q) && !/(?:^|\/)(?:migrations|alembic|management\/commands)\//.test(q) && before.has(q) && after.has(q))) {
+    const was = reqFields(before.get(p)), now = reqFields(after.get(p))
+    for (const [cls, fs] of now) { const old = was.get(cls); if (!old) continue
+      const gone = [...old.keys()].filter(x => !fs.has(x)), added = [...fs.keys()].filter(x => !old.has(x))
+      if (gone.length === 1 && added.length === 1 && fs.get(added[0])) renamed.push(`"${added[0]}" instead of "${gone[0]}"`) }
+  }
+  const pairs = [...new Set(renamed)]
+  if (pairs.length) problems.push({ kind: 'Check', text: `The data your server expects changed: it now needs ${list(pairs.length > 3 ? [...pairs.slice(0, 2), `${pairs.length - 2} more`] : pairs)}. Anything that sends the old names (your own screens, a mobile app, other services) will be turned away until it changes at the same time.` })
   // A migration that starts with terminal output pasted in ("Already up to date", "Done in 225ms using pnpm"): applying it fails.
   // (Only output plain recognizes: T-SQL, SQL*Plus, DuckDB and others start migrations with lines no keyword list covers.
   // No check for imports of missing files either: generated, gitignored files look the same as missing ones.)

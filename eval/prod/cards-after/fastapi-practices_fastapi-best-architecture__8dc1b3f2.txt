@@ -1,8 +1,13 @@
 plain · 11 files changed since 8dc1b3f2~1
 You asked: "Rename relation id list request fields to *_ids (#1286)"
 
-  Nothing flagged
-    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+  1 thing to decide
+
+LOOK AT THIS FIRST
+  ! The data your server expects changed: it now needs "rule_ids" instead of "rules",
+    "menu_ids" instead of "menus" and 2 more. Anything that sends the old names (your own
+    screens, a mobile app, other services) will be turned away until it changes at the same
+    time.
 
 WHAT CHANGED
   Server
