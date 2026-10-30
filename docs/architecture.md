@@ -193,7 +193,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   Java files are skipped when a route in that language changed: plain doesn't follow what those routes call, and the route
   line already says that part changed. A card with nothing else to say lists every changed file instead.
 - **Before you ship.** Data that will be deleted, and migrations to run (with the folder, the
-  live-site command and what fails until then). A Prisma project with no migrations, no
+  live-site command and what fails until then). A new column on a table the app already had (its
+  @@map name too) means pages that load it can fail too. On the users, sessions or accounts table a
+  login library reads through its Prisma adapter (better-auth, Auth.js, Lucia), it means logging in
+  can fail for everyone. A Prisma project with no migrations, no
   prisma.config and no deploy script, whose own script does nothing but `prisma db push` for that
   schema (`prisma generate` and npm's pre/post scripts checked too), is told to run that script.
   A Django migration that only changes options Django keeps in code (labels, choices,
