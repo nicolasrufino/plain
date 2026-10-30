@@ -1,9 +1,12 @@
 plain · 20 files changed since 8d6a714f~1
 You asked: "fix: :bug: fix imageupload on no image account"
 
-  ⚠ 1 problem
+  ⚠ 2 problems
 
 LOOK AT THIS FIRST
+  ⚠ Anyone may be able to use the "remove user old image from cdn" action on your server to
+    delete files from your storage: plain sees no login check in it. Add one, and make sure
+    it only deletes files the person is allowed to delete.
   ⚠ Anyone can use the "get user subscription plan" action on your server without logging
     in.
 

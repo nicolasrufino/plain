@@ -109,6 +109,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
     already handled), sets a flag checked later, or guards a best-effort write inside a `try` that answers is a decision,
     so it isn't flagged. Neither is a Python `except` for a row that isn't there or an event already saved. Only the function that checks the signature is read (JS/TS and
     Python), and calls that don't touch the database (an SMS, a Stripe call) don't count.
+  - Code with no login check that deletes stored files (UploadThing `deleteFiles`, S3 `DeleteObject`, Cloudinary `destroy`,
+    Supabase storage `remove`, Vercel Blob `del`, Firebase `deleteObject`, Laravel `Storage::delete`), whenever it changed:
+    "Anyone may be able to use X to delete files from your storage". Not when its own code checks something (a login call, a
+    secret header like `CRON_SECRET`, a webhook signature), nor when an app-wide guard mentions login.
   - A new way to delete your own account: a DELETE on an address that is only `/me`, `/account` or `/profile` (not
     `/teams/[id]/members/me` or `/stripe/account`), or new code that deletes from the users table (`DELETE /api/user`, `deleteAccount`). This is a thing to decide: ask the person to confirm first, and
     clean up the rest of their data. It isn't raised when the code already checks the password.

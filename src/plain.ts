@@ -2254,6 +2254,8 @@ const shape = (t0: string, p: string) => {
 const same = (p: string, a?: string, b?: string) => a === b || a !== undefined && b !== undefined && (a.trim() === b.trim()
   || /\.(?:[cm]?[jt]sx?|vue|svelte)$/.test(p.split('#')[0]) && shape(a, p.split('#')[0]) === shape(b, p.split('#')[0]))
 
+const STORAGE_DELETE = /\b(?:utapi|UTApi\(\))\s*\.\s*deleteFiles\s*\(|\bDeleteObjects?Command\b|\.deleteObjects?\s*\(|->deleteObjects?\s*\(|\bdelete_objects?\s*\(|\buploader\s*\.\s*destroy\s*\(|\.storage\s*\.\s*from\s*\([^;]*?\)\s*\.\s*remove\s*\(|\bdeleteObject\s*\(\s*ref\b|\bStorage::(?:disk\([^)]*\)\s*->\s*)?delete\s*\(/
+
 export type Analysis = ReturnType<typeof analyze>
 type Opts = { ref: string; asked?: string; color?: boolean; agentSaid?: string }   // agentSaid: the agent's last message, if known
 export const report = (before: Snap, after: Snap, opts: Opts) => render(analyze(before, after, opts))
@@ -2350,6 +2352,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // SvelteKit hook, Nuxt server middleware, `app.use(...)`, FastAPI `dependencies=[...]`, Flask `before_request`, Rails `before_action`
   const appGuardMaybe = [...B.files].some(([k, f]) => /(^|\/)(?:(?:middleware|proxy|hooks\.server)\.[cm]?[jt]s|server\/middleware\/[^/]+)$/.test(k)
     || /\.use\s*\(|\.middleware\s*\(|add_middleware\s*\((?!\s*(?:Session|CORS|GZip|TrustedHost|HTTPSRedirect|ProxyHeaders)Middleware)|\bMiddleware\s*\(|\bmiddleware\s*=\s*\[|addHook|useGlobalGuards|APP_GUARD|dependencies\s*=\s*\[|before_request|before_action|MIDDLEWARE/.test(f.printed))
+  // (the same, but only an app-wide guard whose own code mentions logging in: next-intl's language middleware isn't one)
+  const loginGuardMaybe = [...B.files].some(([k, f]) => (/(^|\/)(?:(?:middleware|proxy|hooks\.server)\.[cm]?[jt]s|server\/middleware\/[^/]+)$/.test(k) || /\.use\s*\(|before_request|before_action|MIDDLEWARE|useGlobalGuards|APP_GUARD/.test(f.printed))
+    && /auth|session|login|sign_?in|clerk|token|jwt|current_?user|\buser\b|protect|guard|authenticate|\b401\b|unauthori[sz]ed/i.test(f.printed))
   // Server code that only reads, every read open, nothing login-ish anywhere: anyone with the link gets it, no login needed. (Not login,
   // reset or webhook addresses: there the token is the check.)
   const linkOnly = (url: string, f: FileFacts) => privateLink(url, f) && !isPublic(url) && !f.auth && !(f as FileFacts & { guardUnknown?: boolean }).guardUnknown
@@ -2542,6 +2547,18 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
       if (problems.length > before_ && page !== p.split('#')[0] && (B.files.get(page) as FileFacts & { layoutLogin?: boolean } | undefined)?.layoutLogin)
         problems.at(-1)!.text += ' The page asks for login, but its form actions run before that check, so they need their own (check locals.user in the action, or in hooks.server.ts).'
     }
+    // Code with no login check that deletes stored files (UploadThing's deleteFiles, S3 and boto3 delete_object, Cloudinary destroy,
+    // Supabase storage remove, Vercel Blob del, Firebase deleteObject, Laravel Storage::delete), whenever it changed: anyone may be
+    // able to call it, and what it deletes may come from them (chadnext's removeUserOldImageFromCDN now deletes whatever URL the
+    // browser sends). Read in the function's own code. Not when that code checks something: a login call, a secret header
+    // (a cron job's CRON_SECRET), a webhook signature; nor when an app-wide guard mentions login; nor twice (a new address already
+    // warned about above).
+    const fnText = [...b.fns.values()].join('\n')
+    const delFiles = STORAGE_DELETE.test(fnText) || /\bdel\s*\(/.test(fnText) && /\{[^}]*\bdel\b[^}]*\}\s*from\s*['"]@vercel\/blob['"]/.test(b.printed + (after.get(p.split('#')[0]) ?? ''))
+    const ownCheck = /\b(?:auth|getAuth|getSession|getServerSession|getServerAuthSession|currentUser|getCurrentUser|getUser|getToken|validateRequest|validateSession|verifyIdToken|getKindeServerSession|require\w+|ensure\w+|withAuth|protect|verify\w*)\s*\(|\bjwt\.verify\b|\bsession\b|\buserId\b\s*=\s*await|headers?\b[^\n]*(?:process\.env|settings\.|ENV\[)|(?:process\.env|settings\.)\w*[^\n]*headers?\b|\bauthorization\b|CRON_SECRET|constructEvent|construct_event|ConstructEvent/i.test(fnText)
+    if (r.kind === 'endpoint' && delFiles && !b.auth && !(b as FileFacts & { guardUnknown?: boolean }).guardUnknown && !isPublic(r.url) && !ownCheck && !loginGuardMaybe
+      && !problems.some(x => x.text.includes(`${name} without logging in`) || x.text.includes(`${cap(name)} without logging in`)))
+      problems.push({ kind: 'Unsafe', text: `Anyone may be able to use ${name} to delete files from your storage: plain sees no login check in it. Add one, and make sure it only deletes files the person is allowed to delete.` })
   }
 
   // Several changes plain can't describe: one line, not one each.

@@ -7778,3 +7778,31 @@ console.log('ok (page frame)')
   assert.ok(c(rx, { ...rx, 'pages/t.tsx': 'import { Box } from "~/components/Box"\nimport Logo from "./logo.svg?react"\nexport default function T() { return <main><h1>T</h1><Box /><Logo /></main> }\n' }).includes('only shows information'), 'resolves elsewhere')
 }
 console.log('ok (review 77)')
+// Code with no login check that deletes stored files, whenever it changes (chadnext's removeUserOldImageFromCDN)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const DEL = 'to delete files from your storage'
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","uploadthing":"7.0.0"}}', 'lib/ut.ts': 'export const utapi = {} as any\n', 'middleware.ts': 'import { createI18nMiddleware } from "next-international/middleware"\nexport const middleware = createI18nMiddleware({ locales: ["en"], defaultLocale: "en" })\n' }
+  const act = (body: string) => ({ ...nx, 'app/settings/actions.ts': `"use server"\nimport { utapi } from "@/lib/ut"\nexport async function removeOld(url: string) {\n${body}\n}\n` })
+  const before = act('  await utapi.deleteFiles(url.split("/").pop())')
+  assert.ok(c(before, act('  console.log(url)\n  await utapi.deleteFiles(url.split("/").pop())')).includes(DEL), 'changed, open, deletes files')
+  assert.ok(!c(before, act('  const s = await auth()\n  if (!s) throw new Error("no")\n  await utapi.deleteFiles(url.split("/").pop())')).includes(DEL), 'checks login')
+  const mw = { ...nx, 'middleware.ts': 'import { auth } from "@/auth"\nexport default auth((req) => { if (!req.auth) return Response.redirect("/login") })\n' }
+  assert.ok(!c({ ...before, ...mw }, { ...act('  console.log(url)\n  await utapi.deleteFiles(url.split("/").pop())'), ...mw }).includes(DEL), 'a login middleware')
+  assert.ok(!c(before, { ...before, 'lib/x.ts': 'export const y = 1\n' }).includes(DEL), 'unchanged')
+}
+console.log('ok (open file deletes)')
+// Review 78: a cron secret, a Stripe signature, a login helper plain doesn't know, or a Nuxt user check aren't "no login check"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const DEL = 'to delete files from your storage'
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0","@vercel/blob":"1.0.0","@aws-sdk/client-s3":"3.0.0"}}' }
+  const pair = (path: string, code: string) => c({ ...nx, [path]: code }, { ...nx, [path]: code.replace('// x', 'console.log(1)') })
+  assert.ok(!pair('app/api/cron/cleanup/route.ts', 'import { del } from "@vercel/blob"\nexport async function GET(req: Request) { // x\n  if (req.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) return new Response(null, { status: 401 })\n  await del("x")\n  return Response.json({})\n}\n').includes(DEL), 'cron secret')
+  assert.ok(!pair('app/api/stripe/route.ts', 'import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3"\nconst s3 = new S3Client({})\nexport async function POST(req: Request) { // x\n  const event = stripe.webhooks.constructEvent(await req.text(), "", "")\n  await s3.send(new DeleteObjectCommand({ Bucket: "b", Key: event.id }))\n  return Response.json({})\n}\n').includes(DEL), 'stripe signature')
+  assert.ok(!pair('app/api/files/route.ts', 'import { del } from "@vercel/blob"\nimport { getToken } from "next-auth/jwt"\nexport async function DELETE(req: any) { // x\n  const t = await getToken({ req })\n  if (!t) return new Response(null, { status: 401 })\n  await del((await req.json()).url)\n  return Response.json({})\n}\n').includes(DEL), 'getToken')
+  assert.ok(pair('app/api/files/route.ts', 'import { del } from "@vercel/blob"\nexport async function DELETE(req: Request) { // x\n  await del((await req.json()).url)\n  return Response.json({})\n}\n').includes(DEL), 'open delete')
+  const blob = 'import { put, del } from "@vercel/blob"\nexport async function POST(req: Request) { // x\n  return Response.json(await put("a", "b", { access: "public" }))\n}\n'
+  assert.ok(!pair('app/api/upload/route.ts', blob).includes(DEL), 'only an upload changed')
+}
+console.log('ok (review 78)')
