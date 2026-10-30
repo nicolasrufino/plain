@@ -1,13 +1,15 @@
-{"id":"OpnForm_OpnForm__ab2971a2","summary":"Export-status endpoint now works with personal API tokens that have forms-read, and returns 404 unless the export job belongs to the requested form (closing a cross-form leak of export status/download URL); API docs corrected.",
-"statements":[
-{"text":"Nothing flagged","kind":"reassurance","verdict":"right","why":"Route stays in auth.multi with authorize('view',$form); change tightens security."},
-{"text":"The open form submissions export statu part of your server changed in a way plain can't describe yet. /open/forms/[form]/submissions/export/status/[jobId]","kind":"description","verdict":"right","why":"Correct endpoint, unexplained (name truncated)."},
-{"text":"The agent changed docs/api-reference/changelog.mdx.","kind":"description","verdict":"right","why":"Adds changelog entry."},
-{"text":"The agent changed docs/api-reference/openapi.yaml.","kind":"description","verdict":"right","why":"Fixes documented path and fields."},
-{"text":"The agent changed docs/api-reference/submissions/export-status.mdx.","kind":"description","verdict":"right","why":"Corrects documented path and fields."},
-{"text":"The agent changed docs/api-reference/submissions/export-submissions-csv.mdx.","kind":"description","verdict":"right","why":"Example job_id changed to a UUID."}],
-"misses":[
-{"what":"Security fix not mentioned: a logged-in user with access to any form could poll another form's export job (progress and download link) by using its job id under their own form; now 404.","severity":"high"},
-{"what":"Personal API tokens can now check export status, only with forms-read permission; others get 403.","severity":"medium"},
-{"what":"API docs pointed to a wrong URL for export status and listed wrong fields; now fixed with a changelog entry.","severity":"low"}],
-"silent":true}
+{ "id": "OpnForm_OpnForm__ab2971a2",
+  "summary": "Export-status endpoint now works with personal API tokens (forms-read only) and returns 404 unless the export job belongs to the requested form, closing a cross-form leak of export status and file_url; API docs corrected.",
+  "statements": [
+    { "text": "Nothing flagged (plain reads logins, payments, database changes and secrets...)", "kind": "reassurance", "verdict": "right", "why": "Route stays behind auth.multi with authorize('view') and the change tightens access." },
+    { "text": "• The open form submissions export status part of your server now turns away more requests than before (a new 'not allowed' check).", "kind": "description", "verdict": "right", "why": "Adds forms-read token check (403) and form_id match (404) in FormSubmissionController.php:124-133; also lets tokens in, which is not said." },
+    { "text": "• The agent changed docs/api-reference/changelog.mdx.", "kind": "description", "verdict": "right", "why": "Changelog entry added." },
+    { "text": "• The agent changed docs/api-reference/openapi.yaml.", "kind": "description", "verdict": "right", "why": "Path/fields corrected." },
+    { "text": "• The agent changed docs/api-reference/submissions/export-status.mdx.", "kind": "description", "verdict": "right", "why": "Path/fields corrected." },
+    { "text": "• The agent changed docs/api-reference/submissions/export-submissions-csv.mdx.", "kind": "description", "verdict": "right", "why": "Example job_id changed." }
+  ],
+  "misses": [
+    { "what": "Personal API tokens can now check export status (previously blocked), but only tokens with forms-read permission; others get 403.", "severity": "medium" },
+    { "what": "API docs pointed to a wrong URL for export status and listed wrong fields; now fixed with a changelog entry.", "severity": "low" }
+  ],
+  "silent": false }

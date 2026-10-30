@@ -1,13 +1,16 @@
-{"id":"moinulmoin_chadnext__8d6a714f","summary":"Fixes profile-picture upload for users with no picture; removeUserOldImageFromCDN now takes the image URL from the client; renames Prisma client db->prisma everywhere; moves getUserSubscriptionPlan into a 'use server' file (making it publicly callable).",
-"statements":[
-{"text":"Anyone can use the \"get user subscription plan\" action on your server without logging in.","kind":"warning","verdict":"right","why":"'use server' in src/actions/subscription.ts exposes getUserSubscriptionPlan(userId) with no session check; returns Stripe ids/period for any userId."},
-{"text":"The dashboard billing page changed in a way plain can't describe yet. /[locale]/dashboard/billing","kind":"description","verdict":"right","why":"Only an import path changed; true but uninformative."},
-{"text":"getUserSubscriptionPlan() was a helper in src/lib/subscription.ts. It moved into a \"use server\" file, so the browser can now call it directly. It looks up users.","kind":"description","verdict":"right","why":"Accurate: moved and gained 'use server'; it looks up a user's subscription details."},
-{"text":"The stripe part of your server changed in a way plain can't describe yet ... Make a test payment before you ship. /api/stripe","kind":"description","verdict":"right","why":"Only an import path changed; test payment advice is harmless."},
-{"text":"The agent changed the auth login github callback, ... update user and remove user old image from cdn parts of your server in ways plain can't describe yet.","kind":"description","verdict":"misleading","why":"Lumps a pure db->prisma rename with the two real behaviour changes (remove-old-image takes URL from browser; no-picture skip) without describing either."},
-{"text":"The agent also changed settings-form.tsx, uploadthing/core.ts and pricing.tsx, in ways plain can't describe yet.","kind":"description","verdict":"right","why":"settings-form and uploadthing core have real changes; pricing is an import path only."}],
-"misses":[
-{"what":"removeUserOldImageFromCDN is a server action with no login or ownership check and now deletes whatever UploadThing URL the caller passes, so anyone can delete arbitrary files from the app's storage.","severity":"high"},
-{"what":"The actual fix: users without a profile picture can now upload an avatar and save settings; before, saving failed.","severity":"medium"},
-{"what":"updateUser(id, payload) in the settings actions is still an unauthenticated server action that updates any user's name/email/picture (pre-existing).","severity":"medium"}],
-"silent":false}
+{ "id": "moinulmoin_chadnext__8d6a714f",
+  "summary": "Fixes profile-picture upload for users with no picture (settings form skips old-image deletion when empty; removeUserOldImageFromCDN takes the URL from the client); renames Prisma client db->prisma; moves getUserSubscriptionPlan into a 'use server' file; uploadthing updates.",
+  "statements": [
+    { "text": "⚠ Anyone may be able to use the 'remove user old image from cdn' action to delete files from your storage: no login check. Add one and restrict to allowed files.", "kind": "warning", "verdict": "right", "why": "settings/actions.ts server action has no session/ownership check and deletes the caller-supplied UploadThing URL." },
+    { "text": "⚠ Anyone can use the 'get user subscription plan' action without logging in.", "kind": "warning", "verdict": "right", "why": "'use server' exposes getUserSubscriptionPlan(userId) with no session check; returns Stripe ids/period end." },
+    { "text": "• The dashboard billing page changed in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Only import path changed; true but uninformative." },
+    { "text": "+ getUserSubscriptionPlan() moved into a 'use server' file so the browser can call it directly. It looks up users.", "kind": "description", "verdict": "right", "why": "Helper moved from lib/subscription.ts to actions/subscription.ts with 'use server'." },
+    { "text": "• The stripe part of your server changed in a way plain can't describe yet. This is the code that charges your customers. Make a test payment before you ship.", "kind": "description", "verdict": "right", "why": "Only import changed; harmless advice, nothing payment-related changed." },
+    { "text": "• The agent changed the auth login github callback, send OTP, verify OTP, uploadthing, webhooks stripe, generate email verification code, verify verification code, project actions, update user and remove user old image from cdn in ways plain can't describe yet.", "kind": "description", "verdict": "misleading", "why": "Lumps a pure db->prisma rename with the two real behaviour changes (client-supplied image URL; skip deletion when no picture) without describing either." },
+    { "text": "• The agent also changed settings-form.tsx, uploadthing/core.ts and pricing.tsx, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "settings-form has the real fix; uploadthing and pricing changed." }
+  ],
+  "misses": [
+    { "what": "The actual fix: users without a profile picture (e.g. email-OTP sign-ups) can now upload an avatar and save settings; previously saving failed.", "severity": "medium" },
+    { "what": "updateUser(id, payload) in the settings actions is still an unauthenticated server action that updates any user's name/email/picture (pre-existing).", "severity": "medium" }
+  ],
+  "silent": false }

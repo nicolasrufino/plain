@@ -1,29 +1,35 @@
 {
  "id": "captableinc_captable__2e3fdfba",
- "summary": "Redesigns the audit-log page appended to completed e-signed PDFs: logo header, 'Audit Logs' title, the file name, and a 'Document history' list with human-readable action labels (Signed / Email sent / Document completed) next to each summary; also marks @react-pdf/renderer as a server external package so the PDF renderer works on the server.",
+ "summary": "Redesigns the audit-log page appended to completed e-signed PDFs (logo, file name, Document history with action labels); marks @react-pdf/renderer as server external package.",
  "statements": [
   {
-   "text": "Nothing flagged",
+   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.)",
    "kind": "reassurance",
    "verdict": "right",
    "why": "Only audit-log PDF template and next config; nothing in logins, payments, db or secrets."
   },
   {
-   "text": "• The agent changed next.config.js, src/jobs/esign-pdf.ts, src/pdf-templates/audit-log-template.tsx and src/server/esign.ts in ways plain can't describe yet.",
+   "text": "The agent changed src/pdf-templates/audit-log-template.tsx: it now shows \"Audit Logs\" and \"File Name\".",
    "kind": "description",
    "verdict": "right",
-   "why": "All four files really changed (audit-log redesign, react-pdf externalized)."
+   "why": "Template now has those titles."
+  },
+  {
+   "text": "The agent also changed src/jobs/esign-pdf.ts and src/server/esign.ts, in ways plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Both really changed to feed the new template."
   }
  ],
  "misses": [
   {
-   "what": "The audit-log page attached to every completed signed document now looks different for signers and the company: logo, file name row, and a 'Document history' table pairing a plain-English action (Signed, Email sent, Document completed) with each log line.",
+   "what": "Audit-log page on every completed signed document gets a 'Document history' table pairing plain-English actions (Signed, Email sent, Document completed) with each log line and a logo header; card only mentions two titles.",
    "severity": "medium"
   },
   {
-   "what": "The time of each event (occurredAt) is now fetched but not printed in the audit log; the history shows only action + summary text.",
+   "what": "The time of each event (occurredAt) is fetched but not printed in the audit log.",
    "severity": "low"
   }
  ],
- "silent": true
+ "silent": false
 }

@@ -195,16 +195,25 @@ following [GRADING-AFTER.md](../eval/prod/GRADING-AFTER.md). The graders started
 commit really does, what the owner should know) and checked the diff for anything new. Grades are in
 [grades-after/](../eval/prod/grades-after) (`GRADES=grades-after CARDS=cards-after node eval/prod/score.ts`).
 
-| | before | after |
-|---|---|---|
-| wrong or misleading reassurance | 13/46 (28%) | 6/61 (10%) |
-| wrong or misleading warning | 47/55 (85%) | 0/11 (0%) |
-| wrong or misleading description | 26/184 (14%) | 10/197 (5%) |
-| wrong or misleading step | 6/38 | 5/38 |
-| high-severity misses | 18 | 13 |
-| medium-severity misses | 62 | 61 |
-| silent cards | 32 (46%) | 40 (57%) |
-| crashed | 0 | 0 |
+| | before | after the first fixes | now |
+|---|---|---|---|
+| wrong or misleading reassurance | 13/46 (28%) | 6/61 (10%) | 4/60 (7%) |
+| wrong or misleading warning | 47/55 (85%) | 0/11 (0%) | 0/16 (0%) |
+| wrong or misleading description | 26/184 (14%) | 10/197 (5%) | 12/205 (6%) |
+| wrong or misleading step | 6/38 | 5/38 | 5/38 |
+| high-severity misses | 18 | 13 | 8 |
+| medium-severity misses | 62 | 61 | 60 |
+| silent cards | 32 (46%) | 40 (57%) | 35 (50%) |
+| crashed | 0 | 0 | 0 |
+
+"Now" adds the later rules, each built from a pilot miss, reviewed, and checked on all 70 commits and the demos:
+- papermark's imports of a missing folder (✖ won't build);
+- LinkStack's cut-off `functions.php` and deleted helpers still in use (✖);
+- chadnext's open action that deletes stored files (⚠);
+- OpnForm's new "not allowed" check, said as a security change;
+- components that say what's new on screen (inbox-zero's "Test connection", logtide's renamed label).
+
+Only the cards that changed were regraded.
 
 Silent cards went up. Many cards had only a wrong "doesn't look related" flag, and with it gone nothing useful is left. The 6
 "Nothing flagged" headers that are still wrong all hide problems plain doesn't read yet:

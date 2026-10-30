@@ -1,9 +1,13 @@
 plain · 11 files changed since 8ccdee47~1
 You asked: " JulianPrieber committed 1 hour ago Create global validation endpoint"
 
-  ⚠ 3 problems
+  ⚠ 4 problems
 
 LOOK AT THIS FIRST
+  ✖ setBlockAssetContext() was deleted from app/Functions/functions.php, but
+    app/Http/Controllers/LinkTypeViewController.php and
+    resources/views/linkstack/elements/buttons.blade.php still use it, so those pages will
+    crash.
   ✖ block_text_translation_check() was deleted from app/Functions/functions.php, but
     resources/views/studio/edit-link.blade.php still uses it, so those pages will crash.
   ✖ app/Functions/functions.php looks cut off: some of its { brackets are never closed, so

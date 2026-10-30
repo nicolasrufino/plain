@@ -7986,3 +7986,12 @@ console.log('ok (deleted php helpers)')
   assert.ok(!c(tr, { ...tr, 'app/helpers.php': "<?php\nfunction keep() { return 1; }\n" }).includes(D), 'translated text')
 }
 console.log('ok (review 86)')
+// an app's own helper behind function_exists still counts; a native polyfill doesn't
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'app/helpers.php': "<?php\nif (!function_exists('setBlockAssetContext')) {\n  function setBlockAssetContext($x) { return $x; }\n}\nif (!function_exists('str_contains')) {\n  function str_contains($h, $n) { return strpos($h, $n) !== false; }\n}\nfunction keep() { return 1; }\n",
+    'app/View.php': "<?php\nclass View { public function r() { setBlockAssetContext('a'); return str_contains('ab', 'a'); } }\n" }
+  const r = c(lv, { ...lv, 'app/helpers.php': "<?php\nfunction keep() { return 1; }\n" })
+  assert.ok(r.includes('setBlockAssetContext() was deleted') && !r.includes('str_contains() was deleted'), r)
+}
+console.log('ok (function_exists helpers)')

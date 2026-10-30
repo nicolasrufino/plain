@@ -2984,10 +2984,10 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const noScript = (t: string) => t.replace(/<script\b[\s\S]*?<\/script>/gi, '')
   const phpFns = (snap: Snap) => { const out = new Map<string, string>(); for (const [k, t0] of snap) if (/\.php$/.test(k) && !/\.blade\.php$/.test(k) && !k.includes('vendor/'))
     for (const t of [noScript(t0)]) for (const m of t.matchAll(/^([ \t]*)function\s+(\w+)\s*\(/gm)) {
-      // (not a method: one with a visibility word, or an indented one in a file that declares a class; not a polyfill kept behind
-      // function_exists, which PHP itself may now provide)
+      // (not a method: one with a visibility word, or an indented one in a file that declares a class; not a polyfill of a function
+      // PHP itself now has (str_contains behind function_exists); an app's own helpers behind function_exists still count)
       if (/^[ \t]*(?:public|private|protected|static|abstract|final)\b/m.test(t.slice(t.lastIndexOf('\n', m.index!) + 1, m.index! + m[0].length))) continue
-      if (m[1] && /^[ \t]*(?:abstract\s+|final\s+|readonly\s+)*(?:class|trait|interface|enum)\s+\w+/m.test(t) || new RegExp(String.raw`function_exists\(\s*['"]${m[2]}['"]`).test(t)) continue
+      if (m[1] && /^[ \t]*(?:abstract\s+|final\s+|readonly\s+)*(?:class|trait|interface|enum)\s+\w+/m.test(t) || /^(?:str_|array_|mb_|json_|iterator_|spl_|is_|get_debug_type$|fdiv$)/.test(m[2]) && new RegExp(String.raw`function_exists\(\s*['"]${m[2]}['"]`).test(t)) continue
       out.set(m[2], k) }
     return out }
   // (not when a Composer package was added: a helper may have moved into it, and vendor/ isn't in the project)

@@ -1,97 +1,24 @@
-{
- "summary": "Scaffolds beta redaction feature behind off-by-default flag: two DB tables, new page, launcher, queues, expiresIn passthrough; imports ee/features/redaction components missing from repo so build fails.",
- "statements": [
-  {
-   "text": "Nothing flagged (plain reads logins, payments, database changes and secrets...)",
-   "kind": "reassurance",
-   "verdict": "wrong",
-   "why": "Pages import @/ee/features/redaction/* which don't exist at this commit; Next build fails with module-not-found; cannot ship."
-  },
-  {
-   "text": "Each document redaction page is new. /documents/[id]/redactions/[jobId]",
-   "kind": "description",
-   "verdict": "right",
-   "why": "New page exists (though it renders a missing component)."
-  },
-  {
-   "text": "Each document page now shows the redaction launcher. /documents/[id]",
-   "kind": "description",
-   "verdict": "misleading",
-   "why": "RedactionLauncher import is missing so page won't build; also flag off by default."
-  },
-  {
-   "text": "The file s3 get presigned get URL proxy part of your server changed in a way plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Forwards expiresIn; still auth checked, capped at 1h."
-  },
-  {
-   "text": "Users now also store the created redaction jobs.",
-   "kind": "description",
-   "verdict": "misleading",
-   "why": "Really two new tables (redaction jobs and redaction boxes) linked to documents, versions, teams."
-  },
-  {
-   "text": "The agent added redaction.prisma; changed document.prisma; changed team.prisma.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Matches diff."
-  },
-  {
-   "text": "The agent also changed lib/trigger/queues.ts, in a way plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "Two new queues."
-  },
-  {
-   "text": "Apply prisma/migrations/20260424000000_add_redactions_model to your live database before the new code goes live.",
-   "kind": "step",
-   "verdict": "right",
-   "why": "Additive migration creating the tables."
-  },
-  {
-   "text": "Test anything that uses @trigger.dev/python: 4.5.3 -> 4.5.5",
-   "kind": "step",
-   "verdict": "right",
-   "why": "Package bump."
-  },
-  {
-   "text": "Test anything that uses @trigger.dev/react-hooks: 4.5.3 -> 4.5.5",
-   "kind": "step",
-   "verdict": "right",
-   "why": "Package bump."
-  },
-  {
-   "text": "Test anything that uses @trigger.dev/sdk: 4.5.3 -> 4.5.5",
-   "kind": "step",
-   "verdict": "right",
-   "why": "Package bump."
-  },
-  {
-   "text": "Test anything that uses @trigger.dev/build: 4.5.3 -> 4.5.5",
-   "kind": "step",
-   "verdict": "right",
-   "why": "Package bump."
-  }
- ],
- "misses": [
-  {
-   "what": "Imports four redaction components from ee/features/redaction/ that are not in the repo; app fails to build at this commit.",
-   "severity": "high"
-  },
-  {
-   "what": "Beta behind 'redaction' feature flag (off by default, PDFs only); invisible unless enabled.",
-   "severity": "medium"
-  },
-  {
-   "what": "Redaction uses an AI model (Gemini) on document contents via Trigger.dev jobs; documents sent to a third party; tasks not included.",
-   "severity": "low"
-  },
-  {
-   "what": "Two new Trigger.dev queues (detect-redactions, apply-redactions) added.",
-   "severity": "low"
-  }
- ],
- "silent": false,
- "id": "mfts_papermark__0a62004a"
-}
+{ "id": "mfts_papermark__0a62004a",
+  "summary": "Scaffolds a beta, flag-gated PDF redaction feature: two new DB tables, a redactions page, launcher on the document page, two Trigger.dev queues, expiresIn passthrough on the presigned-URL proxy, trigger.dev 4.5.3->4.5.5. The ee/features/redaction components it imports are not in the repo.",
+  "statements": [
+    { "text": "✖ pages/documents/[id]/index.tsx imports redaction-launcher, which isn't in the project, so the app won't build.", "kind": "warning", "verdict": "right", "why": "Import added in diff; file absent at this commit." },
+    { "text": "✖ pages/documents/[id]/redactions/[jobId].tsx imports redaction-workspace, which isn't in the project, so the app won't build.", "kind": "warning", "verdict": "right", "why": "Same: component missing." },
+    { "text": "+ Each document redaction page is new. /documents/[id]/redactions/[jobId]", "kind": "description", "verdict": "right", "why": "New 41-line page." },
+    { "text": "• Each document page now shows the redaction launcher.", "kind": "description", "verdict": "misleading", "why": "Gated off by default (featureFlags 'redaction': false) and component missing, so not shown." },
+    { "text": "• The s3 get presigned get URL proxy changed in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Forwards caller-chosen expiresIn; still capped at 1h downstream, auth unchanged." },
+    { "text": "• Users now also store the created redaction jobs.", "kind": "description", "verdict": "misleading", "why": "Real change is two new tables (jobs and redaction boxes) linked to documents, versions, teams, creator." },
+    { "text": "+ The agent added prisma/schema/redaction.prisma.", "kind": "description", "verdict": "right", "why": "Matches diff." },
+    { "text": "• The agent changed prisma/schema/document.prisma.", "kind": "description", "verdict": "right", "why": "Matches diff." },
+    { "text": "• The agent changed prisma/schema/team.prisma.", "kind": "description", "verdict": "right", "why": "Matches diff." },
+    { "text": "• The agent also changed lib/trigger/queues.ts, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Two new queues added." },
+    { "text": "1. Apply prisma/migrations/20260424000000_add_redactions_model to your live database before the new code goes live.", "kind": "step", "verdict": "right", "why": "Additive migration." },
+    { "text": "2. Test anything that uses @trigger.dev/python (4.5.3 -> 4.5.5).", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "3. Test anything that uses @trigger.dev/react-hooks (4.5.3 -> 4.5.5).", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "4. Test anything that uses @trigger.dev/sdk (4.5.3 -> 4.5.5).", "kind": "step", "verdict": "right", "why": "package.json bump." },
+    { "text": "5. Test anything that uses @trigger.dev/build (4.5.3 -> 4.5.5).", "kind": "step", "verdict": "right", "why": "package.json bump." }
+  ],
+  "misses": [
+    { "what": "Beta behind the 'redaction' feature flag (off for every team by default, PDFs only); invisible unless enabled in Edge Config.", "severity": "medium" },
+    { "what": "Redaction uses an AI model (Gemini, per schema comments) on document contents via Trigger.dev jobs; documents go to a third party; the tasks themselves aren't included.", "severity": "low" }
+  ],
+  "silent": false }

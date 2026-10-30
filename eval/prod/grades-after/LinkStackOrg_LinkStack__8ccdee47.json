@@ -1,65 +1,19 @@
-{
- "summary": "Adds global validation/sanitizer, allows SVG/GIF uploads; but truncates functions.php (parse error, site breaks) and deletes still-used block helpers.",
- "statements": [
-  {
-   "text": "! Uploads now accept SVG files... one user could attack others, admins included. Leave SVG out or serve uploads from a separate domain.",
-   "kind": "warning",
-   "verdict": "right",
-   "why": "Real stored XSS risk via SVG uploads."
-  },
-  {
-   "text": "The agent changed the admin edit user, admin site, studio page, studio background and import data parts of your server in ways plain can't describe yet.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True."
-  },
-  {
-   "text": "The agent changed composer.json.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True; autoload files entry added."
-  },
-  {
-   "text": "The agent changed edit-user.blade.php.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True."
-  },
-  {
-   "text": "The agent changed studio/page.blade.php.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True."
-  },
-  {
-   "text": "The agent changed studio/theme.blade.php.",
-   "kind": "description",
-   "verdict": "right",
-   "why": "True."
-  }
- ],
- "misses": [
-  {
-   "what": "The whole site breaks: functions.php cut off mid-function (footer() unclosed), PHP syntax error loaded on every request.",
-   "severity": "high"
-  },
-  {
-   "what": "Block helper functions (setBlockAssetContext, block_asset, block_text, bt, ...) deleted but still used; link blocks crash.",
-   "severity": "high"
-  },
-  {
-   "what": "Admin 'Edit user' now rejects saves when password box is empty (or no handle/email).",
-   "severity": "medium"
-  },
-  {
-   "what": "Profile/page descriptions and text blocks go through a stricter HTML sanitizer; may strip formatting.",
-   "severity": "low"
-  },
-  {
-   "what": "Needs `composer dump-autoload` on deploy so validation.php is loaded.",
-   "severity": "medium"
-  }
- ],
- "silent": false,
- "id": "LinkStackOrg_LinkStack__8ccdee47"
-}
+{ "id": "LinkStackOrg_LinkStack__8ccdee47",
+  "summary": "Moves rich-text sanitising and allowed image types into new validation.php/config/validation.php (SVG and gif now allowed), adds validation to admin edit-user and site uploads, but deletes the end of app/Functions/functions.php (footer() unclosed -> parse error) and removes still-used block helper functions.",
+  "statements": [
+    { "text": "✖ block_text_translation_check() was deleted from app/Functions/functions.php, but resources/views/studio/edit-link.blade.php still uses it, so those pages will crash.", "kind": "warning", "verdict": "right", "why": "Deleted in the diff; still called at edit-link.blade.php:81 at the commit and defined nowhere else." },
+    { "text": "✖ app/Functions/functions.php looks cut off: some of its { brackets are never closed, so it no longer runs. Every page that loads it will crash. Ask the agent to restore the end of the file.", "kind": "warning", "verdict": "right", "why": "File ends inside footer() with no return/closing brace; autoloaded via composer files, footer() used in routes/web.php:77." },
+    { "text": "⚠ Uploads now accept SVG files (validation.php, config/validation.php). An SVG can carry a script that runs when opened from your site, so one user could attack others, admins included. Leave SVG out, or serve uploaded files from a separate domain.", "kind": "warning", "verdict": "right", "why": "SVG added to allowed types for avatars/backgrounds/import; stored XSS risk." },
+    { "text": "• The agent changed the admin edit user, admin site, studio page, studio background and import data parts of your server in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Handlers changed (validation, sanitizer, SVG)." },
+    { "text": "• The agent changed composer.json.", "kind": "description", "verdict": "right", "why": "Adds validation.php to autoload files." },
+    { "text": "• The agent changed resources/views/panel/edit-user.blade.php.", "kind": "description", "verdict": "right", "why": "accept= from configured list." },
+    { "text": "• The agent changed resources/views/studio/page.blade.php.", "kind": "description", "verdict": "right", "why": "accept= now includes svg/gif." },
+    { "text": "• The agent changed resources/views/studio/theme.blade.php.", "kind": "description", "verdict": "right", "why": "Background input accept= changed." }
+  ],
+  "misses": [
+    { "what": "Other deleted block helpers (setBlockAssetContext, block_asset, block_text, bt) are also still used, so link blocks crash even if the syntax error is fixed; card names only block_text_translation_check.", "severity": "medium" },
+    { "what": "Admin 'Edit user' now rejects saves when the password box is left empty (or no handle/email), because empty fields become null and fail the new 'string' rules.", "severity": "medium" },
+    { "what": "Needs `composer dump-autoload` on deploy so validation.php is loaded.", "severity": "medium" },
+    { "what": "Profile/page descriptions and text blocks go through a stricter HTML sanitizer; may strip formatting.", "severity": "low" }
+  ],
+  "silent": false }
