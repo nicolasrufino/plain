@@ -118,7 +118,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   - A sign-up discount that people can claim again with another email.
   - Unpaid checkouts that now take up a spot (a seat, a time slot, a day's orders) with nothing that
     frees them, or old unpaid ones already in the database that a new limit starts counting.
-- **Limits and AI answers.** Limits written as constants (new, changed, replaced, gone, "no limit now"). A guess when a
+- **Limits and AI answers.** Limits written as constants (new, changed, replaced, gone, "no limit now"), and limits whose
+  number is a setting's fallback (`getattr(settings, "MAX_PAGE", 10_000)`, `int(os.getenv("X", "50"))`,
+  `Number(process.env.X ?? 3)`), said with "your settings can change it". A fallback of 0, an on/off switch
+  (`RATE_LIMIT_ENABLED`), or one the app's settings set to a number elsewhere isn't read that way. A guess when a
   per-day limit is replaced by one that never resets, and when AI answers get a length cap nothing checks.
 - **Live connection (Socket.IO).** The events the server now takes and what each one does, with "Connecting needs a
   login ✓" from its own `io.use` guard. A guard that's gone is a thing to decide. An event reads "room members only ✓"

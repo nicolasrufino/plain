@@ -7731,3 +7731,29 @@ console.log('ok (review 74)')
   assert.ok(!c(rb, { ...rb, 'lib/thing.rb': '# doc\n' + rb['lib/thing.rb'] }).includes('thing.rb'), 'ruby comment')
 }
 console.log('ok (also changed)')
+// a limit whose number is a setting's fallback (tacticalrmm): said, with "your settings can change it"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const dj = { 'requirements.txt': 'django==5.1\n', 'app/constants.py': 'from django.conf import settings\nPAGE_SIZE = 50\n' }
+  assert.ok(c(dj, { ...dj, 'app/constants.py': dj['app/constants.py'] + 'MAX_PAGE = getattr(settings, "MAX_PAGE", 10_000)\n' }).includes("There's now a maximum of 10,000 page (your settings can change it)"), 'getattr')
+  assert.ok(c(dj, { ...dj, 'app/constants.py': dj['app/constants.py'] + 'MAX_UPLOADS = int(os.getenv("MAX_UPLOADS", "20"))\n' }).includes('a maximum of 20 uploads (your settings can change it)'), 'getenv')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/limits.ts': 'export const A = 1\n' }
+  assert.ok(c(nx, { ...nx, 'lib/limits.ts': 'export const A = 1\nexport const MAX_PROJECTS = Number(process.env.MAX_PROJECTS ?? 3)\n' }).includes('a maximum of 3 projects (your settings can change it)'), 'process.env')
+}
+console.log('ok (setting limits)')
+// Review 76: the settings note is per file; a value settings.py sets wins; switches and a fallback of 0 aren't limits; never "gone"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const mix = { 'requirements.txt': 'fastapi\n', 'app/config.py': 'import os\nMAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))\n', 'package.json': '{"dependencies":{"next":"15.0.0"}}' }
+  const leak = c(mix, { ...mix, 'web/upload.ts': 'export const MAX_UPLOAD_MB = 20\n' })
+  assert.ok(leak.includes('maximum upload size of 20 MB') && !leak.includes('20 MB (your settings'), leak)
+  const dj = { 'requirements.txt': 'django==5.1\n', 'proj/settings.py': 'DEBUG = False\n', 'app/views.py': 'from django.conf import settings\n' }
+  const both = c(dj, { ...dj, 'proj/settings.py': 'DEBUG = False\nMAX_PAGE = 500\n', 'app/views.py': 'from django.conf import settings\nMAX_PAGE = getattr(settings, "MAX_PAGE", 10_000)\n' })
+  assert.ok(!both.includes('10,000'), both)
+  const sw = { 'requirements.txt': 'fastapi\n', 'app/config.py': 'import os\n' }
+  for (const l of ['RATE_LIMIT_ENABLED = int(os.getenv("RATE_LIMIT_ENABLED", "1"))', 'SKIP_LIMIT_CHECK = int(os.getenv("SKIP_LIMIT_CHECK", "0"))', 'MAX_SEATS = int(os.getenv("MAX_SEATS", "0"))'])
+    assert.ok(!c(sw, { ...sw, 'app/config.py': `import os\n${l}\n` }).includes("There's now"), `not a limit: ${l}`)
+  const st = { 'requirements.txt': 'django==5.1\n', 'app/views.py': 'from django.conf import settings\nMAX_PAGE = getattr(settings, "MAX_PAGE", 100)\ndef v(n):\n    return n > MAX_PAGE\n' }
+  assert.ok(!c(st, { ...st, 'app/views.py': 'from django.conf import settings\ndef v(n):\n    return n > settings.MAX_PAGE\n' }).includes('is gone'), 'read another way, not gone')
+}
+console.log('ok (review 76)')

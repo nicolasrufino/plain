@@ -9,7 +9,7 @@ WHAT CHANGED
     • The agent files part of your server changed in a way plain can't describe yet. Ask the
       agent what it does differently.
       /agents/[agent_id]/files
+    • There's now a maximum file browser page of 10,000 (your settings can change it).
+      api/tacticalrmm/tacticalrmm/constants.py
   Other files
-    • The agent also changed api/tacticalrmm/tacticalrmm/constants.py, in a way plain can't
-      describe yet.
     • The agent also changed api/tacticalrmm/agents/tests/test_file_browser.py (tests).

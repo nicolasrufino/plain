@@ -3276,8 +3276,16 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   // ponytail: constants only (not settings or the database); whole name parts; a name defined twice in a file (per plan) is
   // skipped; Go MixedCaps aren't read
   const LIMIT_RE = /^[ \t]*(?:export\s+)?(?:(?:const|let|var|final|static|readonly|public|private|protected|val|int|long|Integer|Long|number)\s+)*([A-Z][A-Z0-9_]*)\s*(?::\s*[\w[\]]+\s*)?[:=]\s*([\d_]+(?:\.\d+)?)\s*(?:as\s+const\s*)?(?:[;,]|$|#|\/\/)/gm
-  const isLimit = (n: string) => /(^|_)(LIMIT|MAX|QUOTA|CAP|ALLOWANCE|BUDGET)(_|$)/.test(n) && !/(^|_)(MS|SECONDS?|SECS?|MINUTES?|AGE|TTL|TIMEOUT|WINDOW|RETRIES|RETRY|POOL|WIDTH|HEIGHT|PX|DELAY|INTERVAL|BACKOFF|CONNECTIONS?|WORKERS?|THREADS?)(_|$)/.test(n) && !/UNLIMITED/.test(n)
-  const limitsOf = (t = '') => { const all_ = [...t.matchAll(LIMIT_RE)].filter(m => isLimit(m[1])), n = new Map<string, number>()
+  const isLimit = (n: string) => /(^|_)(LIMIT|MAX|QUOTA|CAP|ALLOWANCE|BUDGET)(_|$)/.test(n) && !/(^|_)(MS|SECONDS?|SECS?|MINUTES?|AGE|TTL|TIMEOUT|WINDOW|RETRIES|RETRY|POOL|WIDTH|HEIGHT|PX|DELAY|INTERVAL|BACKOFF|CONNECTIONS?|WORKERS?|THREADS?|ENABLED?|DISABLED?|SKIP|CHECK|FLAG|ON|OFF|MODE)(_|$)/.test(n) && !/UNLIMITED/.test(n)
+  // (also a limit whose number is the fallback for a setting: `MAX_PAGE = getattr(settings, "MAX_PAGE", 10_000)`,
+  // `int(os.getenv("X", "50"))`, `Number(process.env.X ?? 50)`; said with "your settings can change it")
+  const LIMIT_SETTING = /^[ \t]*(?:export\s+)?(?:(?:const|let|var)\s+)?([A-Z][A-Z0-9_]*)\s*(?::\s*\w+\s*)?=\s*(?:int\(\s*|Number\(\s*|parseInt\(\s*)?(?:getattr\(\s*settings\s*,\s*['"](\w+)['"]\s*,\s*|os\.(?:getenv|environ\.get)\(\s*['"](\w+)['"]\s*,\s*|process\.env\.(\w+)\s*(?:\?\?|\|\|)\s*)['"]?([\d_]+)['"]?\s*\)?\s*(?:,\s*10\s*)?\)?\s*;?\s*(?:#[^\n]*|\/\/[^\n]*)?$/gm
+  // (not a fallback of 0, usually "off"; not one the app's settings set to a number elsewhere, settings.py's MAX_PAGE = 500: that one counts)
+  const settingLimits = (t = '', snap: Snap = after) => [...t.matchAll(LIMIT_SETTING)].filter(m => isLimit(m[1]) && Number(m[5].replace(/_/g, '')) > 0
+    && ![...snap.values()].some(x => x !== t && new RegExp(String.raw`^[ \t]*${m[2] ?? m[3] ?? m[4]}\s*=\s*[\d_]+`, 'm').test(x))).map(m => { const r = [m[0], m[1], m[5]] as unknown as RegExpExecArray; r.index = m.index; return r })
+  const fromSettings = (t: string | undefined, n: string) => settingLimits(t ?? '').some(m => m[1] === n)
+  const limitsOf = (t = '', snap: Snap = after) => { const set_ = settingLimits(t, snap)
+    const all_ = [...[...t.matchAll(LIMIT_RE)].filter(m => isLimit(m[1])), ...set_], n = new Map<string, number>()
     for (const m of all_) n.set(m[1], (n.get(m[1]) ?? 0) + 1)
     return new Map(all_.filter(m => n.get(m[1]) === 1).map(m => [m[1], m[2].replace(/_/g, '')])) }   // (repeated per plan: skipped)
   const definedIn = (m: Snap) => { const out = new Map<string, Set<string>>()
@@ -3327,7 +3335,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     return w }
   const valueOf = (n: string, v: string) => { const last = n.split('_').at(-1)!; return last === 'USD' ? `$${nice_(v)}` : UNIT[last] ? `${nice_(v)} ${UNIT[last]}` : nice_(v) }
   for (const p of real.filter(q => !q.includes('#') && srcFile(q) && !isTest(q))) {
-    const a = limitsOf(before.get(p)), b = limitsOf(after.get(p))
+    const a = limitsOf(before.get(p), before), b = limitsOf(after.get(p))
     const movedHere = (n: string) => [...defA.get(n) ?? []].some(q => q !== p && !defB.get(n)?.has(q))   // (from another file)
     // (assigned at all, any value: `= int(os.getenv("X", "50"))` still sets it; a name the file had, even per plan, isn't new)
     const assigned = (n: string, t: string) => new RegExp(String.raw`^[ \t]*(?:export\s+)?(?:(?:const|let|var|final|static|readonly|public|private|protected|val|int|long)\s+)*${n}\s*(?::\s*[\w[\]]+\s*)?=(?!=)|(?:^|[{,]\s*)${n}\s*:\s*(?!string\b|number\b|boolean\b|any\b)[^\s,}]`, 'm').test(t)
@@ -3336,7 +3344,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const useLines = (t: string, n: string) => (t.match(new RegExp(String.raw`^[^\n]*\b${n}\b[^\n]*$`, 'gm')) ?? []).map(l => l.trim())
     // (set to "no limit": None, null, Infinity, inf, -1, sys.maxsize, Number.MAX_SAFE_INTEGER)
     const unlimited = (n: string) => new RegExp(String.raw`\b${n}\s*(?::\s*[\w[\]]+\s*)?[:=]\s*(?:None|null|undefined|Infinity|Number\.POSITIVE_INFINITY|Number\.MAX_SAFE_INTEGER|float\(\s*['"]inf['"]\s*\)|math\.inf|sys\.maxsize|-1)(?=\s*(?:[;,]|#|\/\/|$))`, 'm').test(after.get(p) ?? '')
-    const goneRaw = [...a].filter(([n]) => !b.has(n) && !movedAway(n) && (!assigned(n, appAfter) || unlimited(n)))
+    // (a limit read from a setting isn't gone when the code reads the setting another way now: settings.MAX_PAGE)
+    const goneRaw = [...a].filter(([n]) => !b.has(n) && !movedAway(n) && (!assigned(n, appAfter) || unlimited(n)) && !settingLimits(before.get(p), before).some(m => m[1] === n))
     const addedRaw = [...b].filter(([n]) => !a.has(n) && !movedHere(n) && !assigned(n, before.get(p) ?? ''))
     // a replacement first: the new one in the old one's exact place in a comparison
     const swap = goneRaw.length === 1 && addedRaw.length === 1 && !unlimited(goneRaw[0][0]) && cmpLines(before.get(p) ?? '', goneRaw[0][0]).some(l => cmpLines(after.get(p) ?? '', addedRaw[0][0]).includes(l.replace(new RegExp(String.raw`\b${goneRaw[0][0]}\b`, 'g'), addedRaw[0][0]))) ? [goneRaw[0], addedRaw[0]] as const : undefined
@@ -3353,8 +3362,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const changed_ = [...b].filter(([n, v]) => a.has(n) && a.get(n) !== v)
     const line: string[] = []
     if (swap) line.push(`The ${nameOf(swap[0][0])} (${valueOf(swap[0][0], swap[0][1])}) is replaced by ${phrase(swap[1][0], swap[1][1])}`)
-    else { if (added.length) line.push(`There's now ${list(added.map(([n, v]) => phrase(n, v, added.length === 1 && b.size === 1 ? after.get(p) ?? '' : '')))}`); for (const [n, v] of gone) line.push(`The ${nameOf(n)} (${valueOf(n, v)}) is gone${unlimited(n) ? ' (no limit now)' : ''}`) }
-    for (const [n, v] of changed_) line.push(`The ${nameOf(n)} changed from ${valueOf(n, a.get(n)!)} to ${valueOf(n, v)}`)
+    else { if (added.length) line.push(`There's now ${list(added.map(([n, v]) => phrase(n, v, added.length === 1 && b.size === 1 ? after.get(p) ?? '' : '') + (fromSettings(after.get(p), n) ? ' (your settings can change it)' : '')))}`); for (const [n, v] of gone) line.push(`The ${nameOf(n)} (${valueOf(n, v)}) is gone${unlimited(n) ? ' (no limit now)' : ''}`) }
+    for (const [n, v] of changed_) line.push(`The ${nameOf(n)} changed from ${valueOf(n, a.get(n)!)} to ${valueOf(n, v)}${fromSettings(after.get(p), n) && !settingLimits(before.get(p), before).some(m => m[1] === n) ? ' (your settings can change it now)' : ''}`)
     if (line.length) changes.push({ group: 'Server', text: `${line.join('. ')}.`, detail: p })
     // (date checks in the function with the comparison and the helpers it calls, in this file or by name in the app)
     const fnAround = (t: string, n: string) => { const i = t.search(new RegExp(String.raw`(?:[<>]=?\s*${n}\b|\b${n}\s*[<>-])`)); if (i < 0) return ''
