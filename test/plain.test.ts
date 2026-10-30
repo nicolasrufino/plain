@@ -7877,3 +7877,11 @@ console.log('ok (review 81)')
   assert.ok(!c(wp, { ...wp, 'functions.php': wp['functions.php'] + "add_action('wp_head', function () { ?>\n  <style>.site-header { background: #1e1e1e; }</style>\n<?php });\n" }).includes('looks cut off'), 'wp inline style')
 }
 console.log('ok (review 82)')
+// A JS file with thousands of functions stays fast: per-function work never rescans the whole file (it was quadratic)
+{
+  const big = (n: number) => Array.from({ length: n }, (_, i) => `export function f${i}(a) { if (a) { return a + ${i} } return [1, 2] }`).join('\n')
+  const a = { 'package.json': '{}', 'big.js': big(8000) + '\n' }
+  const t = Date.now(); report(new Map(Object.entries(a)), new Map(Object.entries({ ...a, 'big.js': a['big.js'] + 'export const z = 1\n' })), { ref: 'main' })
+  assert.ok(Date.now() - t < 8000, `8,000 functions took ${Date.now() - t} ms`)
+}
+console.log('ok (big files)')

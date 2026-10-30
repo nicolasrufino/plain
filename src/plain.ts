@@ -280,7 +280,7 @@ export function fileFacts(path: string, text: string): FileFacts {
 
 // Facts from one subtree: a whole file, one function, or one route handler.
 const CLIENT_MAKER = /^(await\s+)?(createClient|createServerClient|createBrowserClient|\w*[Ss]upabase\w*)\s*(<[^>]*>)?\(/
-const clientsOf = new WeakMap<ts.SourceFile, Set<string>>()   // one set per file: a client made at the top is used inside handlers
+const clientsOf = new WeakMap<ts.SourceFile, Set<string>>(), appNamesOf = new WeakMap<ts.SourceFile, Set<string>>()   // one set per file: a client made at the top is used inside handlers
 function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   // lead calls: `await X(...)` / `const … = await X(...)` statements at the top of a function body, before anything that writes,
   // loops, branches or catches (an early `if (...) return` is fine): what runs first, every time. Not `X().catch(...)`, not
@@ -290,8 +290,10 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
     const LEAD_WRITE = /\.(create|createMany|update|updateMany|upsert|delete|deleteMany|insert|destroy|save|remove|execute\w*)\s*\(|\bsql`|\$executeRaw|\bresolve\s*\(/
     // (a statement passed over calls nothing of the app: built-ins and methods like String(...) / formData.get(...), not an app
     // function and not a method on something imported from the app: `repo.removeAll()` from `import * as repo from "@/lib/repo"`)
-    const appNames = new Set(sf.statements.filter(ts.isImportDeclaration).filter(d => /^(\.|@\/|~\/)/.test((d.moduleSpecifier as ts.StringLiteral).text)).flatMap(d => {
-      const c = d.importClause; return c ? [...c.name ? [c.name.text] : [], ...c.namedBindings && ts.isNamespaceImport(c.namedBindings) ? [c.namedBindings.name.text] : []] : [] }))
+    // (once per file: collect runs for every function, and a file with thousands of them made this quadratic)
+    let appNames = appNamesOf.get(sf)
+    if (!appNames) appNamesOf.set(sf, appNames = new Set(sf.statements.filter(ts.isImportDeclaration).filter(d => /^(\.|@\/|~\/)/.test((d.moduleSpecifier as ts.StringLiteral).text)).flatMap(d => {
+      const c = d.importClause; return c ? [...c.name ? [c.name.text] : [], ...c.namedBindings && ts.isNamespaceImport(c.namedBindings) ? [c.namedBindings.name.text] : []] : [] })))
     const callsApp = (t: string) => [...t.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)].some(m => !/^(String|Number|Boolean|BigInt|JSON|parseInt|parseFloat|Date|Array|Object|Math|URL|URLSearchParams|encodeURIComponent|decodeURIComponent|isNaN|Symbol|Error|if|return|typeof|await|new|async|function)$/.test(m[1]))
       || [...t.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\.\s*[\w$.]+\s*\(/g)].some(m => appNames.has(m[1]))
     // (and its arguments do nothing first: no await, no app call: not getMember(purge()))
@@ -324,7 +326,8 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   const str = (e?: ts.Node) => e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text
     : e && ts.isTemplateExpression(e) ? e.head.text + e.templateSpans.map(t => '[…]' + t.literal.text).join('') : undefined
   // Next.js: the page or layout itself (the default export) and getServerSideProps, where a page's own login check has to be
-  {
+  // (the whole file's collect only: it reads every statement, and runs once per function otherwise)
+  if (root === sf) {
     const starts: number[] = [], byName = new Map<string, number>()
     for (const st of sf.statements) {
       if (ts.isFunctionDeclaration(st) && st.name) byName.set(st.name.text, st.getStart(sf))
@@ -354,7 +357,7 @@ function collect(sf: ts.SourceFile, root: ts.Node, f: FileFacts): FileFacts {
   // so it says nothing either way.
   // ponytail: own-code checks only; follow imported require* helpers to claim login through them
   const first = sf.statements[0]
-  if (first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === 'use server')
+  if (root === sf && first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === 'use server')
     for (const st of sf.statements) {
       const fn = ts.isFunctionDeclaration(st) && isExported(st) && st.name ? st : ts.isVariableStatement(st) && isExported(st) ? st.declarationList.declarations.find(d => d.initializer && fnLike(d.initializer)) : undefined
       const name = fn?.name && ts.isIdentifier(fn.name) ? fn.name.text : undefined
