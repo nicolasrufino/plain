@@ -173,6 +173,7 @@ export function javaFacts(path: string, text: string, empty: (printed?: string) 
       }
     }
   }
+  ;(f as FileFacts & { parseError?: boolean }).parseError = tree.rootNode.hasError   // (see the cut-off file check in plain.ts)
   tree.delete()   // trees live in WebAssembly memory, which JavaScript never frees: a big repo filled it and the parser aborted
   return f
 

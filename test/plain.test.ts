@@ -7844,3 +7844,36 @@ console.log('ok (review 79)')
     assert.ok(!run(a, b).includes(W), `import control: ${name}`)
 }
 console.log('ok (review 80)')
+// A file cut off mid-function (LinkStack's functions.php): a new parse error and braces that no longer balance
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const CUT = 'looks cut off'
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'app/helpers.php': "<?php\nfunction footer() {\n  if (true) {\n    echo 'x';\n  }\n}\nfunction other() { return 1; }\n" }
+  assert.ok(c(lv, { ...lv, 'app/helpers.php': "<?php\nfunction footer() {\n  if (true) {\n    echo 'x';\n" }).includes(`app/helpers.php ${CUT}`), 'php cut off')
+  assert.ok(!c(lv, { ...lv, 'app/helpers.php': "<?php\nclass A { public string $x { get => 'a'; } }\nfunction footer() { echo '{'; }\n" }).includes(CUT), 'php: new syntax, balanced, a brace in a string')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/a.ts': 'export function a() {\n  if (x) {\n    return 1\n  }\n}\n' }
+  assert.ok(c(nx, { ...nx, 'lib/a.ts': 'export function a() {\n  if (x) {\n    return 1\n' }).includes(`lib/a.ts ${CUT}`), 'ts cut off')
+  assert.ok(!c(nx, { ...nx, 'lib/a.ts': 'export function a() {\n  const s = `{ ${x} }`\n  return s // }\n}\n' }).includes(CUT), 'ts: braces in a template and a comment')
+  const bad = { ...nx, 'lib/a.ts': 'export function a() {\n  if (x) {\n' }
+  assert.ok(!c(bad, { ...bad, 'lib/a.ts': 'export function a() {\n  if (y) {\n' }).includes(CUT), 'already broken before')
+}
+console.log('ok (cut-off files)')
+// Review 81: '#fff; }' in a string, C#'s #if/#else openers and valid newer syntax don't make a file "cut off"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const CUT = 'looks cut off'
+  const lv = { 'composer.json': '{"require":{"laravel/framework":"^11.0"}}', 'app/S.php': "<?php\nclass S {\n  public function css() { return '.a { color: #fff; }'; }\n}\n" }
+  assert.ok(!c(lv, { ...lv, 'app/S.php': "<?php\nclass S {\n  public function __construct(public private(set) string $n) {}\n  public function css() { return '.a { color: #fff; }'; }\n}\n" }).includes(CUT), 'php 8.4 asymmetric visibility + css string')
+  const cs = { 'App.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>', 'Svc.cs': 'class Svc {\n  void Run() {\n    if (x) {\n      Go();\n    }\n  }\n}\n' }
+  assert.ok(!c(cs, { ...cs, 'Svc.cs': 'class Svc {\n  void Run() {\n#if DEBUG\n    if (x) {\n#else\n    if (y) {\n#endif\n      Go();\n    }\n  }\n}\n' }).includes(CUT), 'c# #if/#else openers')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/a.js': 'export const u = "//cdn.x.com"\nexport function a() {\n  return 1\n}\n' }
+  assert.ok(!c(nx, { ...nx, 'lib/a.js': 'export const u = "//cdn.x.com"\nexport const css = ".a { color: #fff; }"\nexport function a() {\n  return 1\n}\n' }).includes(CUT), 'js strings')
+}
+console.log('ok (review 81)')
+// Review 82: a PHP file that gains a ?> ... HTML block (WordPress's inline style hook) isn't "cut off"
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const wp = { 'composer.json': '{"require":{"php":"^8.2"}}', 'functions.php': "<?php\nfunction theme_setup() {\n  add_theme_support('title-tag');\n}\n" }
+  assert.ok(!c(wp, { ...wp, 'functions.php': wp['functions.php'] + "add_action('wp_head', function () { ?>\n  <style>.site-header { background: #1e1e1e; }</style>\n<?php });\n" }).includes('looks cut off'), 'wp inline style')
+}
+console.log('ok (review 82)')

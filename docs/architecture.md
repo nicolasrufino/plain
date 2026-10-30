@@ -95,6 +95,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   inside the importing file's own project. `@/` is resolved through tsconfig `paths` and `baseUrl`, Vite's `alias`, and
   every folder above. Never for a gitignored path, a generated-looking one, a folder a generator's config or a script names,
   a symlink or submodule, or a path that differs only in letter case.
+- **Broken.** A file cut off or left unbalanced (LinkStack's `functions.php` lost the end of a function). For JS/TS: TypeScript
+  newly reports "'}' expected.". For PHP, Java, C# and Go: the parser newly finds an error *and* the braces no longer
+  balance, with strings, comments and heredocs taken out first. A newer language feature the parser doesn't know never
+  unbalances braces. Not for PHP files with HTML after `?>`.
 - **Broken.** A function was deleted but other code still uses it, or a migration starts with terminal output pasted in
   ("Already up to date", "$ npx prisma migrate dev").
 - **Unsafe data and uploads** (from misses in the [production pilot](production-eval.md)):

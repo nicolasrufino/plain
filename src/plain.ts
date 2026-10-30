@@ -2251,6 +2251,13 @@ const shape = (t0: string, p: string) => {
 }
 // (JavaScript and TypeScript only, Vue and Svelte read as TypeScript; never PHP, Go or Python text)
 // (Ruby, C#, Python... keep their code without comments and with spaces squeezed: a comment removed at the very top leaves a space)
+// { minus } in a file's text, with strings, comments and heredocs taken out in one left-to-right pass (so '#fff' in a string or
+// '//cdn' in a URL stays a string), and C#'s #else branches dropped (each branch may open the same block)
+const braces = (t = '', q = '') => { const x = (/\.cs$/.test(q) ? t.replace(/^[ \t]*#(?:else|elif)\b[\s\S]*?(?=^[ \t]*#endif\b)/gm, '') : t)
+    .replace(/<<<\s*['"]?(\w+)['"]?\n[\s\S]*?\n\s*\1\b|\/\*[\s\S]*?\*\/|\/\/[^\n]*|#(?![\[{])[^\n]*|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`/g, '')
+  return (x.match(/\{/g) ?? []).length - (x.match(/\}/g) ?? []).length }
+// (JS and TS: TypeScript's own "'}' expected", exact where counting can't be)
+const cutTs = (q: string, t?: string) => t !== undefined && !!(ts.createSourceFile(q, t, ts.ScriptTarget.Latest, false, /x$/.test(q) ? ts.ScriptKind.TSX : /\.[cm]?ts$/.test(q) ? ts.ScriptKind.TS : ts.ScriptKind.JSX) as ts.SourceFile & { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics?.some(d => d.messageText === "'}' expected.")
 const same = (p: string, a?: string, b?: string) => a === b || a !== undefined && b !== undefined && (a.trim() === b.trim()
   || /\.(?:[cm]?[jt]sx?|vue|svelte)$/.test(p.split('#')[0]) && shape(a, p.split('#')[0]) === shape(b, p.split('#')[0]))
 
@@ -2283,7 +2290,8 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const noise: string[] = [], real: string[] = []
   for (const p of changed) {
     const a = A.files.get(p), b = B.files.get(p)
-    if (NOISE.test(p) || (a && b && same(p, a.printed, b.printed))) noise.push(p)
+    // (TypeScript's printer closes braces a cut-off file left open: a change in the raw balance is a change)
+    if (NOISE.test(p) || (a && b && same(p, a.printed, b.printed) && !(/\.[cm]?[jt]sx?$/.test(p) && cutTs(p, after.get(p)) && !cutTs(p, before.get(p))))) noise.push(p)
     else real.push(p)
   }
   // Pages and addresses can change without their file changing: an Express route ("file#/api/x") inside a bigger file,
@@ -2990,6 +2998,16 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
           const top = d.split('/').find((_, k, xs) => !hasFiles(xs.slice(0, k + 1).join('/'))) ?? ''
           return d && !hasFiles(d) && !(top && new RegExp(String.raw`['"/]${top.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"/]`).test(genText)) && d.split('/').slice(1).some((_, k, xs) => hasFiles(d.split('/').slice(0, xs.length - k).join('/'))) }) })
     if (missing.length) problems.push({ kind: 'Broken', text: `${p} imports ${list(missing.slice(0, 2).map(x => `"${x}"`))}${missing.length > 2 ? ` and ${missing.length - 2} more` : ''}, which ${missing.length > 1 ? "aren't" : "isn't"} in the project, so the app won't build (unless ${missing.length > 1 ? 'they are' : "it's"} made when it builds). Add the missing ${missing.length > 1 ? 'files' : 'file'}, or ask the agent where ${missing.length > 1 ? 'they are' : 'it is'}.` })
+  }
+  // A file cut off or left unbalanced (LinkStack's functions.php lost the end of a function: every page that loads it crashed). Two
+  // signs together: the parser finds an error it didn't before, and the braces no longer balance (strings and comments aside). A
+  // newer language feature the parser doesn't know never unbalances braces. Brace languages only (not Python or Ruby).
+  for (const p of real.filter(q => !q.includes('#') && /\.(?:[cm]?[jt]sx?|php|java|cs|go)$/.test(q) && !/\.blade\.php$/.test(q) && after.has(q) && before.has(q))) {
+    const js = /\.[cm]?[jt]sx?$/.test(p), err = (F: typeof A, q: string) => !!(F.files.get(q) as FileFacts & { parseError?: boolean } | undefined)?.parseError
+    const cut = js ? cutTs(p, after.get(p)) && !cutTs(p, before.get(p))
+      // (not a PHP file with HTML after a `?>`: plain's PHP grammar can't read HTML, and its CSS isn't PHP)
+      : !err(A, p) && err(B, p) && !(/\.php$/.test(p) && /\?>\s*\S/.test(after.get(p) ?? '')) && braces(before.get(p), p) === 0 && braces(after.get(p), p) > 0
+    if (cut) problems.push({ kind: 'Broken', text: `${p} looks cut off: some of its { brackets are never closed, so it no longer runs.${/\.php$/.test(p) ? ' Every page that loads it will crash.' : " The app won't build."} Ask the agent to restore the end of the file.` })
   }
   // An upload list that now takes SVG: an SVG can carry a script that runs when someone opens it from your site (stored XSS).
   // A list is a line (a [...] list joined into one) naming svg next to png/jpg/gif/webp, about uploads: Laravel `mimes:`, an `accept`,

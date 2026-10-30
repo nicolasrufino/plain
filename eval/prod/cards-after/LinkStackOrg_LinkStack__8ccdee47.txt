@@ -1,9 +1,12 @@
 plain · 11 files changed since 8ccdee47~1
 You asked: " JulianPrieber committed 1 hour ago Create global validation endpoint"
 
-  ⚠ 1 problem
+  ⚠ 2 problems
 
 LOOK AT THIS FIRST
+  ✖ app/Functions/functions.php looks cut off: some of its { brackets are never closed, so
+    it no longer runs. Every page that loads it will crash. Ask the agent to restore the end
+    of the file.
   ⚠ Uploads now accept SVG files (in app/Functions/validation.php and
     config/validation.php). An SVG can carry a script that runs when someone opens it from
     your site, so one user could attack others, admins included. Leave SVG out, or serve
