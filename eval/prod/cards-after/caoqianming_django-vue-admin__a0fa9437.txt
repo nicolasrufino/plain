@@ -9,6 +9,6 @@ WHAT CHANGED
     • The agent changed server/db.sqlite3.
 
 BEFORE YOU SHIP
-  1. Apply server/apps/system/migrations/0003_auto_20220227_1732.py to your live database
-     before the new code goes live (`python manage.py migrate`), or the parts that use it
-     will fail.
+  1. Apply server/apps/system/migrations/0003_auto_20220227_1732.py too (`python manage.py
+     migrate`). It only records settings Django keeps in your code (like labels, or the name
+     for related records), not changes to your tables, so nothing breaks if it runs later.

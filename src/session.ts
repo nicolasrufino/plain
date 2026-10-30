@@ -127,9 +127,10 @@ export function recap(cwd: string, steps: { prompt: string; before: string; afte
   const authFile = [...B.files].find(([p, f]) => /auth/.test(p) && [...f.env].some(k => /PASSWORD|SECRET/.test(k)))
   const pw = authFile && [...authFile[1].env].find(k => /PASSWORD|SECRET/.test(k))
   const newServices = [...new Set([...B.files.values()].flatMap(f => [...f.services]))].filter(s => ![...A.files.values()].some(f => f.services.has(s)))
+  const updateDb = total.ship.find(s => s.startsWith('Update your database'))
   const remember = [
     moneyReqs.length ? `Money goes through checkout, and request${moneyReqs.length > 1 ? 's' : ''} ${list(moneyReqs.map(String))} changed it. Test a real purchase before you ship.` : '',
-    schemaReqs.length && total.ship.some(s => s.startsWith('Update your database')) ? `Your database changed in ${schemaReqs.length} request${schemaReqs.length > 1 ? 's' : ''} and hasn't been updated yet. Nothing new will work until you run \`npx prisma migrate dev\`.` : '',
+    schemaReqs.length && updateDb ? `Your database changed in ${schemaReqs.length} request${schemaReqs.length > 1 ? 's' : ''} and hasn't been updated yet. Nothing new will work until you run ${updateDb.match(/`[^`]+`/)?.[0] ?? '`npx prisma migrate dev`'}.` : '',
     decisions ? `${decisions} decision${decisions > 1 ? 's are' : ' is'} waiting on you (the ! items above).` : '',
     pw && admin.length ? `The whole admin area is protected by one password (${pw}).` : '',
     newServices.length ? `Your app now depends on ${list(newServices)}.` : '',

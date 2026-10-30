@@ -15,8 +15,8 @@ WHAT CHANGED
     • Subscriptions now also store the cancelled date.
 
 BEFORE YOU SHIP
-  1. Update your database: run `npx prisma migrate dev` (on your live site: `npx prisma
-     migrate deploy`). The database's structure changed, but no migration was created.
+  1. Update your database: run `npm run dbpush` (it runs `prisma db push`) on your computer
+     and on your live database. The database's structure changed.
   2. Test anything that uses @heroicons/react: it was upgraded from ^2.0.14 to ^2.0.15.
   3. Test anything that uses @prisma/client: it was upgraded from ^4.10.0 to ^4.10.1.
   4. Test anything that uses @react-email/container: it was upgraded from ^0.0.6 to ^0.0.7.

@@ -2270,6 +2270,99 @@ const STORAGE_DELETE = /\b(?:utapi|UTApi\(\))\s*\.\s*deleteFiles\s*\(|\bDeleteOb
 
 export type Analysis = ReturnType<typeof analyze>
 type Opts = { ref: string; asked?: string; color?: boolean; agentSaid?: string }   // agentSaid: the agent's last message, if known
+// Python call arguments, split at top-level commas (brackets and strings respected, # comments dropped): positional ones keyed '0', '1'…
+function pyArgs(src: string): Map<string, string> {
+  const parts: string[] = []; let cur = '', depth = 0, q = ''
+  for (let i = 0; i < src.length; i++) { const c = src[i]
+    if (q) { cur += c; if (c === '\\') cur += src[++i] ?? ''; else if (c === q) q = ''; continue }
+    if (c === '#') { while (i < src.length && src[i] !== '\n') i++; continue }
+    if (c === "'" || c === '"') q = c; else if ('([{'.includes(c)) depth++; else if (')]}'.includes(c)) depth--
+    else if (c === ',' && depth === 0) { parts.push(cur); cur = ''; continue }
+    cur += c }
+  parts.push(cur)
+  const out = new Map<string, string>(); let n = 0
+  for (const p of parts.map(x => x.trim()).filter(Boolean)) { const m = p.match(/^(\w+)\s*=(?!=)\s*([\s\S]*)$/); out.set(m ? m[1] : String(n++), (m ? m[2] : p).replace(/\s+/g, ' ')) }
+  return out
+}
+// each `<re>(` call in Python source with its argument text (the re's first group names the call)
+function pyCalls(src: string, re: RegExp): [string, string][] {
+  const out: [string, string][] = []
+  for (const m of src.matchAll(re)) { let depth = 0, q = '', i = m.index! + m[0].length - 1; const start = i + 1
+    for (; i < src.length; i++) { const c = src[i]
+      if (q) { if (c === '\\') i++; else if (c === q) q = ''; continue }
+      if (c === "'" || c === '"') q = c; else if (c === '(') depth++; else if (c === ')' && --depth === 0) break }
+    out.push([m[1], src.slice(start, i)]) }
+  return out
+}
+// A Django app's earlier migrations, read once: each operation with its arguments named (positional ones too: hand-written
+// `AlterField('order', 'status', ...)`), in file order
+const MIG_ARGS: Record<string, string[]> = { AddField: ['model_name', 'name', 'field'], AlterField: ['model_name', 'name', 'field'], RemoveField: ['model_name', 'name'],
+  RenameField: ['model_name', 'old_name', 'new_name'], CreateModel: ['name', 'fields'], DeleteModel: ['name'], RenameModel: ['old_name', 'new_name'] }
+function migOps(src: string): [string, Map<string, string>, string][] | undefined {
+  // (the items of `operations = [...]`, every one: an imported RunSQL or TrigramExtension() counts too, under its own name; not the
+  // dependencies, not code in functions above the class. Undefined when plain can't be sure that list is all of it: more than one
+  // Migration class, `operations` named twice (a docstring, `+=`), a list joined with `+` or held in a variable, nested
+  // state_operations or database_operations that aren't written out)
+  const at = /\boperations\s*=\s*\[/.exec(src)
+  if (!at || (src.match(/\(\s*migrations\.Migration\s*\)/g) ?? []).length !== 1 || (src.match(/(?<![\w.])operations\s*\+?=/g) ?? []).length !== 1
+    || /\b(?:state|database)_operations\s*=\s*(?!\[)/.test(src)) return
+  let depth = 0, q = '', i = at.index + at[0].length - 1
+  for (; i < src.length; i++) { const c = src[i]
+    if (q) { if (c === '\\') i++; else if (c === q) q = ''; continue }
+    if (c === '#') { while (i < src.length && src[i] !== '\n') i++; continue }
+    if (c === "'" || c === '"') q = c; else if ('([{'.includes(c)) depth++; else if (')]}'.includes(c) && --depth === 0) break }
+  if (!/^\s*(?:#[^\n]*)?(?:\n|$)/.test(src.slice(i + 1))) return   // (`[...] + [...]`)
+  return [...pyArgs(src.slice(at.index + at[0].length, i)).values()].map(item => {
+    const m = item.match(/^((?:\w+\.)*\w+)\s*\(([\s\S]*)\)$/), op = m ? m[1].replace(/^migrations\.(?=\w+$)/, '') : item
+    const kw = m ? pyArgs(m[2]) : new Map<string, string>(); (MIG_ARGS[op] ?? []).forEach((k, n) => { if (kw.has(String(n)) && !kw.has(k)) { kw.set(k, kw.get(String(n))!); kw.delete(String(n)) } })
+    return [op, kw, item] })
+}
+// the app's history in Django's order, when plain can be sure of it: every migration numbered 0001_ and so on, no two with one number
+// (a branch and its merge), the new one depending on the one before it. Else undefined.
+function migHistory(after: Snap, m: string) {
+  const dirOf = m.replace(/[^/]*$/, ''), files = [...after.keys()].filter(p => p.startsWith(dirOf) && !p.slice(dirOf.length).includes('/') && p.endsWith('.py') && !p.endsWith('/__init__.py')).sort()
+  const nums = files.map(p => p.slice(dirOf.length).match(/^(\d{4})_\w+\.py$/)?.[1])
+  if (nums.some(n => !n) || new Set(nums).size !== nums.length) return
+  const prev = files[files.indexOf(m) - 1]; if (!prev) return
+  const deps = /\bdependencies\s*=\s*\[([^\]]*)\]/.exec(after.get(m) ?? '')?.[1] ?? ''
+  if (!new RegExp(String.raw`['"]${prev.slice(dirOf.length, -3)}['"]`).test(deps)) return
+  return files.slice(0, files.indexOf(m))
+}
+const unq = (x?: string) => x?.replace(/^['"]|['"]$/g, '')
+// a Django field as the app's earlier migrations left it (the last CreateModel, AddField or AlterField that defines it; undefined
+// when none does, or when a later operation renames, removes or replaces it)
+function migField(ops: [string, Map<string, string>, string][], model: string, name: string): string | undefined {
+  let last: string | undefined; const is = (x: string | undefined, y: string) => unq(x)?.toLowerCase() === y.toLowerCase()
+  for (const [op, kw, raw] of ops) {
+    // (anything else that names the field, a RunSQL or a SeparateDatabaseAndState: plain can't tell what it left)
+    if (!/^(AddField|AlterField|RemoveField|RenameField|CreateModel|DeleteModel|RenameModel|AddIndex|RemoveIndex|RenameIndex|AddConstraint|RemoveConstraint|AlterModelOptions|AlterModelManagers|AlterUniqueTogether|AlterIndexTogether|AlterOrderWithRespectTo|RunPython)$/.test(op) && new RegExp(String.raw`\b${name.replace(/\W/g, '\\$&')}\b`, 'i').test(raw)) last = undefined
+    else if ((op === 'AddField' || op === 'AlterField') && is(kw.get('model_name'), model) && is(kw.get('name'), name)) last = kw.get('field')
+    else if ((op === 'RenameField' && (is(kw.get('new_name'), name) || is(kw.get('old_name'), name)) || op === 'RemoveField' && is(kw.get('name'), name)) && is(kw.get('model_name'), model)) last = undefined
+    else if (op === 'DeleteModel' && is(kw.get('name'), model) || op === 'RenameModel' && (is(kw.get('old_name'), model) || is(kw.get('new_name'), model))) last = undefined
+    else if (op === 'CreateModel' && is(kw.get('name'), model)) {
+      // (each `('name', models.X(...))` in the fields list, read as a tuple: not a `('status', ...)` inside some field's choices)
+      last = undefined
+      for (const item of pyArgs((kw.get('fields') ?? '').trim().replace(/^\[|\]$/g, '')).values()) {
+        const t = pyArgs(item.trim().replace(/^\(|\)$/g, '')); if (is(t.get('0'), name)) last = t.get('1') }
+    }
+  }
+  return last
+}
+// the part of a Django field definition that reaches the database: its type and every option but the ones Django keeps only in code
+// (positional arguments named; undefined for one plain can't read). The type keeps its module (`jsonfield.fields.JSONField` stores
+// text, `models.JSONField` JSON), `to` its app (the migration's own when bare). on_delete counts when it's Django 6's DB_CASCADE and
+// friends, which the database enforces.
+function dbPart(field: string, model: string, app: string): string | undefined {
+  const m = field.match(/^\s*((?:\w+\.)*\w+)\s*\(([\s\S]*)\)\s*$/); if (!m) return
+  const type = m[1].replace(/^django\.db\.models\.(?:fields\.(?:related\.)?)?/, 'models.'), rel = /(?:^|\.)(ForeignKey|OneToOneField|ManyToManyField)$/.test(type), kw = pyArgs(m[2])
+  for (const [i, k] of (rel ? ['to', 'on_delete'] : ['verbose_name']).entries()) if (kw.has(String(i))) { kw.set(k, kw.get(String(i))!); kw.delete(String(i)) }
+  if ([...kw.keys()].some(k => /^\d+$/.test(k))) return
+  const to = unq(kw.get('to'))
+  if (to) kw.set('to', (to.toLowerCase() === 'self' ? `${app}.${model}` : /^['"]/.test(kw.get('to')!) && !to.includes('.') ? `${app}.${to}` : to).toLowerCase())
+  // (only Django's own fields: another library's can keep an option in the column, like django-mysql's EnumField its choices)
+  return [type, ...[...kw].filter(([k, v]) => !type.startsWith('models.') || !/^(blank|choices|editable|error_messages|help_text|limit_choices_to|related_name|related_query_name|validators|verbose_name)$/.test(k) && !(k === 'on_delete' && !/\bDB_/.test(v)))
+    .sort().map(([k, v]) => `${k}=${v}`)].join(' ')
+}
 export const report = (before: Snap, after: Snap, opts: Opts) => render(analyze(before, after, opts))
 
 // Python and PHP: the mistakes AI makes most (Bandit / Semgrep rules), reported when they're new in a change
@@ -2685,7 +2778,26 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   {
     const sp = B.schemaPath ?? '', std = /(^|\/)prisma\/schema\.prisma$/.test(sp), dir = std ? sp.replace(/prisma\/schema\.prisma$/, '') : ''
     const flag = std || sp === 'schema.prisma' ? '' : ` --schema ${sp}`, added = [...B.models.keys()].filter(m => !A.models.has(m) && !B.db.tables.has(m))
-    ship.push(`Update your database: ${dir ? `in ${dir}, ` : ''}run \`npx prisma migrate dev${flag}\` (on your live site: \`npx prisma migrate deploy${flag}\`). The database's structure changed, but no migration was created.${added.length ? ` Until you do, anything that uses ${list(added.map(things))} will fail.` : ''}`)
+    // (a project with no migrations whose own script runs `prisma db push` updates its database that way: migrate deploy would do nothing)
+    // Only a script that does nothing else (prisma generate or format aside, and the scripts it runs, npm's pre/post ones too): not
+    // one that also seeds, builds or starts the app, resets or accepts data loss, nor one that pushes another schema. Not with
+    // migrations anywhere, a script that deploys them, or a prisma.config file (it can move both).
+    const pkgJson = (() => { try { return JSON.parse(after.get(`${dir}package.json`) ?? '{}') ?? {} } catch { return {} } })() as { scripts?: Record<string, unknown>, prisma?: { schema?: unknown } }
+    const scripts = pkgJson.scripts && typeof pkgJson.scripts === 'object' ? pkgJson.scripts : {}, run = (k: string) => typeof scripts[k] === 'string' ? scripts[k] as string : undefined
+    const pushes = (x: string) => { const s0 = /--schema[=\s]+["']?([^\s"']+)/.exec(x)?.[1] ?? (typeof pkgJson.prisma?.schema === 'string' ? pkgJson.prisma.schema : undefined)
+      return s0 ? `${dir}${s0.replace(/^\.\//, '')}` === sp : sp === `${dir}prisma/schema.prisma` || sp === `${dir}schema.prisma` }
+    const only = (k: string, depth = 0): 'push' | 'ok' | 'no' => { let r: 'push' | 'ok' = 'ok'
+      for (const c of [run(`pre${k}`), run(k), run(`post${k}`)]) for (const x of (c ?? '').split(/&&|;|\n/).map(y => y.trim()).filter(Boolean)) {
+        const cmd = x.replace(/^(?:npx|bunx|pnpm(?: exec)?|yarn)\s+(?=prisma\b)/, ''), sub = /^(?:npm run|pnpm(?: run)?|yarn(?: run)?|bun run)\s+([\w:.-]+)$/.exec(cmd)?.[1]
+        if (/^prisma\s+(?:generate|format|validate)\b/.test(cmd) && !/&|\||;|`|\$\(/.test(cmd)) continue
+        if (/^prisma\s+db\s+push\b/.test(cmd) && !/--force-reset|--accept-data-loss|--config|--url|[|&`]|\$\(/.test(cmd) && pushes(cmd)) { r = 'push'; continue }
+        const inner = sub && depth < 3 && run(sub) !== undefined ? only(sub, depth + 1) : 'no'; if (inner === 'no') return 'no'; if (inner === 'push') r = 'push' }
+      return run(k) === undefined ? 'no' : r }
+    const migrated = [...after.keys()].some(p => /(^|\/)migration\.sql$/.test(p) || /(^|\/)prisma\.config\.[cm]?[jt]s$/.test(p)) || Object.values(scripts).some(c => /\bprisma\s+migrate\b[^&;|\n]*\s(deploy|reset)\b/.test(String(c)))
+    const push = migrated || !changed.includes(sp) ? undefined : Object.keys(scripts).find(k => !/^(?:pre|post)/.test(k) && only(k) === 'push')
+    const until = added.length ? ` Until you do, anything that uses ${list(added.map(things))} will fail.` : ''
+    ship.push(push ? `Update your database: ${dir ? `in ${dir}, ` : ''}run \`npm run ${push}\` (it runs \`prisma db push\`) on your computer and on your live database. The database's structure changed.${until}`
+      : `Update your database: ${dir ? `in ${dir}, ` : ''}run \`npx prisma migrate dev${flag}\` (on your live site: \`npx prisma migrate deploy${flag}\`). The database's structure changed, but no migration was created.${until}`)
   }
   // (SQLite can't alter a table in place: Prisma rebuilds it as new_X, copies every row, drops X and renames new_X back. Nothing is lost.)
   // Deletes data: a table, a column (MySQL's `ALTER TABLE t DROP c` too), a schema, TRUNCATE, DELETE FROM. Not dropping a constraint, an
@@ -2959,12 +3071,36 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   }
   // a migration the new code depends on: until it runs on the live database, those parts fail
   // one that only adds an index just speeds things up: nothing breaks if it runs late
-  const indexOnly = (m: string) => { const up = (after.get(m) ?? '').split(/def downgrade/)[0], ops = [...up.matchAll(/migrations\.(\w+)\(|\b(?:op|batch_op)\.(\w+)\(/g)].map(x => x[1] ?? x[2]).filter(o => !/^(f|batch_alter_table)$/.test(o))
+  // (a Django migration's own operations list: not `migrations.swappable_dependency` in its dependencies)
+  const indexOnly = (m: string) => { const up = (after.get(m) ?? '').split(/def downgrade/)[0], django = /\bmigrations\.Migration\b/.test(up), dj = django ? migOps(up) : []
+    if (!dj) return false
+    const ops = django ? dj.map(([o]) => o) : [...up.matchAll(/\b(?:op|batch_op)\.(\w+)\(/g)].map(x => x[1]).filter(o => !/^(f|batch_alter_table)$/.test(o))
     return ops.length > 0 && ops.every(o => /^(AddIndex|RemoveIndex|RenameIndex|create_index|drop_index)$/.test(o)) }
+  // one that only changes field options Django keeps in code (labels, help text, choices, related_name…) or model options emits no SQL:
+  // nothing breaks if it runs late. Each AlterField is checked against the field as the app's earlier migrations left it (the
+  // database as it is, even when the models had drifted), those options stripped: anything that doesn't match exactly, or a field
+  // plain can't find there, still counts as needed.
+  // (the app's migrations before this one, new ones in the same change included, each read once)
+  const opsOf = new Map<string, [string, Map<string, string>, string][] | undefined>(), cached = (p: string) => opsOf.has(p) ? opsOf.get(p) : opsOf.set(p, migOps(after.get(p) ?? '')).get(p)
+  const codeOnly = (m: string) => {
+    const app = m.replace(/migrations\/[^/]*$/, ''), label = app.replace(/\/$/, '').split('/').pop() ?? ''
+    const history = migHistory(after, m); if (!history) return false
+    const each = history.map(cached), ops = cached(m); if (!ops || each.some(x => !x)) return false
+    const earlier = each.flatMap(x => x!)
+    // (new permissions in a model's options only exist once it runs: has_perm says no until then)
+    return ops.length > 0 && ops.every(([op, kw]) => op === 'AlterModelManagers' || op === 'AlterModelOptions' && !/permissions/.test(kw.get('options') ?? '') || op === 'AlterField' && (() => {
+      const model = unq(kw.get('model_name')), name = unq(kw.get('name')), field = kw.get('field')
+      if (!model || !name || !field) return false
+      const was0 = migField(earlier, model, name), was = was0 && dbPart(was0, model, label)
+      return was !== undefined && was === dbPart(field, model, label)
+    })())
+  }
   const cmd = 'django' in B.deps ? '`python manage.py migrate`' : Object.keys(B.deps).some(k => /^flask[-_]migrate$/i.test(k)) ? '`alembic upgrade head`, or `flask db upgrade` with Flask-Migrate' : '`alembic upgrade head`'
-  const needed = newPyMigrations.filter(m => !indexOnly(m)), speed = newPyMigrations.filter(indexOnly)
+  const codeOnlyMigs = 'django' in B.deps ? newPyMigrations.filter(m => !indexOnly(m) && codeOnly(m)) : []
+  const needed = newPyMigrations.filter(m => !indexOnly(m) && !codeOnlyMigs.includes(m)), speed = newPyMigrations.filter(indexOnly)
   if (needed.length) ship.push(`Apply ${list(needed)} to your live database before the new code goes live (${cmd}), or the parts that use it will fail.`)
   if (speed.length) ship.push(`Apply ${list(speed)} to your live database too (${cmd}). It only makes lookups faster, so nothing breaks if it runs later.`)
+  if (codeOnlyMigs.length) ship.push(`Apply ${list(codeOnlyMigs)} too (${cmd}). It only records settings Django keeps in your code (like labels, or the name for related records), not changes to your tables, so nothing breaks if it runs later.`)
   for (const m of newPyMigrations) {
     const up = (after.get(m) ?? '').split(/def downgrade|def backwards/)[0]
     if (/op\.drop_(table|column)|RemoveField|DeleteModel/.test(up) || dropsData(up, false)) ship.push(`Back up your data first: ${m} deletes data and can't be undone.`)

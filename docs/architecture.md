@@ -192,7 +192,15 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   Java files are skipped when a route in that language changed: plain doesn't follow what those routes call, and the route
   line already says that part changed. A card with nothing else to say lists every changed file instead.
 - **Before you ship.** Data that will be deleted, and migrations to run (with the folder, the
-  live-site command and what fails until then). Also new env vars without a default, new
+  live-site command and what fails until then). A Prisma project with no migrations, no
+  prisma.config and no deploy script, whose own script does nothing but `prisma db push` for that
+  schema (`prisma generate` and npm's pre/post scripts checked too), is told to run that script.
+  A Django migration that only changes options Django keeps in code (labels, choices,
+  `related_name`, `on_delete` other than Django 6's `DB_*`, model options without permissions) is
+  "nothing breaks if it runs later". Each field is compared with how the app's earlier migrations
+  left it, with its full type and `app.model` target. That needs a numbered, linear history and
+  operations lists plain can read whole (one literal list, no `+`, no variables). Anything else
+  still must go first. Also new env vars without a default, new
   packages, a test payment when payment code changed, and "the agent says it didn't run or
   test this" when its last message says so.
 

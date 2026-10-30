@@ -46,7 +46,8 @@ const start = git('rev-parse', 'HEAD').toString().trim()
 git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'coupons')
 const rc = recapCli(dir, ['--refs', `${start},HEAD`, '--asks', 'add coupon codes at checkout'], false)
 for (const e of ['plain recap · 1 request', 'YOUR APP NOW', '1. "add coupon codes at checkout"', 'STILL OPEN',
-  '⚠ Anyone can use the coupon part of your server without logging in. (request 1)', '3 THINGS TO REMEMBER', 'Money goes through checkout'])
+  '⚠ Anyone can use the coupon part of your server without logging in. (request 1)', '3 THINGS TO REMEMBER', 'Money goes through checkout',
+  'until you run `npx prisma migrate dev`.'])
   assert.ok(rc.includes(e), `recap missing: ${e}\n${rc}`)
 rmSync(dir, { recursive: true, force: true })
 
@@ -790,11 +791,75 @@ class OrderCreate(LoginRequiredMixin, CreateView):
   const mail = (backend: string) => site({ 'mysite/settings.py': backend, ...urls("path('hi/', views.hi)"), 'shop/views.py': "from django.core.mail import send_mail\ndef hi(request):\n    send_mail('Hi', 'Hello', None, ['a@b.c'])\n" })
   assert.ok(card(site({}), mail("EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')\n")).includes('Turn on real email sending'), 'round 4: console email')
   assert.ok(!card(site({}), mail("EMAIL_BACKEND = 'anymail.backends.resend.EmailBackend'\n")).includes('Turn on real email sending'), 'round 4: real email')
-  const mig = (name: string, ops: string) => ({ [`shop/migrations/${name}.py`]: `from django.db import migrations, models\nclass Migration(migrations.Migration):\n    operations = [\n${ops}    ]\n` })
+  // (as makemigrations writes them: the migration before, and the user model when one points at it)
+  const mig = (name: string, ops: string, prev = name.startsWith('0002') ? "('shop', '0001_initial')," : '') => ({ [`shop/migrations/${name}.py`]: `from django.conf import settings\nfrom django.db import migrations, models\nclass Migration(migrations.Migration):\n    dependencies = [\n        migrations.swappable_dependency(settings.AUTH_USER_MODEL),\n        ${prev}\n    ]\n    operations = [\n${ops}    ]\n` })
   const c2 = card(site({}), site(mig('0002_order_index', "        migrations.AddIndex(model_name='order', index=models.Index(fields=['status'], name='order_status')),\n")))
   assert.ok(c2.includes('It only makes lookups faster') && !c2.includes('will fail'), `round 4: index only\n${c2}`)
   const c3 = card(site({}), site(mig('0002_product_category', "        migrations.AddField(\n            model_name='product',\n            name='category',\n            field=models.CharField(choices=[('bread', 'Bread'), ('other', 'Other')], default='other', max_length=20),\n        ),\n")))
   assert.ok(c3.includes('Every product you already have gets "Other" as its category'), `round 4: default\n${c3}`)
+  // (pilot: django-vue-admin's "sync" migration) one that only changes options Django keeps in code (related_name, labels, choices,
+  // on_delete) or model options emits no SQL: nothing breaks if it runs late. Checked against the field as earlier migrations left it.
+  const initial = mig('0001_initial', "        migrations.CreateModel(\n            name='Order',\n            fields=[\n                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),\n                ('status', models.CharField(max_length=20)),  # (draft, paid)\n                ('owner', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),\n            ],\n        ),\n")
+  const alter = (ops: string) => card(site(initial), site({ ...initial, ...mig('0002_sync', ops) }))
+  const quietly = 'It only records settings Django keeps in your code'
+  const status = (f: string) => `        migrations.AlterField(model_name='order', name='status', field=${f}),\n`
+  for (const ops of [status("models.CharField(choices=[('draft', 'Draft'), ('paid', 'Paid')], max_length=20, verbose_name='Status')"),
+    "        migrations.AlterField(\n            model_name='order',\n            name='owner',\n            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='orders', to=settings.AUTH_USER_MODEL),\n        ),\n",
+    "        migrations.AlterModelOptions(name='order', options={'ordering': ['-id']}),\n"]) {
+    const c = alter(ops); assert.ok(c.includes(quietly) && !c.includes('will fail'), `code-only migration\n${ops}\n${c}`) }
+  // a wider column, a new NULL rule, another table, a field earlier migrations don't define, or another operation alongside: needed
+  for (const ops of [status('models.CharField(max_length=40)'), status('models.CharField(max_length=20, null=True)'),
+    "        migrations.AlterField(model_name='order', name='owner', field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='shop.product')),\n",
+    "        migrations.AlterField(model_name='order', name='note', field=models.TextField(blank=True)),\n",
+    status("models.CharField(max_length=20, verbose_name='Status')") + "        migrations.AddField(model_name='order', name='note', field=models.TextField(default='')),\n"]) {
+    const c = alter(ops); assert.ok(!c.includes(quietly) && c.includes('or the parts that use it will fail'), `needed migration\n${ops}\n${c}`) }
+  // (review 88) Django 6's DB_CASCADE is enforced by the database; a foreign key to a same-named model in another app; a field class
+  // from another library; a hand-written positional AlterField before; new permissions; two new migrations in one change
+  const fk = (f: string) => `        migrations.AlterField(model_name='order', name='owner', field=${f}),\n`
+  for (const ops of [fk('models.ForeignKey(on_delete=django.db.models.DB_CASCADE, to=settings.AUTH_USER_MODEL)'),
+    status("jsonfield.fields.CharField(max_length=20)"),
+    "        migrations.AlterModelOptions(name='order', options={'permissions': [('refund', 'Can refund')]}),\n"]) {
+    const c = alter(ops); assert.ok(!c.includes(quietly), `review 88 needed\n${ops}\n${c}`) }
+  const crm = mig('0001_initial', "        migrations.CreateModel(name='Order', fields=[('id', models.BigAutoField(primary_key=True)), ('customer', models.ForeignKey(on_delete=models.CASCADE, to='shop.customer'))]),\n")
+  let c6 = card(site(crm), site({ ...crm, ...mig('0002_x', "        migrations.AlterField(model_name='order', name='customer', field=models.ForeignKey(on_delete=models.CASCADE, to='crm.customer')),\n") }))
+  assert.ok(!c6.includes(quietly), c6)
+  c6 = card(site(crm), site({ ...crm, ...mig('0002_x', "        migrations.AlterField(model_name='order', name='customer', field=models.ForeignKey(on_delete=models.PROTECT, related_name='orders', to='customer')),\n") }))
+  assert.ok(c6.includes(quietly), c6)
+  const hand = { ...initial, ...mig('0002_hand', "        migrations.AlterField('order', 'status', models.CharField(max_length=10)),\n") }
+  c6 = card(site(hand), site({ ...hand, ...mig('0003_sync', status("models.CharField(max_length=20, verbose_name='Status')"), "('shop', '0002_hand'),") }))
+  assert.ok(!c6.includes(quietly), c6)
+  c6 = card(site(initial), site({ ...initial, ...mig('0002_a', status('models.CharField(max_length=80)')), ...mig('0003_b', status("models.CharField(max_length=20, verbose_name='S')"), "('shop', '0002_a'),") }))
+  assert.ok(!c6.includes(quietly), c6)
+  // (review 89) an operation plain doesn't know (an imported RunSQL), an earlier data migration with `def backwards` above its class,
+  // an earlier SeparateDatabaseAndState, a branch and its merge, an unnumbered earlier one: needed
+  const label = status("models.CharField(max_length=20, verbose_name='Status')")
+  let c7 = alter(label + "        RunSQL('ALTER TABLE shop_order ADD COLUMN note text'),\n"); assert.ok(!c7.includes(quietly), c7)
+  for (const [name, text] of [['0002_req', "def backwards(apps, schema_editor):\n    pass\n" + mig('0002_req', status('models.CharField(max_length=20, null=True)'))['shop/migrations/0002_req.py']],
+    ['0002_sdas', mig('0002_sdas', "        migrations.SeparateDatabaseAndState(state_operations=[" + status('models.CharField(max_length=20, null=True)').trim() + "], database_operations=[]),\n")['shop/migrations/0002_sdas.py']]]) {
+    const prior = { ...initial, [`shop/migrations/${name}.py`]: text }
+    c7 = card(site(prior), site({ ...prior, ...mig('0003_sync', label, `('shop', '${name}'),`) })); assert.ok(!c7.includes(quietly), `${name}\n${c7}`) }
+  const branch = { ...initial, ...mig('0002_widen', status('models.CharField(max_length=40)')) }
+  c7 = card(site(branch), site({ ...branch, ...mig('0002_sync', label), ...mig('0003_merge', '', "('shop', '0002_sync'), ('shop', '0002_widen'),") }))
+  assert.ok(!c7.includes(quietly), c7)
+  const loose = { ...initial, 'shop/migrations/make_required.py': mig('0002_x', status('models.CharField(max_length=20, null=True)'))['shop/migrations/0002_x.py'] }
+  c7 = card(site(loose), site({ ...loose, ...mig('0002_sync', label) })); assert.ok(!c7.includes(quietly), c7)
+  // (review 90) operations plain can't read whole: an earlier SeparateDatabaseAndState whose state ops are a variable, a new list
+  // joined with `+`, a docstring that shows another list first; and index-only joined with `+`
+  const sdas = { ...initial, 'shop/migrations/0002_s.py': "from django.db import migrations, models\nstate_ops = [" + status('models.CharField(max_length=40)').trim() + "]\nclass Migration(migrations.Migration):\n    dependencies = [('shop', '0001_initial')]\n    operations = [migrations.SeparateDatabaseAndState(state_operations=state_ops)]\n" }
+  let c8 = card(site(sdas), site({ ...sdas, ...mig('0003_sync', label, "('shop', '0002_s'),") })); assert.ok(!c8.includes(quietly), c8)
+  const joined = (ops: string) => { const t = mig('0002_sync', ops)['shop/migrations/0002_sync.py'].replace(/\n    \]\n$/, "\n    ] + [RunSQL('ALTER TABLE shop_order ADD COLUMN n int NOT NULL')]\n"); return card(site(initial), site({ ...initial, 'shop/migrations/0002_sync.py': t })) }
+  c8 = joined(label); assert.ok(!c8.includes(quietly), c8)
+  c8 = joined("        migrations.AddIndex(model_name='order', index=models.Index(fields=['status'], name='s')),\n"); assert.ok(!c8.includes('only makes lookups faster'), c8)
+  c8 = card(site(initial), site({ ...initial, 'shop/migrations/0002_sync.py': '"""operations = [migrations.AlterModelOptions(name=\'order\', options={})]"""\n' + mig('0002_sync', "        migrations.AddField(model_name='order', name='n', field=models.IntegerField()),\n")['shop/migrations/0002_sync.py'] }))
+  assert.ok(!c8.includes(quietly), c8)
+  // (review 91) another library's field can keep an option in the column: django-mysql's EnumField puts its choices there
+  const enumd = mig('0001_initial', "        migrations.CreateModel(name='Order', fields=[('id', models.BigAutoField(primary_key=True)), ('status', django_mysql.models.EnumField(choices=[('draft', 'draft')]))]),\n")
+  const c9 = card(site(enumd), site({ ...enumd, ...mig('0002_x', status("django_mysql.models.EnumField(choices=[('draft', 'draft'), ('paid', 'paid')])")) }))
+  assert.ok(!c9.includes(quietly), c9)
+  // renamed after it was made: plain doesn't follow it
+  const renamed = { ...initial, ...mig('0002_rename', "        migrations.RenameField(model_name='order', old_name='status', new_name='state'),\n") }
+  const c5 = card(site(renamed), site({ ...renamed, ...mig('0003_sync', "        migrations.AlterField(model_name='order', name='state', field=models.CharField(max_length=20, verbose_name='State')),\n", "('shop', '0002_rename'),") }))
+  assert.ok(!c5.includes(quietly), c5)
   // "still needs to be run"; unasked guesses are things to decide, not problems
   const c4 = report(new Map(Object.entries(site({}))), new Map(Object.entries(site({ 'shop/tests.py': 'def test_x():\n    assert True\n' }))), { ref: 'main', agentSaid: 'Added a test. The full suite still needs to be run.' })
   assert.ok(c4.includes("didn't run or test this") && c4.includes('The agent also added shop/tests.py (tests)'), `round 4: not run\n${c4}`)
@@ -3623,6 +3688,39 @@ assert.ok(!report(new Map([['a.ts', 'export const a = 1\n']]), new Map([['a.ts',
   for (const [extra, sql] of [['  search Unsupported("tsvector")?\n', 'ALTER TABLE "Workspace" ADD COLUMN "search" tsvector;\n'], ['  legacy String? @ignore\n', 'ALTER TABLE "Workspace" ADD COLUMN "legacy" TEXT;\n'],
     ['', 'ALTER TABLE "Workspace" ADD COLUMN "search" tsvector;\n'], ['  plan String?\n', '-- was: ALTER TABLE "Workspace" ADD COLUMN "plan" TEXT;\nCREATE TABLE "Label" ("id" TEXT);\n']]) {
     c = card(base, { ...base, ...schema(extra), ...mig(sql) }); assert.ok(c.includes('or the parts that use it will fail.'), `${sql}: ${c}`) }
+  // a schema change with no migration in a project that updates its database with its own `prisma db push` script (expense.fyi's
+  // dbpush): that script, not migrate. Not once the project has migrations.
+  const pushed = { ...pkg('"dbpush":"prisma generate && prisma db push","migrate":"prisma migrate dev --create-only"'), ...schema('') }
+  c = card(pushed, { ...pushed, ...schema('  plan String?\n') })
+  assert.ok(c.includes('run `npm run dbpush` (it runs `prisma db push`) on your computer and on your live database.') && !c.includes('migrate deploy'), c)
+  // (review 88) never a script that resets or accepts data loss, one that only mentions it, nor in a project with migrations elsewhere
+  // or a deploy script
+  for (const scripts of ['"db:reset":"prisma db push --force-reset && prisma db seed"', '"db:push":"prisma db push --accept-data-loss"',
+    `"note":"echo 'never run prisma db push' && echo ok"`, '"db:push":"prisma db push","db:deploy":"prisma migrate deploy"']) {
+    const x = { ...pkg(scripts), ...schema('') }; c = card(x, { ...x, ...schema('  plan String?\n') })
+    assert.ok(!c.includes('(it runs `prisma db push`)') && c.includes('npx prisma migrate dev'), `${scripts}: ${c}`) }
+  // (review 89) a script that also seeds, builds or starts the app is never offered; one that only pushes is, even listed later
+  for (const scripts of ['"setup":"prisma db push && prisma db seed"', '"dev":"prisma db push && next dev"', '"build":"prisma generate && prisma db push && next build"']) {
+    const x = { ...pkg(scripts), ...schema('') }; c = card(x, { ...x, ...schema('  plan String?\n') })
+    assert.ok(!c.includes('(it runs `prisma db push`)'), `${scripts}: ${c}`)
+    const y = { ...pkg(`${scripts},"db:push":"prisma db push"`), ...schema('') }; c = card(y, { ...y, ...schema('  plan String?\n') })
+    assert.ok(c.includes('run `npm run db:push`'), `${scripts}: ${c}`) }
+  // (review 90) a push that backgrounds or substitutes something, a --config, a deploy written with its flags first, an npm pre/post
+  // script that seeds, a --schema or package.json setting naming another schema, a prisma.config file: never offered.
+  // A script that runs one that only pushes (npm, pnpm, yarn) is.
+  for (const [scripts, extra] of [['"db:push":"prisma db push & node seed.js"', {}], ['"db:push":"prisma db push $(cat flags)"', {}], ['"db:push":"prisma db push --config prod.config.ts"', {}],
+    ['"db:push":"prisma db push","release":"prisma migrate --schema x deploy"', {}], ['"db:push":"prisma db push","postdb:push":"node seed.js"', {}],
+    ['"db:push":"prisma db push --schema other/schema.prisma"', {}], ['"db:push":"prisma db push"', { 'prisma.config.ts': 'export default {}\n' }]] as const) {
+    const x = { ...pkg(scripts), ...schema(''), ...extra }; c = card(x, { ...x, ...schema('  plan String?\n') })
+    assert.ok(!c.includes('(it runs `prisma db push`)'), `${scripts}: ${c}`) }
+  for (const runner of ['npm run', 'pnpm', 'yarn']) {
+    const x = { ...pkg(`"db":"prisma generate && ${runner} push:only","push:only":"prisma db push"`), ...schema('') }; c = card(x, { ...x, ...schema('  plan String?\n') })
+    assert.ok(c.includes('run `npm run db`'), `${runner}: ${c}`) }
+  const elsewhere = { ...pushed, 'db/migrations/1_init/migration.sql': 'CREATE TABLE "Workspace" ("id" TEXT);\n' }
+  c = card(elsewhere, { ...elsewhere, ...schema('  plan String?\n') })
+  assert.ok(!c.includes('(it runs `prisma db push`)'), c)
+  c = card({ ...pushed, ...mig('CREATE TABLE "Workspace" ("id" TEXT);\n') }, { ...pushed, ...schema('  plan String?\n'), ...mig('CREATE TABLE "Workspace" ("id" TEXT);\n') })
+  assert.ok(c.includes('run `npx prisma migrate dev`'), c)
   console.log('ok (migration wording)')
 }
 // 💰 said for what it does: a refund gives money back, a price or a coupon changes what people pay; only a charge "charges customers"
