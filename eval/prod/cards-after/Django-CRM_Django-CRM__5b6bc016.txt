@@ -11,6 +11,8 @@ WHAT CHANGED
       /api/public/estimate/[token]/accept
   Other files
     • The agent changed backend/uv.lock.
+    • The agent changed frontend/src/routes/(no-layout)/login/verify/+page.svelte: it now
+      shows "Sign in to BottleCRM" and "Press the button to finish signing in.".
     • The agent also changed backend/common/audit_log.py, backend/common/request_meta.py and
       frontend/src/lib/server/relay.js, in ways plain can't describe yet.
     • The agent also changed backend/common/tests/test_audit_log.py,

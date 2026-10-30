@@ -8,12 +8,9 @@ WHAT CHANGED
   Server
     + New server code that shows and updates the logged-in person's own account.
       /api/user/preferences
-    • The programs session progress complete part of your server now turns away more
-      requests than before (a new "not found" check).
-      /api/programs/session-progress/[progressId]/complete
     • The agent changed the program enroll, program progress, programs session progress
-      start and revenuecat sync status parts of your server in ways plain can't describe
-      yet. Ask the agent what they do differently.
+      complete, programs session progress start and revenuecat sync status parts of your
+      server in ways plain can't describe yet. Ask the agent what they do differently.
   Database
     • Users now also store the onboarding preferences.
   Other files

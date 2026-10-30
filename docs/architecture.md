@@ -174,6 +174,10 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
   (`where: { id: session.user.id }`, behind a login check) "shows and updates the logged-in person's own account".
   A function that was a helper and moved into a `"use server"` file isn't called new: the card says the browser can now
   call it directly.
+- **What's new on screen in a component.** A changed or added component (not a page, route, test, story or email) that gains
+  buttons, boxes or text says so: "The agent changed IntegrationRow.tsx: it now shows "Test connection"" or "…now has a
+  "Save changes" button in place of a "Save" button". Not text the app already had anywhere (moved code), not pieces cut
+  around `{expressions}`, and not a component a page the card describes already uses.
 - **Files the card doesn't explain.** When the card says something else, existing code files that changed but that it
   doesn't cover another way get one line: "The agent also changed X and Y, in ways plain can't describe yet." Covered:
   routes and files that declare them, models, schemas, migrations, types, config, seeds, tests, and files a route or page

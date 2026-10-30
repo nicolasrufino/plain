@@ -7935,3 +7935,30 @@ console.log('ok (new refusals)')
   assert.equal(named('/emojis/[id]').join(' '), 'emoji'); assert.equal(named('/statuses/[id]').join(' '), 'status'); assert.equal(named('/menus/[id]').join(' '), 'menu')
 }
 console.log('ok (review 84)')
+// A refusal the old code already sent (same message) isn't a new rule; a changed component says what's new on screen
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'lib/db.ts': 'export const db = {} as any\n' }
+  const r = (body: string) => ({ ...nx, 'app/api/progress/[id]/route.ts': `import { db } from "@/lib/db"\nexport async function POST(req: Request, { params }: any) {\n  const p = await db.progress.findFirst({ where: { id: params.id } })\n${body}\n  return Response.json(p)\n}\n` })
+  assert.ok(!c(r('  try { await done(p) } catch (e) { if (e.message === "x") return Response.json({ error: "Progress not found" }, { status: 404 }) }'),
+    r('  if (!p || p.userId !== me) return Response.json({ error: "Progress not found" }, { status: 404 })')).includes('turns away more'), 'the same refusal, moved')
+  const ui = { ...nx, 'app/page.tsx': 'export default function P() { return <main /> }\n', 'components/IntegrationRow.tsx': 'export function Row() { return <div><span>Disconnect</span></div> }\n' }
+  const row = c(ui, { ...ui, 'components/IntegrationRow.tsx': 'export function Row() { return <div><span>Disconnect</span><span>Test connection</span></div> }\n' })
+  assert.ok(row.includes('The agent changed components/IntegrationRow.tsx: it now shows "Test connection".') && !row.includes("can't describe"), row)
+}
+console.log('ok (refusal messages, component lines)')
+// Review 85: replaced words say so; no pieces around {expressions}; not stories or emails; a reused generic message hides nothing
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const nx = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/page.tsx': 'export default function P() { return <main /> }\n', 'components/Row.tsx': 'export function Row() { return <div><button>Save</button><p>Free shipping on all orders</p></div> }\n' }
+  const rep = c(nx, { ...nx, 'components/Row.tsx': 'export function Row() { return <div><button>Save changes</button><p>Shipping costs $5 on small orders</p></div> }\n' })
+  assert.ok(rep.includes('in place of a "Save" button') && rep.includes('in place of "Free shipping on all orders"'), rep)
+  const frag = c(nx, { ...nx, 'components/Row.tsx': 'export function Row({ u, n }: any) { return <div><button>Save</button><p>Free shipping on all orders</p><p>Hello, {u.name}! You have {n} items</p></div> }\n' })
+  assert.ok(!frag.includes('"! You have"') && !frag.includes('"Hello,"'), frag)
+  assert.ok(!c(nx, { ...nx, 'components/Button.stories.tsx': 'export const S = () => <button>Click me now</button>\n' }).includes('Click me now'), 'stories')
+  assert.ok(!c(nx, { ...nx, 'emails/Welcome.tsx': 'import { Html } from "@react-email/components"\nexport default function W() { return <Html><p>Welcome to Acme</p></Html> }\n' }).includes('shows "Welcome'), 'emails')
+  const db = { ...nx, 'lib/db.ts': 'export const db = {} as any\n' }
+  const note = (body: string) => ({ ...db, 'app/api/notes/[id]/route.ts': `import { db } from "@/lib/db"\nexport async function GET(req: Request, { params }: any) {\n  const p = await db.note.findFirst({ where: { id: params.id } })\n  if (!p) return Response.json({ error: "Not found" }, { status: 404 })\n${body}\n  return Response.json(p)\n}\n` })
+  assert.ok(c(note(''), note('  if (p.userId !== me.id) return Response.json({ error: "Not found" }, { status: 404 })')).includes('turns away more requests'), 'a reused generic message')
+}
+console.log('ok (review 85)')

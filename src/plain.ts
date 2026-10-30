@@ -2510,18 +2510,25 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         // two, rewording its message or reformatting it isn't new; never an error class matched in a catch.
         const REJECT = /\babort(?:_unless|_if)?\s*\([^;\n]*\b(40[134])\b|\b(?:status(?:Code|_code)?\s*[:=(]\s*|\.status\s*\(\s*|sendStatus\s*\(\s*)(40[134])\b|HTTP_(40[134])|\braise\s+(?:PermissionDenied|Http404)\b|\bthrow\s+new\s+(?:Forbidden|NotFound|Unauthorized)\w*\s*\(|\b(?:Forbid|NotFound|Unauthorized|notFound|forbidden|unauthorized)\s*\(\s*\)|\bhead\s*\(?\s*:(forbidden|not_found|unauthorized)|status:\s*:(forbidden|not_found|unauthorized)/
         const KIND = (m: RegExpMatchArray) => { const x = m.slice(1).find(Boolean) ?? m[0]; return /403|forbid|PermissionDenied/i.test(x) ? 403 : /401|unauthori/i.test(x) ? 401 : 404 }
-        const atoms = (t: string) => { const out = new Map<string, number>(), ls = t.split('\n')
+        const atoms = (t: string) => { const out = new Map<string, { k: number; msgs: string[] }>(), ls = t.split('\n')
           ls.forEach((l, k) => { const m = l.match(REJECT); if (!m) return
             const prev = ls.slice(0, k).reverse().find(x => x.trim()) ?? ''
             const cond = l.match(/\babort_(?:unless|if)\s*\((.+),\s*40[134]/)?.[1] ?? l.match(/\bif\s*\(?(.+?)\)?\s*(?:\{|:|return\b|throw\b|raise\b|abort\b)/)?.[1] ?? prev.match(/\bif\s*\(?(.+?)\)?\s*[{:]?\s*$/)?.[1]
             if (!cond || /instanceof|\bcatch\b|\bexcept\b/.test(cond)) return
-            for (const x of cond.split(/\|\||\bor\b/).map(y => y.replace(/[\s()]/g, '')).filter(Boolean)) out.set(x, KIND(m)) })
+            // (with the message it answers: the same "Session progress not found" the old code already sent isn't a new rule)
+            const near = l.slice(Math.max(0, (m.index ?? 0) - 160), (m.index ?? 0) + 160)   // (some languages' code comes squeezed onto one line)
+            const msgs = [...near.matchAll(/(['"`])([^'"`]{4,})\1/g)].map(x => x[2]).filter(x => /\w\s+\w/.test(x))   // (words, not a permission name like 'forms-read')
+            for (const x of cond.split(/\|\||\bor\b/).map(y => y.replace(/[\s()]/g, '')).filter(Boolean)) out.set(x, { k: KIND(m), msgs }) })
           return out }
         const fresh = new Set<number>()
         for (const [mth, tb] of b.fns) { const ta = a.fns.get(mth); if (ta === undefined) continue
           // (not 401s: login is read on its own, and `!session` -> `!session?.user` isn't a new rule; a 404 only when it compares,
           // `job.form_id !== form.id`, the record isn't yours; `!program` is a row that isn't there)
-          const was = atoms(ta); for (const [x, k] of atoms(tb)) if (!was.has(x) && (k === 403 || k === 404 && /!==?|===?|<>/.test(x))) fresh.add(k) }
+          const was = atoms(ta)
+          // (a message the old code already answered with the same status is the same refusal moved; never a generic one like
+          // "Not found", which a new ownership check reuses)
+          const oldMsgs = new Set([...was.values()].flatMap(v => v.msgs.filter(mm => !/^(?:not found|forbidden|not allowed|unauthori[sz]ed|access denied|permission denied|no access)\.?$/i.test(mm.trim())).map(mm => `${v.k}:${mm}`)))
+          for (const [x, { k, msgs }] of atoms(tb)) if (!was.has(x) && !msgs.some(mm => oldMsgs.has(`${k}:${mm}`)) && (k === 403 || k === 404 && /!==?|===?|<>/.test(x))) fresh.add(k) }
         if (fresh.size && a.auth === b.auth) clauses.push(`turns away more requests than before (a new ${list([...fresh].sort().map(k => `"${({ 403: 'not allowed', 404: 'not found', 401: 'not logged in' } as Record<number, string>)[k]}"`))} check)`)
         // a DELETE where there was none (its handler may be elsewhere, a controller plain doesn't follow)
         if (b.fns.has('DELETE') && !a.fns.has('DELETE') && !clauses.some(c => /\bdeletes\b/.test(c)) && (selfDelete(r.url, a, b) || b.ops.has('delete'))) clauses.push(selfDelete(r.url, a, b) ? "lets people delete their own account" : `deletes ${noun}`)
@@ -3768,7 +3775,27 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     // that part changed)
     && !(/\.(?:go|rb|php|cs|java|kt)$/.test(p) && real.some(q => route(q) && q.split('#')[0].split('.').pop() === p.split('.').pop()))
     && !((f?: FileFacts) => !!f && (f.pages.length > 0 || f.mounts.length > 0 || f.handlers.length > 0))(B.files.get(p) ?? A.files.get(p))   // (declares routes: React Router's <Route>, app.use(...))
-  const quiet = real.filter(p => !p.includes('#') && (p.endsWith('.py') || otherCode(p)) && !route(p) && ![...B.routes.keys(), ...A.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
+  // A component (not a page or a route) with something new on screen: say what (inbox-zero's IntegrationRow.tsx now shows "Test
+  // connection"), in place of "can't describe". Words new to the file, not ones that only changed case or punctuation.
+  // Not text or buttons the app already had anywhere (code moved into a new component isn't new on screen), not pieces cut around
+  // {expressions} ("! You have"), not Storybook stories or emails; replaced words say what they replaced.
+  const oldTexts = new Set([...A.files.values()].flatMap(f => [...f.texts])), oldUi = new Set([...A.files.values()].flatMap(f => [...f.ui]))
+  // (and not a component a page the card describes uses: its words are already on that page's line)
+  const visible = (q: string) => { if (!/\.(?:[jt]sx|vue|svelte)$/.test(q) || route(q) || TESTS.test(q) || shown.includes(q) || /\.stories\.|(?:^|\/)(?:emails?|mails?|templates\/emails?)\//i.test(q)
+      || [...names(B.files.get(q)), stem(q)].some(n => usedByRoutes.has(n))
+      || /from\s+['"](?:@react-email\/|react-email|mjml)/.test(after.get(q) ?? '')) return ''
+    const a = A.files.get(q), b = B.files.get(q); if (!b) return ''
+    const key = (t: string) => t.toLowerCase().replace(/[^a-z]/g, '')
+    const newUi = newOnly(a?.ui, b.ui).filter(u => !oldUi.has(u)), ui = uiList(newUi), goneUi = uiList([...a?.ui ?? []].filter(u => !b.ui.has(u)))
+    const gone = [...a?.texts ?? []].filter(t => !b.texts.has(t) && t !== '[price]' && ![...a?.ui ?? []].some(u => u.includes(t))), goneKeys = new Set(gone.map(key))
+    const said = newOnly(a?.texts, b.texts).filter(t => t !== '[price]' && !oldTexts.has(t) && ![...b.ui].some(u => u.includes(t)) && !goneKeys.has(key(t)) && /[a-z]{4}/i.test(t) && !/^[^\w"“(]|[,:;]$/.test(t.trim()))
+    const q_ = (t: string) => `"${t.length > 60 ? t.slice(0, 57) + '…' : t}"`
+    const parts = [ui.length ? `${a ? 'now has' : 'has'} ${list(ui.slice(0, 3))}${a && goneUi.length === 1 && ui.length === 1 ? ` in place of ${goneUi[0]}` : ''}` : '',
+      said.length ? `${a ? 'now shows' : 'shows'} ${list(said.slice(0, 2).map(q_))}${a && gone.length && said.length === 1 && gone.length === 1 ? ` in place of ${q_(gone[0])}` : ''}` : ''].filter(Boolean)
+    return parts.length ? list(parts) : '' }
+  const vis = new Map(real.filter(q => !q.includes('#') && after.has(q)).map(q => [q, visible(q)] as const).filter(([, v]) => v))
+  for (const [q, v] of vis) changes.push({ group: 'Other files', isNew: !before.has(q), text: `The agent ${before.has(q) ? 'changed' : 'added'} ${q}: it ${v}.` })
+  const quiet = real.filter(p => !p.includes('#') && !vis.has(p) && (p.endsWith('.py') || otherCode(p)) && !route(p) && ![...B.routes.keys(), ...A.routes.keys()].some(k => k.startsWith(p + '#')) && !shown.includes(p) && !wiring(B.files.get(p))
     && !/(^|\/)(migrations|alembic)\/|(^|\/)__init__\.py$|(^|\/)(apps|asgi|wsgi|manage)\.py$/.test(p))
   for (const tests of [false, true]) for (const [verb, xs] of [['added', quiet.filter(q => !before.has(q))], ['changed', quiet.filter(q => before.has(q) && after.has(q))], ['deleted', quiet.filter(q => !after.has(q))]] as const) {
     const ys = xs.filter(q => TESTS.test(q) === tests), names = ys.length > 6 ? [...ys.slice(0, 5), `${ys.length - 5} more files`] : ys
@@ -3776,7 +3803,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   }
   // nothing else to say, but app files changed (a component, a helper plain doesn't read): not "Nothing about the app changed"
   // (that was wrong 7 times in 11 on real commits)
-  const unsaid = real.filter(p => !p.includes('#') && !TESTS.test(p) && !shown.includes(p) && !quiet.includes(p))
+  const unsaid = real.filter(p => !p.includes('#') && !TESTS.test(p) && !shown.includes(p) && !quiet.includes(p) && !vis.has(p))
   if (!changes.length && !problems.length && !unfinished.length && !ship.length && unsaid.length)
     for (const [verb, xs] of [['added', unsaid.filter(q => !before.has(q))], ['changed', unsaid.filter(q => before.has(q) && after.has(q))], ['deleted', unsaid.filter(q => !after.has(q))]] as const) {
       const names = xs.length > 6 ? [...xs.slice(0, 5), `${xs.length - 5} more files`] : xs

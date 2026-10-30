@@ -6,6 +6,7 @@ You asked: "hide null quotas only under a telemetry cap"
 
 WHAT CHANGED
   Other files
-    • The agent changed packages/frontend/src/lib/utils/usage-capabilities.ts and
-      packages/frontend/src/routes/dashboard/settings/usage/+page.svelte in ways plain can't
-      describe yet. Ask the agent what they do differently.
+    • The agent changed packages/frontend/src/routes/dashboard/settings/usage/+page.svelte:
+      it now shows "Log bytes ingested" in place of "Bytes ingested".
+    • The agent also changed packages/frontend/src/lib/utils/usage-capabilities.ts, in a way
+      plain can't describe yet.
