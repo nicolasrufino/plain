@@ -1,0 +1,13 @@
+plain · 2 files changed since d0d54736~1
+You asked: "Add a renew domains workflow with exponential backoff"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • There's now a maximum of 5 attempts.
+      apps/web/app/(ee)/api/workflows/renew-domains/route.ts
+  Other files
+    • The agent also changed apps/web/lib/jobs/send-workflows.ts, in a way plain can't
+      describe yet.

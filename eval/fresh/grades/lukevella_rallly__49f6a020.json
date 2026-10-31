@@ -1,0 +1,11 @@
+{ "id": "lukevella_rallly__49f6a020",
+  "summary": "Error-monitoring only: the browser Sentry client ignores more noise (errors whose stack is entirely outside the app's /_next/ bundles, extension/in-app-browser globals, 'network error', empty promise rejections, 'Login is required'), and server actions stop reporting expected UNAUTHORIZED and NOT_FOUND AppErrors to Sentry. What users see is unchanged.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Only Sentry reporting changes; safe-action/server.ts returns the same error.code as before (the later 'if AppError return error.code' path did the same)." },
+    { "text": "Most of this change is in apps/web/instrumentation-client.ts (38 lines added).", "kind": "description", "verdict": "right", "why": "Matches stat; no behaviour described." },
+    { "text": "The agent changed apps/web/instrumentation-client.ts and apps/web/src/lib/safe-action/server.ts in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "Fewer errors reach the Sentry error tracker: browser-extension/in-app-browser noise, sign-in-required and not-found errors are no longer reported. Broad filters (any 'network error', any stack with no /_next/ frame) could also hide some real problems.", "severity": "low" }
+  ],
+  "silent": true }

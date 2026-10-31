@@ -1,0 +1,18 @@
+plain · 13 files changed since b69fccf1~1
+You asked: "fix: harden account-scoped user responses (#16327)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed .github/workflows/run_mfa_spec.yml.
+    • The agent changed app/views/api/v1/models/_user.json.jbuilder.
+    • The agent changed app/views/devise/_auth.json.jbuilder.
+    • The agent changed
+      enterprise/app/views/api/v1/accounts/agent_capacity_policies/users/create.json.jbuilder.
+    • The agent changed
+      enterprise/app/views/api/v1/accounts/agent_capacity_policies/users/index.json.jbuilder.
+    • The agent also changed
+      app/javascript/dashboard/components-next/AssignmentPolicy/AgentCapacityPolicyCard/AgentCapacityPolicyCard.vue,
+      in a way plain can't describe yet.

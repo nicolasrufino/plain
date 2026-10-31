@@ -1,0 +1,21 @@
+plain · 10 files changed since bf497183~1
+You asked: "⏱️ Delay the subscription feedback email and store queued email kind as text ..."
+
+  Nothing flagged  ·  1 step before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in apps/web/src/features/billing/webhook/mutations.ts (65 lines
+      added, 18 removed).
+    • The agent changed packages/database/prisma/models/email-queue.prisma.
+    • The agent also changed apps/web/src/emails/queue.ts,
+      apps/web/src/features/billing/constants.ts, apps/web/src/features/billing/data.ts,
+      apps/web/src/features/billing/webhook/mutations.ts,
+      apps/web/src/features/email-queue/constants.ts and
+      apps/web/src/features/email-queue/mutations.ts, in ways plain can't describe yet.
+
+BEFORE YOU SHIP
+  1. Apply packages/database/prisma/migrations/20261015120000_queued_email_kind_to_text to
+     your live database before the new code goes live (`npx prisma migrate deploy`), or the
+     parts that use it will fail.

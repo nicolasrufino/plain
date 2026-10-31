@@ -1,0 +1,13 @@
+plain · 6 files changed since 17dcd102~1
+You asked: "server: notify the merchant when a domain loses its verification (#15956)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    + Most of this change is in a new file,
+      server/emails/src/emails/domain_verification_lost.tsx (60 lines added).
+    • The agent also changed server/polar/email/schemas.py and
+      server/polar/organization_domain/service.py, in ways plain can't describe yet.
+    • The agent also changed server/tests/organization_domain/test_service.py (tests).

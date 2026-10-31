@@ -1,0 +1,14 @@
+{ "id": "lukevella_rallly__bf497183",
+  "summary": "The founder's 'Thanks for subscribing to Rallly Pro' email is no longer sent immediately from the Stripe webhook; it is queued (inside the subscription-sync transaction, deduped per subscription) to send 30 minutes later and is skipped if the subscription is no longer active or the user is deleted/banned. Migration turns queued_emails.kind from an enum into text and drops the enum type.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "No auth/secret/money exposure; webhook is still Stripe-signed; email recipients unchanged (subscriber only)." },
+    { "text": "Most of this change is in apps/web/src/features/billing/webhook/mutations.ts (65 lines added, 18 removed).", "kind": "description", "verdict": "right", "why": "Matches stat; no behaviour described." },
+    { "text": "The agent changed packages/database/prisma/models/email-queue.prisma.", "kind": "description", "verdict": "right", "why": "kind becomes String, enum removed; vague." },
+    { "text": "The agent also changed queue.ts, billing/constants.ts, billing/data.ts, webhook/mutations.ts, email-queue/constants.ts and email-queue/mutations.ts, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." },
+    { "text": "Apply migration 20261015120000_queued_email_kind_to_text before the new code goes live, or the parts that use it will fail.", "kind": "step", "verdict": "right", "why": "Without it, inserting kind 'subscription_feedback' into the enum column fails inside the subscription transaction (webhook/mutations.ts:312), and the claim query compares the enum to a text array." }
+  ],
+  "misses": [
+    { "what": "New Pro subscribers now get the founder's thank-you/feedback email 30 minutes after subscribing instead of right away, only once even if Stripe resends the event, and not at all if they cancel (or are banned/deleted) before it goes out.", "severity": "medium" },
+    { "what": "The email is now queued inside the same database transaction that records the subscription, so a problem queueing it would make the subscription webhook fail (Stripe retries) rather than just skipping the email.", "severity": "low" }
+  ],
+  "silent": false }

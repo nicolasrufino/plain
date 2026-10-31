@@ -1,0 +1,13 @@
+{ "id": "gotify_server__9ff78c80",
+  "summary": "Security tightening: POST /user (create user) now uses a new OptionalAdmin middleware, so any request carrying credentials must be an admin with an elevated session (basic auth or recently elevated client token); unauthenticated requests still go through the registration rules.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The change only narrows who can create users (router/router.go:158 OptionalAdmin, auth/authentication.go adminHandlers); it introduces no open address or data risk." },
+    { "text": "Most of this change is in api/user.go (6 lines added, 17 removed).", "kind": "description", "verdict": "right", "why": "Matches diff stat." },
+    { "text": "The agent changed docs/spec.json.", "kind": "description", "verdict": "right", "why": "Doc text now says admins need an elevated session." },
+    { "text": "The agent also changed api/user.go, auth/authentication.go and router/router.go, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but hides that these are login/permission changes, exactly what plain claims to read." }
+  ],
+  "misses": [
+    { "what": "Security fix on the create-user address: before, an admin's ordinary (non-elevated) client token could create users, including new admins; now creating users while logged in requires an admin with an elevated session (basic auth or /client:elevate).", "severity": "high" },
+    { "what": "Behaviour change: scripts/clients that created users with a plain admin client token now get 403; and a logged-in non-admin user can no longer create accounts through open registration while sending their credentials (only anonymous registration works).", "severity": "medium" }
+  ],
+  "silent": true }

@@ -1,0 +1,16 @@
+{ "id": "lukevella_rallly__8618b0f4",
+  "summary": "On the hosted (non-self-hosted) app, when a logged-in host finalizes a poll and it is their 2nd+ finalized poll with 3+ participants, the finalize dialog shows a one-time founder-signed card asking for a G2 review; recorded via new users.review_requested_at column (migration) and PostHog events. The finalize success text no longer says 'Your event is booked for ...' / 'N participants will be notified', just the date.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Runs inside the existing finalize mutation for ctx.user; claimReviewRequest never throws so finalize can't fail from it; additive nullable column." },
+    { "text": "Most of this change is in a new file, review-request-card.tsx (84 lines added).", "kind": "description", "verdict": "right", "why": "New component rendering the review ask." },
+    { "text": "The agent added apps/web/public/static/luke.webp.", "kind": "description", "verdict": "right", "why": "Founder photo shown on the card." },
+    { "text": "The agent added wording in the app: \"Dismiss\", \"Write a review\", \"Founder of Rallly\" and 1 more.", "kind": "description", "verdict": "right", "why": "app.json adds reviewRequest* strings (and removes two finalize strings, unmentioned)." },
+    { "text": "The agent changed packages/database/prisma/models/user.prisma.", "kind": "description", "verdict": "right", "why": "Adds reviewRequestedAt; true but vague." },
+    { "text": "The agent also changed finalize-poll-dialog.tsx, feature-flags/config.ts and trpc/routers/polls.ts, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." },
+    { "text": "Apply migration 20261005120000_add_user_review_requested_at to your live database before the new code goes live, or the parts that use it will fail.", "kind": "step", "verdict": "right", "why": "Adds users.review_requested_at; Prisma user queries expect it." }
+  ],
+  "misses": [
+    { "what": "What the feature actually does: hosts on the cloud app who finalize their second poll (with at least 3 participants) see a one-time card, signed by the founder, asking them to review Rallly on G2; it's recorded so it shows once per user, and views/clicks are sent to PostHog analytics. Off for self-hosted.", "severity": "medium" },
+    { "what": "The finalize confirmation no longer tells the host how many participants will be notified (and drops the 'Your event is booked for' sentence); it now shows just the date.", "severity": "medium" }
+  ],
+  "silent": false }

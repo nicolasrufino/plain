@@ -1,0 +1,12 @@
+{ "id": "chatwoot_chatwoot__f692ce69",
+  "summary": "Contact sidebar rows (company, location, identifier, etc.) now show their values as plain text instead of injecting them as (DOMPurify-sanitized) HTML, so contact-supplied markup like forms or images no longer renders in agents' dashboards; the location flag now uses the Flag component and only appears for a valid 2-letter country code.",
+  "statements": [
+    {"text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The commit removes an HTML-injection surface (ContactInfoRow.vue dropped v-dompurify-html) and adds no new risk. Fair, though it hides that this was a security-flavored fix."},
+    {"text": "Most of this change is in ContactInfo.vue (16 lines added, 17 removed).", "kind": "description", "verdict": "right", "why": "Largest non-test change."},
+    {"text": "The agent changed ContactInfo.vue and ContactInfoRow.vue in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative."}
+  ],
+  "misses": [
+    {"what": "Fixes an HTML-injection issue: contact details (which customers/visitors can set themselves) were rendered as HTML in the agent dashboard, letting fake forms or tracking images appear there; they are now shown as plain text.", "severity": "medium"},
+    {"what": "Location flag display changed: flag only shows for valid two-letter country codes; otherwise a globe emoji is shown.", "severity": "low"}
+  ],
+  "silent": true }

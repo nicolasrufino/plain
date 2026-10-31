@@ -1,0 +1,33 @@
+plain · 15 files changed since 0bf654e6~1
+You asked: "feat: view Collections on profiles, notifications, and a new Collections page..."
+
+  ⚠ 1 problem  ·  1 step before you ship
+
+LOOK AT THIS FIRST
+  ⚠ Anyone can open the @[account] collections page without logging in.
+
+WHAT CHANGED
+  Pages
+    + The @[account] collections page is new. It only shows information: nothing on it lets
+      you change anything.
+      /[[server]]/@[account]/collections
+    + The collections page is new. It only shows information: nothing on it lets you change
+      anything.
+      /[[server]]/collections
+    + Each collection page is new. It only shows information: nothing on it lets you change
+      anything.
+      /[[server]]/collections/[id]
+    + The collections page is new. It only shows information: nothing on it lets you change
+      anything.
+      /[[server]]/collections
+  Other files
+    • The agent added wording in the app (in locales/en.json): "Created by", "No accounts in
+      this collection yet.", "{0} accounts|{0} account|{0} accounts" and 9 more.
+    • The agent also changed app/components/nav/NavBottom.vue,
+      app/components/nav/NavSide.vue, app/components/notification/NotificationCard.vue and
+      app/components/settings/SettingsBottomNav.vue, in ways plain can't describe yet.
+
+BEFORE YOU SHIP
+  1. Test anything that uses masto: it was upgraded from ^7.10.0 to ^7.12.0.
+
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

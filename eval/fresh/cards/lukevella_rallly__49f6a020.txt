@@ -1,0 +1,12 @@
+plain · 2 files changed since 49f6a020~1
+You asked: "🔇 Stop reporting injected script and expected auth errors to Sentry (#3607)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in apps/web/instrumentation-client.ts (38 lines added).
+    • The agent changed apps/web/instrumentation-client.ts and
+      apps/web/src/lib/safe-action/server.ts in ways plain can't describe yet. Ask the agent
+      what they do differently.

@@ -1,0 +1,20 @@
+plain · 8 files changed since 309a4b00~1
+You asked: "Fix: respect subpath in logout, share link and auto-login redirects (#14476)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Pages
+    • The usersgroups page changed in a way plain can't describe yet. Ask the agent what it
+      does differently.
+      /usersgroups
+  Server
+    • The share part of your server changed in a way plain can't describe yet. Ask the agent
+      what it does differently.
+      /share/[slug]
+  Other files
+    • The agent also changed
+      src-ui/src/app/components/common/profile-edit-dialog/profile-edit-dialog.component.ts
+      and src/paperless/auth.py, in ways plain can't describe yet.
+    • The agent also changed src/paperless/tests/test_auth_middleware.py (tests).

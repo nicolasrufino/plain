@@ -1,0 +1,13 @@
+plain · 3 files changed since f42091c2~1
+You asked: "Stop Labs save from wiping the directory opt-in and drop dark mode toggle"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in app/Http/Controllers/Settings/LabsSettings.php (1 line
+      added, 61 removed).
+    • The agent changed resources/views/settings/labs.blade.php.
+    • The agent also changed app/Http/Controllers/Settings/LabsSettings.php, in a way plain
+      can't describe yet.

@@ -1,0 +1,16 @@
+plain · 6 files changed since 3e3f229c~1
+You asked: "Keep payouts disabled for partners banned from the network"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed
+      apps/web/app/(ee)/api/embed/referrals/tremendous/verify-otp/route.ts,
+      apps/web/app/(ee)/api/stripe/connect/v2/webhook/recipient-account-closed.ts,
+      apps/web/app/(ee)/api/stripe/connect/v2/webhook/recipient-configuration-updated.ts,
+      apps/web/app/(ee)/api/stripe/connect/webhook/account-application-deauthorized.ts,
+      apps/web/app/(ee)/api/stripe/connect/webhook/account-updated.ts and
+      apps/web/lib/payouts/recompute-partner-payout-state.ts in ways plain can't describe
+      yet. Ask the agent what they do differently.

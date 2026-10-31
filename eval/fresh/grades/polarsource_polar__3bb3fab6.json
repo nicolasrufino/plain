@@ -1,0 +1,14 @@
+{ "id": "polarsource_polar__3bb3fab6",
+  "summary": "Deletes the old customer_session_codes database table (one-time customer-portal sign-in codes) and its model; nothing in the app used it anymore since sign-in codes moved to the email OTP flow. Also removes it from an on-call secret-rotation SQL check.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The table is unused by app code at both 3bb3fab6~1 and 3bb3fab6 (only the model file referenced it); dropping it holds only short-lived (30 min) login codes. No security/money issue." },
+    { "text": "Most of this change is in a new file, server/migrations/versions/2026-10-30-0800_drop_customer_session_codes.py (109 lines added).", "kind": "description", "verdict": "right", "why": "True that the migration is the bulk (stat says 118 lines, not 109 — minor). Says nothing about what it does." },
+    { "text": "The agent changed handbook/engineering/oncall/rotate-secret.mdx.", "kind": "description", "verdict": "right", "why": "Removed one line from an internal on-call SQL check." },
+    { "text": "The agent also deleted server/polar/models/customer_session_code.py.", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "Apply the migration to your live database before the new code goes live (`alembic upgrade head`), or the parts that use it will fail.", "kind": "step", "verdict": "misleading", "why": "Running the migration is needed, but no code uses the table before or after this commit, so nothing fails if code ships first; for a table drop, code-first is the normal safe order." },
+    { "text": "Back up your data first: the migration deletes data and can't be undone.", "kind": "step", "verdict": "right", "why": "drop_table deletes rows; downgrade recreates an empty table. Data is only expired/short-lived login codes, so low stakes, but the statement is true." }
+  ],
+  "misses": [
+    { "what": "Never says in plain words what is removed: an old, already-unused table of customer-portal sign-in codes (replaced by the email OTP flow), so customer sign-in is unaffected.", "severity": "low" }
+  ],
+  "silent": false }

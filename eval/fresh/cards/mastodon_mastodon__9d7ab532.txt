@@ -1,0 +1,10 @@
+plain · 2 files changed since 9d7ab532~1
+You asked: "Fix slow hashtag timelines with any[] when using min_id (#41132)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The tag part of your server now reads status.
+      /tags/[id]

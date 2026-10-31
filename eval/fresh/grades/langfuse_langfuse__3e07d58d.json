@@ -1,0 +1,11 @@
+{ "id": "langfuse_langfuse__3e07d58d",
+  "summary": "People invited through the AI Gateway 'notify your team' flow now join the organization with the limited AI_GATEWAY role (only gateway:read/gateway:invoke, no project access) instead of MEMBER; UI copy updated to say so.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Change narrows permissions for new invitees (organizationAccessRights.ts: AI_GATEWAY = gateway:read, gateway:invoke; projectAccessRights AI_GATEWAY = []). Endpoint still protectedOrganizationProcedure." },
+    { "text": "ExternalInviteeHint.tsx: it now shows \"in the organization yet. They'll be invited to the organi…\" and \"role.\"", "kind": "description", "verdict": "right", "why": "Text did change, but the quoted fragments omit the point (they now join with the 'AI Gateway' role instead of 'Member')." },
+    { "text": "The agent also changed gatewayTeamInvites.ts and gatewayTeamService.ts, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but hides the actual behaviour change (orgRole MEMBER -> AI_GATEWAY in gatewayTeamService.ts:206)." }
+  ],
+  "misses": [
+    { "what": "New people invited from the AI Gateway setup now get the limited 'AI Gateway' organization role (can use the gateway only, cannot see the organization's projects/traces) instead of full Member access. Anyone expecting invitees to see project data will need to change their role.", "severity": "medium" }
+  ],
+  "silent": true }

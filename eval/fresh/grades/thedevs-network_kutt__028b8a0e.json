@@ -1,0 +1,13 @@
+{ "id": "thedevs-network_kutt__028b8a0e",
+  "summary": "Adds an optional LINK_CUSTOM_ALPHABET setting that controls which characters random short-link codes are made from (default = the same alphabet as before), and lets user-chosen custom addresses also use characters from that alphabet.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "No login/data/money change; default alphabet equals the old hard-coded one (server/env.js, utils.js:14), so behaviour is unchanged unless the owner sets it." },
+    { "text": "The agent changed .example.env.", "kind": "description", "verdict": "right", "why": "True, documents the new optional setting." },
+    { "text": "The agent also changed server/env.js, server/handlers/validators.handler.js and server/utils/utils.js, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but says nothing." },
+    { "text": "Add LINK_CUSTOM_ALPHABET to your hosting settings (like Vercel). It's also missing from .env.example.", "kind": "step", "verdict": "wrong", "why": "The setting is optional with a default identical to the old behaviour (env.js str({default: ...}), and empty values are dropped), so nothing needs adding. It is not missing: this commit adds it to .example.env (the repo's example file name)." }
+  ],
+  "misses": [
+    { "what": "The owner can now choose which characters random short-link codes use via LINK_CUSTOM_ALPHABET; leaving it unset keeps today's codes exactly the same.", "severity": "low" },
+    { "what": "If the alphabet is customised, users' own custom link addresses are also allowed to contain those extra characters (validators.handler.js:48,123).", "severity": "low" }
+  ],
+  "silent": true }

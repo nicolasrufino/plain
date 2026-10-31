@@ -1,0 +1,11 @@
+plain · 3 files changed since d6a3b8c6~1
+You asked: "fix(auth): lowercase existing usernames for pre-3.2 accounts"
+
+  Nothing flagged  ·  1 step before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+BEFORE YOU SHIP
+  1. Apply prisma/migrations/24_lowercase_username to your live database before the new code
+     goes live (`npx prisma migrate deploy`), or the parts that use it will fail.
+
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

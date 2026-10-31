@@ -1,0 +1,14 @@
+plain · 5 files changed since 2a90ae1b~1
+You asked: "feat(ui): allow filtering by dedicated channel cases (#6206)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed src/dispatch/static/dispatch/src/case/TableFilterDialog.vue: it now
+      shows "Security Events" and "Show only cases with a dedicated channel".
+    • The agent also changed src/dispatch/database/service.py,
+      src/dispatch/static/dispatch/src/case/store.js,
+      src/dispatch/static/dispatch/src/router/utils.js and
+      src/dispatch/static/dispatch/src/search/utils.js, in ways plain can't describe yet.

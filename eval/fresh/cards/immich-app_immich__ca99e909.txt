@@ -1,0 +1,20 @@
+plain · 6 files changed since ca99e909~1
+You asked: "feat: futo backups 1.12.1 with restic's parallel scan (#32830)"
+
+  Nothing flagged  ·  2 steps before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed open-api/immich-openapi-specs.json.
+    • The agent changed server/Dockerfile.
+    • The agent also changed packages/sdk/src/fetch-client.ts, in a way plain can't describe
+      yet.
+
+BEFORE YOU SHIP
+  1. Test anything that uses @futo-org/backups-orchestrator-api: it was upgraded from 1.11.5
+     to 1.12.1.
+  2. Test anything that uses @futo-org/backups-orchestrator-ui: it was upgraded from 1.11.5
+     to 1.12.1.
+
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

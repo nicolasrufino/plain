@@ -1,0 +1,41 @@
+{
+ "id": "pixelfed_pixelfed__f42091c2",
+ "summary": "Settings > Labs: removes the Dark Mode toggle and makes the Labs Save button do nothing but show 'updated'; this stops the old bug where every Labs save silently turned off the user's 'Show on Directory' privacy opt-in (removing them from suggestions/landing directory) and reset their profile layout.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "Only removes code that wrote to the profile; no new access, money or secrets."
+  },
+  {
+   "text": "Most of this change is in app/Http/Controllers/Settings/LabsSettings.php (1 line added, 61 removed).",
+   "kind": "description",
+   "verdict": "right",
+   "why": "61 non-blank lines removed (71 counting blank lines); it is the main code change."
+  },
+  {
+   "text": "The agent changed resources/views/settings/labs.blade.php.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True but doesn't say the Dark Mode toggle was removed from the page."
+  },
+  {
+   "text": "The agent also changed app/Http/Controllers/Settings/LabsSettings.php, in a way plain can't describe yet.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "True but uninformative (and repeats the file above)."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Bug fix: saving the Labs settings page used to silently switch off a user's 'Show on Directory' opt-in (dropping them from profile suggestions and the public landing directory) and reset their profile layout; it no longer touches the profile.",
+   "severity": "medium"
+  },
+  {
+   "what": "The Dark Mode toggle is removed from Settings > Labs; the page now has only a Save button that changes nothing.",
+   "severity": "medium"
+  }
+ ],
+ "silent": true
+}

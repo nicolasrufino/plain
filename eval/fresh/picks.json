@@ -1,0 +1,522 @@
+[
+ {
+  "repo": "umami-software/umami",
+  "stack": "next",
+  "sha": "f6612191288ec07f40fabbca4741c765a52fecaa",
+  "subject": "Fix API client path parameter handling and release version 3.4.0",
+  "lines": 29,
+  "files": 7
+ },
+ {
+  "repo": "umami-software/umami",
+  "stack": "next",
+  "sha": "819e1c7256472ec67f1b7a1fc0bdbe947d8ba8e9",
+  "subject": "feat: require explicit opt-in for MCP and OAuth registration",
+  "lines": 77,
+  "files": 7
+ },
+ {
+  "repo": "umami-software/umami",
+  "stack": "next",
+  "sha": "d6a3b8c6d36b62e7e6b3ac146ef9a57a557ff4c6",
+  "subject": "fix(auth): lowercase existing usernames for pre-3.2 accounts",
+  "lines": 90,
+  "files": 3
+ },
+ {
+  "repo": "dubinc/dub",
+  "stack": "next",
+  "sha": "f949c06f5da8d6d22f03074c8d210fa5de1c3282",
+  "subject": "add more production filters",
+  "lines": 18,
+  "files": 3
+ },
+ {
+  "repo": "dubinc/dub",
+  "stack": "next",
+  "sha": "d0d547366fc470002947ced2176de19a1af80171",
+  "subject": "Add a renew domains workflow with exponential backoff",
+  "lines": 313,
+  "files": 2
+ },
+ {
+  "repo": "dubinc/dub",
+  "stack": "next",
+  "sha": "3e3f229cf221c1edf9b7fdd4d6abb57745a9a420",
+  "subject": "Keep payouts disabled for partners banned from the network",
+  "lines": 21,
+  "files": 6
+ },
+ {
+  "repo": "lukevella/rallly",
+  "stack": "next",
+  "sha": "49f6a02092e36a6ecb6a075fddc2d3f43e7f53e5",
+  "subject": "🔇 Stop reporting injected script and expected auth errors to Sentry (#3607)",
+  "lines": 49,
+  "files": 2
+ },
+ {
+  "repo": "lukevella/rallly",
+  "stack": "next",
+  "sha": "bf497183e6f73e6cf4baceba382e7e12f222ce77",
+  "subject": "⏱️ Delay the subscription feedback email and store queued email kind as text (#3536)",
+  "lines": 153,
+  "files": 10
+ },
+ {
+  "repo": "lukevella/rallly",
+  "stack": "next",
+  "sha": "8618b0f405130dfb1a35f54e9eeffa9e53634fd5",
+  "subject": "✨ Ask for a G2 review after a host's second finalized poll (#3449)",
+  "lines": 319,
+  "files": 15
+ },
+ {
+  "repo": "langfuse/langfuse",
+  "stack": "next",
+  "sha": "3e07d58dcbe90b9ec2b470d3158d2a8dab4713b0",
+  "subject": "feat(ai-gateway): invite new gateway team members with the AI_GATEWAY role (#19514)",
+  "lines": 16,
+  "files": 5
+ },
+ {
+  "repo": "langfuse/langfuse",
+  "stack": "next",
+  "sha": "e0fad7b2622155ee1844d5ea19638f012d029561",
+  "subject": "fix(otel): stop double counting the cache-write TTL breakdown in generic gen_ai usage mapping (#19420)",
+  "lines": 128,
+  "files": 2
+ },
+ {
+  "repo": "langfuse/langfuse",
+  "stack": "next",
+  "sha": "e139e39b9ee56475c1a6df2d8ca58a3eaffc69b1",
+  "subject": "fix(web): Topics shows analyzing, waiting and failed screens on the first run (#19285)",
+  "lines": 433,
+  "files": 6
+ },
+ {
+  "repo": "openstatusHQ/openstatus",
+  "stack": "next",
+  "sha": "050a6031a204093b73420fb49623bd5a8b8044fe",
+  "subject": "checker: spread pubsub check starts over a per-monitor window (#3010)",
+  "lines": 71,
+  "files": 4
+ },
+ {
+  "repo": "openstatusHQ/openstatus",
+  "stack": "next",
+  "sha": "0ec1d187775f23d02a108b7c0fc4d799160ce4c3",
+  "subject": "bugs: minor fix (#2942)",
+  "lines": 51,
+  "files": 4
+ },
+ {
+  "repo": "openstatusHQ/openstatus",
+  "stack": "next",
+  "sha": "823d281cbc259abe4ffa2ce18e6911794f808cc5",
+  "subject": "fix(emails): format the maintenance window and rename the template to page-update (#2882)",
+  "lines": 425,
+  "files": 12
+ },
+ {
+  "repo": "thedevs-network/kutt",
+  "stack": "express",
+  "sha": "279b491b53bbd01fbae70f603222526962772061",
+  "subject": "move timestamp truncation logic to application startup, hardcoding both the column name and precision (#1044)",
+  "lines": 102,
+  "files": 2
+ },
+ {
+  "repo": "thedevs-network/kutt",
+  "stack": "express",
+  "sha": "028b8a0e57f809a770496a79480e90a2db75c0a7",
+  "subject": "add custom alphabet for link address",
+  "lines": 27,
+  "files": 4
+ },
+ {
+  "repo": "thedevs-network/kutt",
+  "stack": "express",
+  "sha": "b7cdeba6ca2cfca159b350246268d8ae52cec607",
+  "subject": "move initial admin setup to a middleware function",
+  "lines": 29,
+  "files": 3
+ },
+ {
+  "repo": "Infisical/infisical",
+  "stack": "express",
+  "sha": "8633eddb6363650df2d2ebdd3f8b7253df80a645",
+  "subject": "feat: optimized get secrets heap allocation",
+  "lines": 334,
+  "files": 13
+ },
+ {
+  "repo": "Infisical/infisical",
+  "stack": "express",
+  "sha": "0accfdf3f052731f2f457e8c8fe3131932ee999a",
+  "subject": "do no reprompt MFA in case of changing between sub orgs",
+  "lines": 122,
+  "files": 3
+ },
+ {
+  "repo": "Infisical/infisical",
+  "stack": "express",
+  "sha": "6276d0cb0fce8d8f0a93ec84f6bf8cd61b3f0b86",
+  "subject": "fix(ldap): check the LDAP URL on test connection",
+  "lines": 56,
+  "files": 2
+ },
+ {
+  "repo": "healthchecks/healthchecks",
+  "stack": "django",
+  "sha": "59caeef534d5f8151fd42da529c08fad6c719be2",
+  "subject": "Fix a race condition in Profile.for_user()",
+  "lines": 23,
+  "files": 2
+ },
+ {
+  "repo": "healthchecks/healthchecks",
+  "stack": "django",
+  "sha": "29b5ec251059034b79e0120e2ff0c3e35d7bd9f8",
+  "subject": "Rewrite to avoid select_for_update",
+  "lines": 31,
+  "files": 2
+ },
+ {
+  "repo": "healthchecks/healthchecks",
+  "stack": "django",
+  "sha": "a2a07bf79f0e890a0be9af7ce8b45117e1c426f4",
+  "subject": "Clean up \"raise e\" -> \"raise\"",
+  "lines": 18,
+  "files": 5
+ },
+ {
+  "repo": "paperless-ngx/paperless-ngx",
+  "stack": "django",
+  "sha": "9c4c9f238682e59d12650069bb11e121643cc4e6",
+  "subject": "Enhancement: support custom fields in workflow title templates (#14564)",
+  "lines": 209,
+  "files": 6
+ },
+ {
+  "repo": "paperless-ngx/paperless-ngx",
+  "stack": "django",
+  "sha": "309a4b004d8a3ca8e1db1abcfa706e0f30929fb2",
+  "subject": "Fix: respect subpath in logout, share link and auto-login redirects (#14476)",
+  "lines": 113,
+  "files": 8
+ },
+ {
+  "repo": "paperless-ngx/paperless-ngx",
+  "stack": "django",
+  "sha": "773744d04b163ae096a3c37a36d3ae2a006fdfec",
+  "subject": "Enhancement: include Django admin with 2FA (#14270)",
+  "lines": 71,
+  "files": 2
+ },
+ {
+  "repo": "netbox-community/netbox",
+  "stack": "django",
+  "sha": "07c6556769d178f1c088ebe851ee77a5021aec62",
+  "subject": "Fixes #23511: Show correct filepath in script source tab (#23560)",
+  "lines": 168,
+  "files": 4
+ },
+ {
+  "repo": "netbox-community/netbox",
+  "stack": "django",
+  "sha": "9c60493b31b7728b2f760663060b3d853628663b",
+  "subject": "Fixes #23422: Skip validation for nested API serializers (#23466)",
+  "lines": 320,
+  "files": 12
+ },
+ {
+  "repo": "netbox-community/netbox",
+  "stack": "django",
+  "sha": "59759f36b6c125c701582ba4f256bf46a6e6b0c8",
+  "subject": "perf(api): Prefetch custom field target relations (#23396)",
+  "lines": 144,
+  "files": 2
+ },
+ {
+  "repo": "polarsource/polar",
+  "stack": "fastapi",
+  "sha": "20386739fb925250de0926150d5298290e65de66",
+  "subject": "Drop Compass tables and models (#16101)",
+  "lines": 281,
+  "files": 4
+ },
+ {
+  "repo": "polarsource/polar",
+  "stack": "fastapi",
+  "sha": "17dcd1021c7589e51aa8414bf4f21f9004c3a136",
+  "subject": "server: notify the merchant when a domain loses its verification (#15956)",
+  "lines": 164,
+  "files": 6
+ },
+ {
+  "repo": "polarsource/polar",
+  "stack": "fastapi",
+  "sha": "3bb3fab6e8fc4315fb18209ac53f7b5f54f1db04",
+  "subject": "server: drop customer_session_codes table (#16001)",
+  "lines": 155,
+  "files": 4
+ },
+ {
+  "repo": "fastapi/full-stack-fastapi-template",
+  "stack": "fastapi",
+  "sha": "754ff56c5a91ef5abcc8af20fef2bd632140cc3f",
+  "subject": "⬆ Bump the python-packages group across 1 directory with 8 updates (#2497)",
+  "lines": 395,
+  "files": 5
+ },
+ {
+  "repo": "Netflix/dispatch",
+  "stack": "fastapi",
+  "sha": "2a90ae1b9fe5ebf8b5152673d965804a63f98275",
+  "subject": "feat(ui): allow filtering by dedicated channel cases (#6206)",
+  "lines": 84,
+  "files": 5
+ },
+ {
+  "repo": "Netflix/dispatch",
+  "stack": "fastapi",
+  "sha": "b377dfae0562bbb5d42f413175fa074a9cc61159",
+  "subject": "(feat): ai-assisted tactical reports  (#6135)",
+  "lines": 451,
+  "files": 8
+ },
+ {
+  "repo": "Netflix/dispatch",
+  "stack": "fastapi",
+  "sha": "0cd6cc224d7e06802bcbba894e7c2a85a9e1cb68",
+  "subject": "fix(auth): type error encoding without a string argument (#5999)",
+  "lines": 22,
+  "files": 2
+ },
+ {
+  "repo": "maybe-finance/maybe",
+  "stack": "rails",
+  "sha": "3fb379d14079ca65c59b52fae7bae470a53786bb",
+  "subject": "Sync family icon button",
+  "lines": 17,
+  "files": 3
+ },
+ {
+  "repo": "maybe-finance/maybe",
+  "stack": "rails",
+  "sha": "e60b5df442d214bdc69d55eeb9bc369cf0ea3c7d",
+  "subject": "Handle bad API data for trade quantity signage (#2416)",
+  "lines": 62,
+  "files": 2
+ },
+ {
+  "repo": "maybe-finance/maybe",
+  "stack": "rails",
+  "sha": "9fabcf4c7253468143ab2288b5060713208e8b8a",
+  "subject": "Redis check for self hosted apps (#2353)",
+  "lines": 199,
+  "files": 20
+ },
+ {
+  "repo": "chatwoot/chatwoot",
+  "stack": "rails",
+  "sha": "f692ce69d40f6cb0dfbd399667eaa7268156bc3e",
+  "subject": "fix: render contact info rows as plain text (#16465)",
+  "lines": 74,
+  "files": 3
+ },
+ {
+  "repo": "chatwoot/chatwoot",
+  "stack": "rails",
+  "sha": "926da611d9d8609f43e761164683ff463427bca9",
+  "subject": "feat(help-center): allow hiding portals and articles from search engines (#16164)",
+  "lines": 336,
+  "files": 21
+ },
+ {
+  "repo": "chatwoot/chatwoot",
+  "stack": "rails",
+  "sha": "b69fccf1e61d7ee07eec5c450f343eb1b466ca29",
+  "subject": "fix: harden account-scoped user responses (#16327)",
+  "lines": 225,
+  "files": 13
+ },
+ {
+  "repo": "mastodon/mastodon",
+  "stack": "rails",
+  "sha": "42b9789afa09397b997380a0c74f8b5197a48ac5",
+  "subject": "Statuses: Open media from quotes (#41403)",
+  "lines": 203,
+  "files": 6
+ },
+ {
+  "repo": "mastodon/mastodon",
+  "stack": "rails",
+  "sha": "6a8307176176a4b7d49dd98d41ced030cfdf3f0d",
+  "subject": "add information about who handled an appeal (#41186)",
+  "lines": 11,
+  "files": 2
+ },
+ {
+  "repo": "mastodon/mastodon",
+  "stack": "rails",
+  "sha": "9d7ab532917765467208d3dd9768fe2c70c9f4ea",
+  "subject": "Fix slow hashtag timelines with any[] when using min_id (#41132)",
+  "lines": 24,
+  "files": 2
+ },
+ {
+  "repo": "firefly-iii/firefly-iii",
+  "stack": "laravel",
+  "sha": "14366605bd2afa3ea238fdb275b6aa2fcad97d1d",
+  "subject": "Fix #13037",
+  "lines": 19,
+  "files": 2
+ },
+ {
+  "repo": "firefly-iii/firefly-iii",
+  "stack": "laravel",
+  "sha": "8ae45ef263b5cb1e0cea25c6a4a3b37d3e670bfd",
+  "subject": "Clean up account list.",
+  "lines": 13,
+  "files": 3
+ },
+ {
+  "repo": "firefly-iii/firefly-iii",
+  "stack": "laravel",
+  "sha": "c983b00ea1d677a10f29072d45d1bdb2592d3cb2",
+  "subject": "Fix #12978",
+  "lines": 34,
+  "files": 6
+ },
+ {
+  "repo": "pixelfed/pixelfed",
+  "stack": "laravel",
+  "sha": "c40a4e2bae835eeccbb26a8a753011cc76ebf250",
+  "subject": "Avoid interpolating invite name into inline onclick handler",
+  "lines": 139,
+  "files": 2
+ },
+ {
+  "repo": "pixelfed/pixelfed",
+  "stack": "laravel",
+  "sha": "9d82d76376ad6e0243220c4fe4af6f38f4b38518",
+  "subject": "Add new v2.1/config endpoint for new mobile and webUI clients",
+  "lines": 33,
+  "files": 2
+ },
+ {
+  "repo": "pixelfed/pixelfed",
+  "stack": "laravel",
+  "sha": "f42091c23718d5523da890ab5d073dea5e96ff1b",
+  "subject": "Stop Labs save from wiping the directory opt-in and drop dark mode toggle",
+  "lines": 166,
+  "files": 3
+ },
+ {
+  "repo": "koel/koel",
+  "stack": "laravel",
+  "sha": "aa9023252e4ab0528e6dd090cb7faa2ab08b4bbc",
+  "subject": "fix: stop embeds from sharing the login rate limit (#3031)",
+  "lines": 10,
+  "files": 2
+ },
+ {
+  "repo": "koel/koel",
+  "stack": "laravel",
+  "sha": "7a78354f03a6d4b264816445f615a92e239a9168",
+  "subject": "feat: search the albums and artists lists across the whole library (#2979)",
+  "lines": 589,
+  "files": 19
+ },
+ {
+  "repo": "koel/koel",
+  "stack": "laravel",
+  "sha": "9d355ff43d2740090657eafd3ec9bd478c125b0f",
+  "subject": "perf: make audio streaming requests cheaper (#2934)",
+  "lines": 149,
+  "files": 11
+ },
+ {
+  "repo": "immich-app/immich",
+  "stack": "sveltekit",
+  "sha": "ca99e909199cfcec87a6e5b613a94bde23847249",
+  "subject": "feat: futo backups 1.12.1 with restic's parallel scan (#32830)",
+  "lines": 88,
+  "files": 6
+ },
+ {
+  "repo": "immich-app/immich",
+  "stack": "sveltekit",
+  "sha": "5583cd7857a414f10039a9fb5bf03867bd4390c8",
+  "subject": "fix(server): normalize bounding boxes when matching detected faces to existing faces (#32486)",
+  "lines": 108,
+  "files": 2
+ },
+ {
+  "repo": "immich-app/immich",
+  "stack": "sveltekit",
+  "sha": "c76e1517321df98df6e9b2f856493ac49ec05877",
+  "subject": "fix(server): anchor the folder view path match (#32612)",
+  "lines": 58,
+  "files": 3
+ },
+ {
+  "repo": "elk-zone/elk",
+  "stack": "nuxt",
+  "sha": "0bf654e6b140d47d4e176630d9c16633c789e368",
+  "subject": "feat: view Collections on profiles, notifications, and a new Collections page (#3685)",
+  "lines": 437,
+  "files": 15
+ },
+ {
+  "repo": "usememos/memos",
+  "stack": "go",
+  "sha": "dcf08b5911a4faefc41664779713956b21980081",
+  "subject": "chore(ci): share Go and web setup through composite actions",
+  "lines": 190,
+  "files": 8
+ },
+ {
+  "repo": "usememos/memos",
+  "stack": "go",
+  "sha": "8f6e6a7ae6191394239eb339c2129841932b63e6",
+  "subject": "fix(version): derive development CalVer from HEAD commit date",
+  "lines": 235,
+  "files": 13
+ },
+ {
+  "repo": "usememos/memos",
+  "stack": "go",
+  "sha": "040f9ae717675c2206856afaf52ece67911d71ea",
+  "subject": "fix(web): make archived independent of space scope",
+  "lines": 321,
+  "files": 20
+ },
+ {
+  "repo": "gotify/server",
+  "stack": "go",
+  "sha": "31a6a82b4f97d63aab90ddcda0157b408a27e397",
+  "subject": "fix: mysql insert",
+  "lines": 18,
+  "files": 3
+ },
+ {
+  "repo": "gotify/server",
+  "stack": "go",
+  "sha": "9ff78c80eadd28bbc3e379daff0bdcbed4def1d5",
+  "subject": "fix: require elevated session for creating users",
+  "lines": 206,
+  "files": 8
+ },
+ {
+  "repo": "gotify/server",
+  "stack": "go",
+  "sha": "509707737a33cf3844ef56289bbd29dffe84054a",
+  "subject": "fix: appid spec",
+  "lines": 100,
+  "files": 3
+ }
+]

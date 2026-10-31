@@ -1,0 +1,11 @@
+{ "id": "pixelfed_pixelfed__9d82d763",
+  "summary": "Adds a new public (no login) server address GET /api/v2.1/config meant to give new mobile/web clients the instance's settings and limits; but the AppService class it calls does not exist at this commit (added in the next commit e9989389), so on its own the address would error.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Read-only address returning instance configuration (per the later AppService: version, feature toggles, limits), which is meant to be public; nothing secret or data-changing. It does crash at this commit though (see misses)." },
+    { "text": "New server code that lists data. /api/v2.1/config", "kind": "description", "verdict": "misleading", "why": "It returns the instance's public settings and limits, not a list of records, and it's open to anyone without login (routes/api.php adds it with no auth middleware); the card says neither." }
+  ],
+  "misses": [
+    { "what": "The new /api/v2.1/config address depends on App\\Services\\AppService, which isn't in the code yet at this commit (it arrives in the next commit), so if shipped alone the address returns a server error.", "severity": "medium" },
+    { "what": "The new address is public (no login needed) and is intended for the new mobile app and web UI to read instance settings like signup options, enabled features and upload limits.", "severity": "low" }
+  ],
+  "silent": false }

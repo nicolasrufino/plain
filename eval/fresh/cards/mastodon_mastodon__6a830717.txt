@@ -1,0 +1,10 @@
+plain · 2 files changed since 6a830717~1
+You asked: "add information about who handled an appeal (#41186)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed app/views/disputes/strikes/show.html.haml.
+    • The agent changed config/locales/en.yml.

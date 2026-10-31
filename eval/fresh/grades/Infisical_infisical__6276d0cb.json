@@ -1,0 +1,11 @@
+{ "id": "Infisical_infisical__6276d0cb",
+  "summary": "Security fix (SSRF): the LDAP 'test connection' action now refuses local/private network addresses (unless ALLOW_INTERNAL_IP_CONNECTIONS or dev mode), matching the check already done when saving/updating an LDAP config.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Change only adds blockLocalAndPrivateIpAddresses(url) at ldap-config-service.ts:1046; tightens, introduces no risk." },
+    { "text": "The agent changed backend/src/ee/services/ldap-config/ldap-config-service.ts in a way plain can't describe yet. Ask the agent what it does differently.", "kind": "description", "verdict": "right", "why": "True but hides a security fix." }
+  ],
+  "misses": [
+    { "what": "Security fix: an org admin with LDAP permissions could previously use 'Test LDAP connection' to make the server connect to internal/private network addresses (server-side request forgery); that is now blocked, as it already was for saving the config.", "severity": "high" },
+    { "what": "Self-hosted installs whose LDAP server is on a private IP will now see 'Local IPs not allowed' when testing the connection unless ALLOW_INTERNAL_IP_CONNECTIONS is set (saving was already blocked the same way).", "severity": "low" }
+  ],
+  "silent": true }

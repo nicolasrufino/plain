@@ -1,0 +1,17 @@
+{ "id": "umami-software_umami__819e1c72",
+  "summary": "Turns the MCP endpoint and all OAuth endpoints (sign-in approval page, token, revoke, discovery) OFF by default: they now only work when MCP_ENABLED=1, and open client self-registration additionally needs OAUTH_DCR_ENABLED=1. Previously they were on by default; the old OAUTH_DISABLED / MCP_DISABLED / OAUTH_DISABLE_DCR switches are dropped.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The change closes doors rather than opening them (src/lib/oauth/config.ts:15-20); no secret, data or money risk." },
+    { "text": "The mcp part of your server changed in a way plain can't describe yet. /mcp", "kind": "description", "verdict": "right", "why": "True but uninformative: /mcp now returns 404 unless MCP_ENABLED=1 (src/app/mcp/route.ts:41)." },
+    { "text": "The agent changed README.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True; documents the new opt-in settings." },
+    { "text": "The agent changed packages/mcp/README.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent also changed src/lib/oauth/config.ts, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but this file is the heart of the change (the on/off switches) and the card doesn't explain it." },
+    { "text": "Add MCP_ENABLED to your hosting settings (like Vercel). It's also missing from .env.example.", "kind": "step", "verdict": "misleading", "why": "MCP_ENABLED is an opt-in; it's only needed if you want MCP/OAuth (and then it is needed, or existing connections break). Presented as mandatory it would switch on what this commit deliberately turned off. The repo has no .env.example file at all." },
+    { "text": "Add OAUTH_DCR_ENABLED to your hosting settings (like Vercel). It's also missing from .env.example.", "kind": "step", "verdict": "wrong", "why": "This setting re-opens the anonymous client registration endpoint that the commit made off-by-default for safety; docs say set it only if a client requires it. Following this step undoes the hardening. No .env.example exists in the repo." }
+  ],
+  "misses": [
+    { "what": "Anyone already using Umami's MCP/AI-assistant connection or OAuth sign-in will find it stops working after this update (404 / tokens rejected) until MCP_ENABLED=1 is set (and docs say OAUTH_ISSUER should be set to the public URL).", "severity": "medium" },
+    { "what": "The card never says the point of the change: MCP and OAuth are now off by default and open client registration is off unless explicitly enabled, a security tightening.", "severity": "medium" },
+    { "what": "The old OAUTH_DISABLED, MCP_DISABLED and OAUTH_DISABLE_DCR settings no longer do anything.", "severity": "low" }
+  ],
+  "silent": false }

@@ -1,0 +1,19 @@
+plain · 4 files changed since 20386739~1
+You asked: "Drop Compass tables and models (#16101)"
+
+  Nothing flagged  ·  2 steps before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    + Most of this change is in a new file,
+      server/migrations/versions/2026-10-30-1100_drop_compass.py (173 lines added).
+    • The agent also deleted server/polar/models/compass_thread.py and
+      server/polar/models/compass_thread_message.py.
+
+BEFORE YOU SHIP
+  1. Apply server/migrations/versions/2026-10-30-1100_drop_compass.py to your live database
+     before the new code goes live (`alembic upgrade head`), or the parts that use it will
+     fail.
+  2. Back up your data first: server/migrations/versions/2026-10-30-1100_drop_compass.py
+     deletes data and can't be undone.

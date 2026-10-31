@@ -1,0 +1,15 @@
+plain · 6 files changed since 42b9789a~1
+You asked: "Statuses: Open media from quotes (#41403)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in app/javascript/mastodon/components/status/image.tsx (71
+      lines added, 11 removed).
+    • The agent changed app/javascript/mastodon/components/status/content.module.scss.
+    • The agent changed app/javascript/mastodon/components/status/quote.module.scss.
+    • The agent also changed app/javascript/mastodon/actions/interactions_typed.ts,
+      app/javascript/mastodon/components/status/image.tsx and
+      app/javascript/mastodon/components/status/quote.tsx, in ways plain can't describe yet.

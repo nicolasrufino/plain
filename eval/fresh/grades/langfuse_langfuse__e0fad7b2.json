@@ -1,0 +1,11 @@
+{ "id": "langfuse_langfuse__e0fad7b2",
+  "summary": "Fixes OpenTelemetry ingestion usage mapping: gen_ai cache_creation 5m/1h token breakdowns were kept as extra buckets alongside the cache-write total (counting each cache write twice); now they go to input_cache_creation_5m/_1h and only the unattributed remainder stays in input_cache_creation.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Ingestion mapping fix; no auth, secret or data-loss concern." },
+    { "text": "Most of this change is in packages/shared/src/server/otel/OtelIngestionProcessor.ts (30 lines added, 3 removed).", "kind": "description", "verdict": "right", "why": "Matches stat; says nothing about behaviour." },
+    { "text": "The agent changed OtelIngestionProcessor.ts in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "Token usage for LLM calls sent via OpenTelemetry with prompt-cache TTL details was double counted (cache writes counted twice in totals); new traces now show correct usage, and the cache-write tokens move to 5-minute/1-hour buckets, which can change displayed usage and cost for those calls. Already-ingested data is not corrected.", "severity": "medium" }
+  ],
+  "silent": true }

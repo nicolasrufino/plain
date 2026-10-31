@@ -1,0 +1,13 @@
+{ "id": "dubinc_dub__d0d54736",
+  "summary": "Adds a new background workflow address POST /api/workflows/renew-domains (Upstash/QStash, signature-checked like the other workflows) that, for a paid domain-renewal invoice, turns on auto-renew at Dynadot, extends each domain's expiry by a year, retries failures after 5/10/20/40 min (5 attempts), alerts once if still failing, and emails workspace owners. It is registered in send-workflows but nothing calls it yet in this commit.",
+  "statements": [
+    {"text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The new address is an Upstash workflow (serve) like the existing ones, protected by QStash request signing; it only acts on completed domainRenewal invoices."},
+    {"text": "There's now a maximum of 5 attempts. apps/web/app/(ee)/api/workflows/renew-domains/route.ts", "kind": "description", "verdict": "misleading", "why": "True (MAX_ATTEMPTS = 5), but it reads like a new cap on an existing thing; the real change is a whole new domain-renewal workflow (registrar auto-renew, expiry extension, owner emails)."},
+    {"text": "The agent also changed apps/web/lib/jobs/send-workflows.ts, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Registers the 'renew-domains-workflow' name -> path."}
+  ],
+  "misses": [
+    {"what": "New domain-renewal workflow: after a renewal invoice is paid it sets auto-renew at the registrar (Dynadot), pushes each domain's expiry date out a year, and emails workspace owners 'Your domains have been renewed'.", "severity": "medium"},
+    {"what": "Nothing triggers the new workflow yet in this commit (only registered in send-workflows.ts); existing renewal handling still runs elsewhere.", "severity": "low"},
+    {"what": "Domains that still fail after the 5th attempt (~75 minutes) only produce one internal error alert; they are not renewed or retried further.", "severity": "low"}
+  ],
+  "silent": false }

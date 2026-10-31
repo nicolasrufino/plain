@@ -1,0 +1,10 @@
+plain · 2 files changed since 6276d0cb~1
+You asked: "fix(ldap): check the LDAP URL on test connection"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed backend/src/ee/services/ldap-config/ldap-config-service.ts in a way
+      plain can't describe yet. Ask the agent what it does differently.

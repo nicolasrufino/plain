@@ -1,0 +1,9 @@
+plain · 2 files changed since 29b5ec25~1
+You asked: "Rewrite to avoid select_for_update"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent also changed hc/api/tests/test_update_check.py (tests).

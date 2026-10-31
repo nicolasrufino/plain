@@ -1,0 +1,23 @@
+plain · 7 files changed since 819e1c72~1
+You asked: "feat: require explicit opt-in for MCP and OAuth registration"
+
+  Nothing flagged  ·  2 steps before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The mcp part of your server changed in a way plain can't describe yet. Ask the agent
+      what it does differently.
+      /mcp
+  Other files
+    • The agent changed README.md, a notes file (not code).
+    • The agent changed packages/mcp/README.md, a notes file (not code).
+    • The agent also changed src/lib/oauth/config.ts, in a way plain can't describe yet.
+
+BEFORE YOU SHIP
+  1. Add MCP_ENABLED to your hosting settings (like Vercel). It's also missing from
+     .env.example.
+  2. Add OAUTH_DCR_ENABLED to your hosting settings (like Vercel). It's also missing from
+     .env.example.
+
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

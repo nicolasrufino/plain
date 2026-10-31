@@ -1,0 +1,9 @@
+plain · 2 files changed since 59caeef5~1
+You asked: "Fix a race condition in Profile.for_user()"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed CHANGELOG.md, a notes file (not code).

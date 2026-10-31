@@ -1,0 +1,10 @@
+plain · 3 files changed since 31a6a82b~1
+You asked: "fix: mysql insert"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed model/elevate.go in a way plain can't describe yet. Ask the agent
+      what it does differently.

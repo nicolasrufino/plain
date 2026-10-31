@@ -1,0 +1,11 @@
+plain · 3 files changed since 50970773~1
+You asked: "fix: appid spec"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in model/message.go (35 lines added).
+    • The agent changed docs/spec.json.
+    • The agent also changed api/message.go, in a way plain can't describe yet.

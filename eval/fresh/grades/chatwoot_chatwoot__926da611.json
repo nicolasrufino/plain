@@ -1,0 +1,18 @@
+{ "id": "chatwoot_chatwoot__926da611",
+  "summary": "Adds a 'Search engine visibility' switch for whole help-center portals (new SEO settings tab) and per article; hidden pages get an X-Robots-Tag: noindex header and are dropped from the public sitemap.xml, but stay reachable by link.",
+  "statements": [
+    {"text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "No security, data-loss or money problem: new settings go through existing authorized portal/article update endpoints; public pages only gain a header and a filtered sitemap."},
+    {"text": "The hc sitemap.xml part of your server changed in a way plain can't describe yet. /hc/[slug]/sitemap.xml", "kind": "description", "verdict": "right", "why": "True (portals_controller.rb sitemap now uses search_indexable_articles), though it doesn't say how."},
+    {"text": "Most of this change is in a new file, PortalSeoSettings.vue (54 lines added).", "kind": "description", "verdict": "wrong", "why": "That file is ~61 of 330 added lines; the bulk is in controllers, models, article properties UI, locales and specs."},
+    {"text": "The agent added wording in the app (helpCenter.json): \"Show in search results\", \"Turn off to keep this article out of Google...\", ...", "kind": "description", "verdict": "right", "why": "Matches the i18n additions; these strings are the only hint of the feature."},
+    {"text": "The agent added wording in the app (config/locales/en.yml): \"noindex must be true or false\".", "kind": "description", "verdict": "right", "why": "New validation error message for Article#noindex_must_be_boolean."},
+    {"text": "The agent changed AGENTS.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "Only guidance text about where to validate input."},
+    {"text": "The agent changed app/views/api/v1/accounts/portals/_portal.json.jbuilder.", "kind": "description", "verdict": "right", "why": "True; adds disable_search_indexing to the portal payload."},
+    {"text": "The agent changed app/views/public/api/v1/portals/sitemap.xml.erb.", "kind": "description", "verdict": "right", "why": "True; sitemap now iterates @articles (indexable only)."},
+    {"text": "The agent also changed ArticleEditorProperties.vue and PortalSettings.vue, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative: these add the article switch and the new SEO tab."}
+  ],
+  "misses": [
+    {"what": "The actual feature: admins can now hide the whole help center or single articles from Google/search engines (new SEO tab in portal settings, switch in article properties); portal setting overrides articles.", "severity": "medium"},
+    {"what": "Hidden portals/articles are sent with an X-Robots-Tag: noindex header and removed from the public sitemap, so turning the switch off will drop pages from search results (they remain reachable by direct link, i.e. not private).", "severity": "medium"}
+  ],
+  "silent": false }

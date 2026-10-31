@@ -1,0 +1,16 @@
+{ "id": "chatwoot_chatwoot__b69fccf1",
+  "summary": "Security fix: the (enterprise) agent capacity-policy user endpoints returned the full user record of other agents, including their API access token and pubsub token; they now return the public agent shape, and the shared user JSON only includes those tokens for the signed-in user themself. Capacity-policy cards fall back to the agent thumbnail for avatars.",
+  "statements": [
+    {"text": "Nothing flagged", "kind": "reassurance", "verdict": "misleading", "why": "The commit closes a token leak (_user.json.jbuilder: access_token/pubsub_token of other users were sent via agent_capacity_policies/users index/create). Nothing new is broken, but an owner would come away thinking no security-relevant change happened, and may need to rotate tokens that were exposed."},
+    {"text": "The agent changed .github/workflows/run_mfa_spec.yml.", "kind": "description", "verdict": "right", "why": "Adds one spec file to the MFA CI run."},
+    {"text": "The agent changed app/views/api/v1/models/_user.json.jbuilder.", "kind": "description", "verdict": "right", "why": "True but says nothing; this is where access_token/pubsub_token are now restricted to the authenticated user."},
+    {"text": "The agent changed app/views/devise/_auth.json.jbuilder.", "kind": "description", "verdict": "right", "why": "Passes the signed-in user so login responses still include their own tokens."},
+    {"text": "The agent changed enterprise/.../agent_capacity_policies/users/create.json.jbuilder.", "kind": "description", "verdict": "right", "why": "Now renders the agent partial instead of the full user partial."},
+    {"text": "The agent changed enterprise/.../agent_capacity_policies/users/index.json.jbuilder.", "kind": "description", "verdict": "right", "why": "Same as create."},
+    {"text": "The agent also changed AgentCapacityPolicyCard.vue, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Avatar falls back to user.thumbnail since the agent shape has no avatarUrl."}
+  ],
+  "misses": [
+    {"what": "This is a security fix: before it, the capacity-policy agent list/assign API returned other agents' personal API access tokens and real-time (pubsub) tokens to whoever could view the policy. Those tokens may have been exposed and could be worth rotating.", "severity": "high"},
+    {"what": "Any user response that is not about the signed-in user no longer includes access_token/pubsub_token (API clients relying on that field get nothing).", "severity": "low"}
+  ],
+  "silent": true }

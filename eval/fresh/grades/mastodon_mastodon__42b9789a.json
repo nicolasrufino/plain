@@ -1,0 +1,14 @@
+{ "id": "mastodon_mastodon__42b9789a",
+  "summary": "Web UI: images, videos and audio inside a quoted post can now be clicked to open the media viewer/player (new openAttachmentGallery action) instead of the click taking you to the quoted post; quoted images show an ALT-text badge; the rest of the quote stays a link to the post. Frontend only.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Client-side UI change only; no server, auth or data changes." },
+    { "text": "Most of this change is in app/javascript/mastodon/components/status/image.tsx (71 lines added, 11 removed).", "kind": "description", "verdict": "right", "why": "Matches stat; no behaviour described." },
+    { "text": "The agent changed app/javascript/mastodon/components/status/content.module.scss.", "kind": "description", "verdict": "right", "why": "Styling for the ALT badge; uninformative." },
+    { "text": "The agent changed app/javascript/mastodon/components/status/quote.module.scss.", "kind": "description", "verdict": "right", "why": "Styling/focus outline for clickable quote images; uninformative." },
+    { "text": "The agent also changed interactions_typed.ts, image.tsx and quote.tsx, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "Clicking a picture, video or audio in a quoted post now opens it in the media viewer/player instead of opening the quoted post; quoted images also get an ALT badge.", "severity": "medium" },
+    { "what": "Quoted media marked sensitive (shown blurred) opens straight in the full viewer on click, with no separate reveal step on the post page as before.", "severity": "low" }
+  ],
+  "silent": true }

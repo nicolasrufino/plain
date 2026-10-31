@@ -1,0 +1,13 @@
+plain · 11 files changed since 9d355ff4~1
+You asked: "perf: make audio streaming requests cheaper (#2934)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in routes/web.base.php (22 lines added, 15 removed).
+    • The agent changed app/Http/Controllers/PlayController.php,
+      app/Http/Controllers/Subsonic/GetCoverArtController.php, app/Models/Song.php,
+      app/Models/Transcode.php, app/Repositories/SongRepository.php and 2 more files in ways
+      plain can't describe yet. Ask the agent what they do differently.

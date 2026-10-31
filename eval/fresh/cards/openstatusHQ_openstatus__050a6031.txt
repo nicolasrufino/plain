@@ -1,0 +1,11 @@
+plain · 4 files changed since 050a6031~1
+You asked: "checker: spread pubsub check starts over a per-monitor window (#3010)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed apps/checker/cmd/server/main.go and
+      apps/checker/pkg/queue/consumer.go in ways plain can't describe yet. Ask the agent
+      what they do differently.

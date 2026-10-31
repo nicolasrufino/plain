@@ -1,0 +1,12 @@
+plain · 3 files changed since 3fb379d1~1
+You asked: "Sync family icon button"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    + New server code that accepts requests.
+      /accounts/sync_all
+  Other files
+    • The agent changed app/views/accounts/index.html.erb.

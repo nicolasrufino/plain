@@ -1,0 +1,14 @@
+{ "id": "paperless-ngx_paperless-ngx__309a4b00",
+  "summary": "Fixes installs served under a subpath (e.g. example.com/paperless/): after a password change the logout/login redirect keeps the subpath, expired/missing share links redirect to the correct login page, and the auto-login middleware now recognises token requests under a subpath (so a POST to /api/token/ uses the posted credentials instead of the auto-login user).",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Redirect URL fixes plus a narrow auth-middleware path check; nothing newly risky." },
+    { "text": "The usersgroups page changed in a way plain can't describe yet. /usersgroups", "kind": "description", "verdict": "right", "why": "users-groups.component.ts logout redirect changed; uninformative." },
+    { "text": "The share part of your server changed in a way plain can't describe yet. /share/[slug]", "kind": "description", "verdict": "right", "why": "SharedLinkView redirects now use settings.LOGIN_URL; uninformative." },
+    { "text": "The agent also changed profile-edit-dialog.component.ts and src/paperless/auth.py, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative; auth.py is a login-related change plain says it reads." },
+    { "text": "The agent also changed src/paperless/tests/test_auth_middleware.py (tests).", "kind": "description", "verdict": "right", "why": "Test added." }
+  ],
+  "misses": [
+    { "what": "For installs hosted under a subpath: after changing a password users are now sent to the right logout/login page, and expired or missing share links go to the right login page instead of a broken address.", "severity": "medium" },
+    { "what": "Login fix under a subpath: with auto-login enabled, requests for an API token were being treated as the auto-login user instead of using the username/password posted; now they use the posted credentials.", "severity": "low" }
+  ],
+  "silent": true }

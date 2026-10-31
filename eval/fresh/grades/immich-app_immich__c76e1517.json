@@ -1,0 +1,10 @@
+{ "id": "immich-app_immich__c76e1517",
+  "summary": "Folder view fix: listing photos in a folder now matches the folder path from the start of the file path (and escapes _ and % wildcards), so a folder no longer also shows photos from similarly named or nested-elsewhere folders (e.g. /backup/photos/a_b or /photos/a-b). Still scoped to the owner's own photos.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Query keeps ownerId = userId filter (view-repository.ts:41); the change only narrows results. No security or data risk." },
+    { "text": "The agent changed server/src/repositories/view-repository.ts in a way plain can't describe yet. Ask the agent what it does differently.", "kind": "description", "verdict": "right", "why": "True; uninformative." }
+  ],
+  "misses": [
+    { "what": "Visible fix in the Folders view: opening a folder used to also show photos from other folders whose path merely contained the same name (e.g. /backup/photos/x, or a-b vs a_b); now only photos directly in that folder appear.", "severity": "medium" }
+  ],
+  "silent": true }

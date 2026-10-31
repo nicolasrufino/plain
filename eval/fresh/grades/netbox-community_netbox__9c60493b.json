@@ -1,0 +1,14 @@
+{ "id": "netbox-community_netbox__9c60493b",
+  "summary": "REST API fix (#23422): serializers used in nested mode (e.g. the target of an object/multi-object custom field, or WritableNestedSerializer) now only resolve the referenced existing object (still with the user's view-permission check) and skip validators/validate(). Removes scattered per-serializer 'if nested' workarounds (Interface, VMInterface, Module, JournalEntry, User, tags, MAC mixin). Effect: API writes setting custom fields that point to interfaces, modules, image attachments, journal entries, services, tokens, users, VM interfaces now succeed instead of erroring. Plugin docs updated; tests added.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Lookup still goes through get_related_object_by_attrs(queryset, data, user=user) (base.py to_internal_value), so permission enforcement is unchanged; no data/secret/money issue." },
+    { "text": "Most of this change is in netbox/dcim/api/serializers_/device_components.py (53 lines added, 57 removed).", "kind": "description", "verdict": "right", "why": "True by line count, though it is mostly re-indentation after removing the 'if not self.nested' guard; the behavioural core is netbox/api/serializers/base.py run_validation." },
+    { "text": "The agent changed docs/plugins/development/rest-api.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "Adds one note that nested serializers skip validation." },
+    { "text": "The agent also changed netbox/dcim/api/serializers_/device_components.py, ... and 4 more files, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but vacuous." },
+    { "text": "The agent also changed netbox/extras/tests/test_customfields.py and netbox/netbox/tests/test_api.py (tests).", "kind": "description", "verdict": "right", "why": "Regression tests for #23422." }
+  ],
+  "misses": [
+    { "what": "Bug fix users notice: API requests that set object/multi-object custom fields referencing interfaces, modules, image attachments, journal entries, services, service templates, tokens, users or VM interfaces now work instead of failing with validation errors.", "severity": "medium" },
+    { "what": "For plugin developers: any serializer used nested no longer runs its validate()/validators (documented in plugin REST API docs).", "severity": "low" }
+  ],
+  "silent": true }

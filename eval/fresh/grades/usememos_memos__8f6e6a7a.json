@@ -1,0 +1,21 @@
+{ "id": "usememos_memos__8f6e6a7a",
+  "summary": "Changes how Memos gets its version number: development/canary/manual builds now use the commit date as YY.MM instead of 'dev'/last tag/'manual-sha', and the server now refuses to start (exits) if it was built without a valid YY.MM version; the Docker build now fails unless a VERSION build argument is passed.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "No login, data, money or secret change. The new startup check is an operational risk (see misses) but not one of the danger categories." },
+    { "text": "Most of this change is in internal/version/version.go (45 lines added, 3 removed).", "kind": "description", "verdict": "right", "why": "Roughly matches (54 lines changed); says nothing about what it does." },
+    { "text": "The agent changed .github/workflows/build-canary-image.yml.", "kind": "description", "verdict": "right", "why": "Canary image version now from commit date." },
+    { "text": "The agent changed .github/workflows/release.yml.", "kind": "description", "verdict": "right", "why": "Manual release version now commit-date CalVer." },
+    { "text": "The agent changed AGENTS.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed internal/README.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed scripts/Dockerfile.", "kind": "description", "verdict": "right", "why": "True; it now requires a VERSION build argument or the build fails." },
+    { "text": "The agent changed scripts/release_smoke_test.sh.", "kind": "description", "verdict": "right", "why": "True; tooling." },
+    { "text": "The agent changed scripts/release_version.sh.", "kind": "description", "verdict": "right", "why": "True; adds development-version command." },
+    { "text": "The agent changed server/mcp/evals/README.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent also changed internal/version/version.go, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative. Note the card never mentions cmd/memos/main.go, where the new exit-on-bad-version check lives (main.go main())." }
+  ],
+  "misses": [
+    { "what": "The server now refuses to start if it was built without a valid YY.MM version (e.g. built from source without Git info, or `go run` without -buildvcs=true); anyone building Memos themselves could get an app that won't start.", "severity": "medium" },
+    { "what": "Building the Docker image yourself now fails unless you pass --build-arg VERSION=... (scripts/Dockerfile).", "severity": "medium" },
+    { "what": "The version shown in the app and API for canary/dev/manual builds changes (e.g. '26.10' instead of 'dev', the last tag, or 'manual-<sha>').", "severity": "low" }
+  ],
+  "silent": true }

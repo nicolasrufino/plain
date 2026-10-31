@@ -1,0 +1,12 @@
+{ "id": "Netflix_dispatch__2a90ae1b",
+  "summary": "Adds a 'Security Events / Show only Security Event cases' checkbox to the Cases table filter dialog, sent as a security_event_only query param (now accepted by every list endpoint's common parameters); for Case lists the backend then excludes cases that have any linked signal instance (NOT EXISTS SignalInstance.case_id). Despite the label 'cases with a dedicated channel', the backend never looks at the dedicated-channel setting. Also the dialog now pre-fills current filters when opened, and URL filter parsing treats 'true'/'false' as booleans.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Read-only list filter, still behind the existing authenticated list endpoints; no permission, data-change or secret issue." },
+    { "text": "The agent changed src/dispatch/static/dispatch/src/case/TableFilterDialog.vue: it now shows \"Security Events\" and \"Show only cases with a dedicated channel\".", "kind": "description", "verdict": "misleading", "why": "The labels are quoted correctly, but the filter actually shows cases with no signal instances (database/service.py:722-724), not cases with a dedicated channel; an owner would believe it filters by dedicated channel." },
+    { "text": "The agent also changed src/dispatch/database/service.py, .../case/store.js, .../router/utils.js and .../search/utils.js, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but vacuous; the server-side filter in database/service.py is the core of the feature." }
+  ],
+  "misses": [
+    { "what": "The new filter doesn't do what its label says: it hides every case linked to a signal (alert) rather than showing cases with a dedicated channel, so users may get unexpected results.", "severity": "medium" },
+    { "what": "The case filter dialog now opens pre-filled with the currently applied filters (previously opened blank).", "severity": "low" }
+  ],
+  "silent": false }

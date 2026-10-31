@@ -1,0 +1,17 @@
+plain · 12 files changed since 9c60493b~1
+You asked: "Fixes #23422: Skip validation for nested API serializers (#23466)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in netbox/dcim/api/serializers_/device_components.py (53 lines
+      added, 57 removed).
+    • The agent changed docs/plugins/development/rest-api.md, a notes file (not code).
+    • The agent also changed netbox/dcim/api/serializers_/device_components.py,
+      netbox/dcim/api/serializers_/devices.py, netbox/dcim/api/serializers_/mixins.py,
+      netbox/extras/api/serializers_/journaling.py, netbox/netbox/api/serializers/base.py
+      and 4 more files, in ways plain can't describe yet.
+    • The agent also changed netbox/extras/tests/test_customfields.py and
+      netbox/netbox/tests/test_api.py (tests).

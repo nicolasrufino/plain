@@ -1,0 +1,17 @@
+plain · 6 files changed since e139e39b~1
+You asked: "fix(web): Topics shows analyzing, waiting and failed screens on the first run..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in web/src/features/topics/TopicSetupProgressView.tsx (113
+      lines added, 159 removed).
+    • The agent changed web/src/features/topics/TopicPilesIllustration.tsx,
+      web/src/features/topics/TopicSetupProgressView.stories.tsx,
+      web/src/features/topics/TopicSetupProgressView.tsx,
+      web/src/features/topics/TopicsPage.clienttest.tsx,
+      web/src/features/topics/TopicsPage.tsx and
+      web/src/features/topics/server/topicsRouter.ts in ways plain can't describe yet. Ask
+      the agent what they do differently.

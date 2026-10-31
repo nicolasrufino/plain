@@ -1,0 +1,12 @@
+{ "id": "immich-app_immich__5583cd78",
+  "summary": "Face detection fix: when matching newly detected faces to a photo's existing faces, boxes are now compared in relative (0-1) coordinates per face, so faces tagged in photo metadata at a different resolution are recognised as the same face; metadata faces are preferred over overlapping machine-learning faces, and the ML duplicate is then removed.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Background face-detection job only (person.service.ts handleDetectFaces); no login, money or secret impact. Removing duplicate ML faces is a deliberate data change but not a hidden hazard." },
+    { "text": "Most of this change is in server/src/services/person.service.ts (31 lines added, 16 removed).", "kind": "description", "verdict": "right", "why": "Matches diff stat." },
+    { "text": "The agent changed server/src/services/person.service.ts in a way plain can't describe yet. Ask the agent what it does differently.", "kind": "description", "verdict": "right", "why": "True; uninformative." }
+  ],
+  "misses": [
+    { "what": "Fixes duplicate faces in the People view: photos whose faces were already tagged in the file's metadata (e.g. by a phone or Lightroom) will no longer get a second, machine-detected copy of the same face.", "severity": "medium" },
+    { "what": "When face detection re-runs, an existing machine-detected face that overlaps a metadata face is now deleted (refreshFaces second argument), so any person assignment on that duplicate disappears in favour of the metadata face.", "severity": "medium" }
+  ],
+  "silent": true }

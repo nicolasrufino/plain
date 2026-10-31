@@ -1,0 +1,14 @@
+{ "id": "openstatusHQ_openstatus__0ec1d187",
+  "summary": "Bundle of security/billing fixes: the public validateEmailDomain address no longer returns the whole status-page row (incl. password and IP allow-list), switching a page away from password protection now clears the stored password, Telegram group linking only works for the chat that completed the /start step (stops one workspace reading another's group additions), and account deletion now stops if cancelling the Stripe subscription fails instead of deleting while billing continues.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "misleading", "why": "Nothing new is dangerous (the commit closes holes), but it fixes a public leak of status-page passwords/IP allow-lists (statusPage.ts validateEmailDomain), a cross-workspace Telegram leak and a keep-billing-after-delete bug; 'nothing flagged' hides that live versions had these problems." },
+    { "text": "Most of this change is in packages/api/src/router/stripe/shared.ts (12 lines added, 15 removed).", "kind": "description", "verdict": "right", "why": "Matches the diff stat (mostly re-indentation from removing try/catch)." },
+    { "text": "The agent changed statusPage.ts, stripe/shared.ts, telegram-updates.ts and page/update.ts in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "Security fix: the public email-domain check on status pages was returning the full page record, including the page password and IP allow-list, to anyone; now it returns only the title. Live versions before this exposed those values.", "severity": "high" },
+    { "what": "Security fix: Telegram group linking could let any caller see another workspace's group additions; now only the chat that started the link (within 30 minutes) can finish it.", "severity": "high" },
+    { "what": "Billing fix: deleting an account used to continue even if cancelling the Stripe subscription failed (customer kept being charged); now the deletion stops with an error when Stripe fails, so users may see account deletion fail during Stripe outages.", "severity": "high" },
+    { "what": "Changing a status page from password protection to another access type now erases the old stored password.", "severity": "low" }
+  ],
+  "silent": true }

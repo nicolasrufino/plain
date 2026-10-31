@@ -1,0 +1,60 @@
+plain · 20 files changed since 9fabcf4c~1
+You asked: "Redis check for self hosted apps (#2353)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    + New server code that lists data.
+      /redis-configuration-error
+    • The agent changed the accountable sparkline, accounts, accounts new, account sync,
+      account chart, account sparkline, budget budget categories, budget budget category,
+      budgets, budget edit, budget, budgets picker, categories, categories new, category
+      edit, category, categories bootstrap, categories destroy all, category deletions,
+      category deletions new, category dropdown, chats, chats new, chat edit, chat, chat
+      retry, credit cards, credit cards new, credit card edit, credit card, cryptos, cryptos
+      new, crypto edit, crypto, currency, current session, depositories, depositories new,
+      depository edit, depository, family merchants, family merchants new, family merchant
+      edit, family merchant, holdings, holdings new, holding, impersonation sessions,
+      impersonation sessions join, impersonation sessions leave, impersonation session
+      approve, impersonation session reject, impersonation session complete, import clean,
+      import configuration, import confirm, import mapping, import row, import upload,
+      import upload sample CSV, imports, imports new, import, import publish, import revert,
+      import apply template, investments, investments new, investment edit, investment,
+      invitations, invitations new, invitation, invitation accept, invite codes, loans,
+      loans new, loan edit, loan, chat messages, onboarding, onboarding preferences,
+      onboarding goals, onboarding trial, other assets, other assets new, other asset edit,
+      other asset, other liabilities, other liabilities new, other liability edit, other
+      liability, changelog, feedback, main, password reset, password reset new, password
+      reset edit, password edit, password, plaid items, plaid items new, plaid item edit,
+      plaid item, plaid item sync, properties, properties new, property edit, property,
+      registration, registration new, rules, rules new, rule edit, rule, rule confirm, rule
+      apply, rules destroy all, securities, sessions, sessions new, session, settings
+      billing, settings hosting, settings hosting clear cache, settings profile, settings
+      security, tag deletions, tag deletions new, tags, tags new, tag edit, tag, tags
+      destroy all, trades, trades new, trade, transaction category, transactions bulk
+      deletion, transactions bulk update, transactions bulk update new, transactions,
+      transactions new, transaction, transactions clear filter, transaction transfer match,
+      transaction transfer match new, transfers, transfers new, transfer, user, user reset,
+      user rule prompt settings, valuations, valuations new, valuation, vehicles, vehicles
+      new, vehicle edit and vehicle parts of your server in ways plain can't describe yet.
+      Ask the agent what they do differently.
+  Other files
+    + The agent added app/views/layouts/blank.html.erb.
+    + The agent added app/views/pages/redis_configuration_error.html.erb.
+    • The agent changed .github/workflows/ci.yml.
+    • The agent changed app/views/accountable_sparklines/_error.html.erb.
+    • The agent changed app/views/accounts/_sparkline_error.html.erb.
+    • The agent changed app/views/accounts/new/_method_selector.html.erb.
+    • The agent changed app/views/chats/_chat.html.erb.
+    • The agent changed app/views/credit_cards/new.html.erb.
+    • The agent changed app/views/cryptos/new.html.erb.
+    • The agent changed app/views/depositories/new.html.erb.
+    • The agent changed app/views/imports/_table.html.erb.
+    • The agent changed app/views/investments/new.html.erb.
+    • The agent changed app/views/loans/new.html.erb.
+    • The agent changed app/views/pages/dashboard/_balance_sheet.html.erb.
+    • The agent changed app/views/plaid_items/_auto_link_opener.html.erb.
+    • The agent changed app/views/plaid_items/edit.html.erb.
+    • The agent changed app/views/plaid_items/new.html.erb.

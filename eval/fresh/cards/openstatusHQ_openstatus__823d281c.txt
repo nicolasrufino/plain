@@ -1,0 +1,17 @@
+plain · 13 files changed since 823d281c~1
+You asked: "fix(emails): format the maintenance window and rename the template to page-up..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent added packages/emails/emails/page-update.tsx. plain can't describe it yet.
+    • The agent changed apps/server/src/routes/v1/statusReports/update/post.ts,
+      packages/emails/emails/_components/format.ts, packages/emails/src/client.tsx and
+      packages/subscriptions/src/channels/email.ts in ways plain can't describe yet. Ask the
+      agent what they do differently.
+    • The agent deleted packages/emails/emails/status-report.tsx. plain can't describe it
+      yet.
+
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

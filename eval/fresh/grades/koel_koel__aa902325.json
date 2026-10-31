@@ -1,0 +1,10 @@
+{ "id": "koel_koel__aa902325",
+  "summary": "Moves the public embed endpoints (GET api/embeds/{embed}/{options}, POST api/embed-options) out of the 10-per-minute login throttle group into their own 60-per-minute 'embeds' bucket, and gives the embed stream route the same separate bucket, so embed traffic no longer uses up (or is blocked by) the login rate limit.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Embed routes were already public (outside the auth group) before; only the rate-limit bucket and ceiling change. No new exposure." },
+    { "text": "The agent changed routes/api.base.php and routes/web.base.php in ways plain can't describe yet. Ask the agent what they do differently.", "kind": "description", "verdict": "right", "why": "True but says nothing about what changed." }
+  ],
+  "misses": [
+    { "what": "Embedded players no longer share the login rate limit: before, loading embeds counted against the same 10-requests-per-minute-per-visitor limit as sign-in (so embeds got blocked and could lock people out of logging in); now embeds get their own 60-per-minute limit.", "severity": "medium" }
+  ],
+  "silent": true }

@@ -1,0 +1,13 @@
+plain · 6 files changed since 9c4c9f23~1
+You asked: "Enhancement: support custom fields in workflow title templates (#14564)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in src/documents/workflows/actions.py (22 lines added).
+    • The agent changed docs/usage.md, a notes file (not code).
+    • The agent also changed src/documents/consumer.py,
+      src/documents/templating/workflows.py, src/documents/workflows/actions.py and
+      src/documents/workflows/mutations.py, in ways plain can't describe yet.

@@ -1,0 +1,11 @@
+{ "id": "paperless-ngx_paperless-ngx__773744d0",
+  "summary": "The Django admin login page (/admin/login) now sends users through the app's main sign-in (allauth) instead of its own password form, so staff who have two-factor authentication must enter their code to reach the admin; previously the admin login skipped 2FA.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "misleading", "why": "Nothing new is dangerous, but the card says plain reads logins and still says nothing about a login change (urls.py wraps admin.site.login with secure_admin_login) that closes a 2FA bypass on the admin page." },
+    { "text": "The agent also added src/paperless/tests/test_admin_auth.py (tests).", "kind": "description", "verdict": "right", "why": "New test file; but the only code change (src/paperless/urls.py) isn't mentioned at all." }
+  ],
+  "misses": [
+    { "what": "Security fix: the admin site's login (/admin/) no longer accepts a plain username/password; it redirects to the normal sign-in page, so staff with two-factor authentication now must enter their code. Before this, the admin login let them skip 2FA.", "severity": "high" },
+    { "what": "Staff who used the admin's own login form now land on the main sign-in page instead.", "severity": "low" }
+  ],
+  "silent": true }

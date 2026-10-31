@@ -1,0 +1,17 @@
+{ "id": "elk-zone_elk__0bf654e6",
+  "summary": "Elk (Mastodon web client) adds read-only Mastodon Collections support: a Collections tab on profiles, a signed-in-only /collections page (my collections / collections I'm in), a page per collection, a Collections nav item (sidebar + optional bottom-nav button), and notification cards for 'added you to a collection' / 'updated a collection'. Bumps masto to ^7.12.0.",
+  "statements": [
+    {"text": "⚠ Anyone can open the @[account] collections page without logging in.", "kind": "warning", "verdict": "misleading", "why": "True, but not a problem: it is a read-only profile tab showing public Mastodon data, exactly like the existing posts/media/followers tabs in @[account]/index/ which also have no auth middleware."},
+    {"text": "The @[account] collections page is new. It only shows information. /[[server]]/@[account]/collections", "kind": "description", "verdict": "right", "why": "app/pages/[[server]]/@[account]/index/collections.vue lists an account's collections."},
+    {"text": "The collections page is new. It only shows information. /[[server]]/collections", "kind": "description", "verdict": "right", "why": "collections.vue is a layout wrapper for the collections pages."},
+    {"text": "Each collection page is new. It only shows information. /[[server]]/collections/[id]", "kind": "description", "verdict": "right", "why": "Shows name, owner, description, tag and member accounts (follow buttons use existing behaviour)."},
+    {"text": "The collections page is new. It only shows information. /[[server]]/collections (listed a second time)", "kind": "description", "verdict": "misleading", "why": "Duplicate entry for the same address; it is actually collections/index.vue, which requires sign-in (middleware: 'auth') and shows 'My collections' / 'In collections' tabs - the card never says so."},
+    {"text": "The agent added wording in the app (locales/en.json): \"Created by\", \"No accounts in this collection yet.\", ...", "kind": "description", "verdict": "right", "why": "Matches en.json additions."},
+    {"text": "The agent also changed NavBottom.vue, NavSide.vue, NotificationCard.vue and SettingsBottomNav.vue, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True; these add the Collections nav item/bottom-nav option and collection notification cards."},
+    {"text": "1. Test anything that uses masto: it was upgraded from ^7.10.0 to ^7.12.0.", "kind": "step", "verdict": "right", "why": "masto is the core Mastodon API client; lockfile moves 7.10.0 -> 7.12.0."}
+  ],
+  "misses": [
+    {"what": "Bug on the signed-in /collections page: the 'No collections' message uses v-else on the not-supported check (collections/index.vue), so it shows under the list even when the user has collections.", "severity": "medium"},
+    {"what": "New Collections item in the sidebar (and an optional bottom-nav button), plus new notification cards when someone adds you to or updates a collection.", "severity": "low"}
+  ],
+  "silent": false }

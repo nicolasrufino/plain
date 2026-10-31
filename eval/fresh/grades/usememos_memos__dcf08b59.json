@@ -1,0 +1,15 @@
+{ "id": "usememos_memos__dcf08b59",
+  "summary": "CI/tooling only: GitHub Actions workflows share two new reusable setup steps (Go version read from go.mod; Node 24 + pnpm version from web/package.json + install), removing duplicated version settings and cache steps. No change to the app.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Only build/test automation files changed; nothing users see." },
+    { "text": "The agent added .github/actions/setup-go/action.yml.", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent added .github/actions/setup-web/action.yml.", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed .github/workflows/backend-tests.yml.", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed .github/workflows/build-canary-image.yml.", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed .github/workflows/frontend-tests.yml.", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed .github/workflows/release.yml.", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed .github/workflows/upgrade-smoke.yml.", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed AGENTS.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True." }
+  ],
+  "misses": [],
+  "silent": false }

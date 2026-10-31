@@ -1,0 +1,13 @@
+{ "id": "koel_koel__9d355ff4",
+  "summary": "Performance work on audio streaming: play/radio/download/embed-stream routes skip the session/CSRF middleware, the play endpoint loads the song without eager relations (still runs the same 'access' policy), cached transcodes are validated by file size instead of hashing the whole file, and Subsonic cover art gets an ETag so clients can get 304 Not Modified.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Auth unchanged: audio.auth still runs (signed URL or audio token, not session), PlayController still calls authorize('access', $song); ownedBy uses owner_id which is equivalent." },
+    { "text": "Most of this change is in routes/web.base.php (22 lines added, 15 removed).", "kind": "description", "verdict": "right", "why": "Matches the stat; says nothing about what it does." },
+    { "text": "The agent changed app/Http/Controllers/PlayController.php, ... GetCoverArtController.php, Song.php, Transcode.php, SongRepository.php and 2 more files in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "Streaming/playback requests are made cheaper (no session started, fewer database queries per range request), so seeking/playing should be lighter on the server.", "severity": "low" },
+    { "what": "Cached transcoded files are now trusted if their size matches instead of their full content hash, so a corrupted file of the same size would be served rather than re-transcoded.", "severity": "low" },
+    { "what": "Subsonic app cover art now uses ETags keyed on the file name, so clients reuse cached covers (304); a cover replaced under the same file name could stay stale in clients.", "severity": "low" }
+  ],
+  "silent": true }

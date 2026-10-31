@@ -1,0 +1,13 @@
+{ "id": "polarsource_polar__20386739",
+  "summary": "Retires the Compass assistant's storage: a database migration permanently drops the compass_threads and compass_thread_messages tables (all saved Compass assistant conversations) and removes the 'compass_enabled' flag from every organization's feature settings; the matching models are deleted. No remaining code reads these tables.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The deletion is intentional cleanup of a retired feature and the card's ship steps disclose that data is deleted; no access/money/secret issues." },
+    { "text": "Most of this change is in a new file, server/migrations/versions/2026-10-30-1100_drop_compass.py (173 lines added).", "kind": "description", "verdict": "right", "why": "New migration (182 lines, 173 non-blank); doesn't say what it removes." },
+    { "text": "The agent also deleted server/polar/models/compass_thread.py and server/polar/models/compass_thread_message.py.", "kind": "description", "verdict": "right", "why": "Both model files removed." },
+    { "text": "Apply the migration to your live database before the new code goes live (`alembic upgrade head`), or the parts that use it will fail.", "kind": "step", "verdict": "wrong", "why": "This migration only drops tables nothing uses anymore (git grep finds no CompassThread users outside migrations); the new code doesn't depend on it, so nothing fails if it runs later. For a drop, running it after the code ships is the safe order." },
+    { "text": "Back up your data first: the migration deletes data and can't be undone.", "kind": "step", "verdict": "right", "why": "drop_table removes all Compass conversations; downgrade only recreates empty tables." }
+  ],
+  "misses": [
+    { "what": "The data being deleted is every saved Compass assistant conversation (threads and messages) for all organizations, and the 'compass_enabled' setting is wiped from all organizations (so any org with the split Billing/Compass/Customers navigation turned on loses it).", "severity": "medium" }
+  ],
+  "silent": false }

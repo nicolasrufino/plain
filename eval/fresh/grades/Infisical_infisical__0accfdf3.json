@@ -1,0 +1,10 @@
+{ "id": "Infisical_infisical__0accfdf3",
+  "summary": "Login/MFA change: when a user switches organization (POST select-organization), MFA is no longer re-prompted if they move between a root org and its sub-orgs (or between sibling sub-orgs); comparison now uses the session's root org id instead of its current org id. Switching to a different root org still requires MFA.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Intended relaxation; MFA requirement is taken from the root org's policy anyway (auth-login-service.ts getRequiredMfaMethod(rootOrg, user)), and a different root org still triggers MFA. No hole found, though the card is silent on an MFA change." },
+    { "text": "The agent changed backend/src/server/routes/v3/login-router.ts and backend/src/services/auth/auth-login-service.ts in ways plain can't describe yet. Ask the agent what they do differently.", "kind": "description", "verdict": "right", "why": "True but hides that this is a login/MFA behaviour change, squarely in the area plain says it reads." }
+  ],
+  "misses": [
+    { "what": "MFA behaviour change: users who already passed MFA are no longer asked again when switching between an organization and its sub-organizations; only switching to a different top-level organization prompts again.", "severity": "high" }
+  ],
+  "silent": true }

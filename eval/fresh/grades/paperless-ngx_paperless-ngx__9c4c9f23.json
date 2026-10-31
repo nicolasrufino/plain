@@ -1,0 +1,13 @@
+{ "id": "paperless-ngx_paperless-ngx__9c4c9f23",
+  "summary": "Workflow templates (document title assignment, notification email subject/body, webhook body/params) can now use a document's custom field values via {{custom_fields...}}; custom-field assignment now runs before the title is set so a title can use fields set by the same action.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Templating feature for admin-configured workflows; no logins, money, data loss or secrets." },
+    { "text": "Most of this change is in src/documents/workflows/actions.py (22 lines added).", "kind": "description", "verdict": "right", "why": "Largest net addition in code, though mutations.py has more lines touched (a block moved)." },
+    { "text": "The agent changed docs/usage.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "Documents the new {{custom_fields}} placeholder." },
+    { "text": "The agent also changed consumer.py, templating/workflows.py, workflows/actions.py and workflows/mutations.py, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "New feature: workflow titles, notification emails and webhooks can now include custom field values (e.g. an invoice number) using {{ custom_fields.Invoice.value }}.", "severity": "medium" },
+    { "what": "Workflows now assign custom fields before setting the title, so a title template can use fields set by the same workflow action.", "severity": "low" }
+  ],
+  "silent": true }

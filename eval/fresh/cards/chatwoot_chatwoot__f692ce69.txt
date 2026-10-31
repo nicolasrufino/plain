@@ -1,0 +1,15 @@
+plain · 3 files changed since f692ce69~1
+You asked: "fix: render contact info rows as plain text (#16465)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in
+      app/javascript/dashboard/routes/dashboard/conversation/contact/ContactInfo.vue (16
+      lines added, 17 removed).
+    • The agent changed
+      app/javascript/dashboard/routes/dashboard/conversation/contact/ContactInfo.vue and
+      app/javascript/dashboard/routes/dashboard/conversation/contact/ContactInfoRow.vue in
+      ways plain can't describe yet. Ask the agent what they do differently.

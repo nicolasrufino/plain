@@ -1,0 +1,11 @@
+{ "id": "pixelfed_pixelfed__c40a4e2b",
+  "summary": "Admin invites page: the Expire button no longer puts the invite name inside inline JavaScript, fixing a bug where an apostrophe in the name broke the button and a crafted name could run script in an admin's browser (XSS); behaviour otherwise unchanged.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The change removes a script-injection risk rather than adding one; same confirm/expire flow (home.blade.php)." },
+    { "text": "The agent changed resources/views/admin/users/invites/home.blade.php.", "kind": "description", "verdict": "right", "why": "True but says nothing about what changed." }
+  ],
+  "misses": [
+    { "what": "Security fix on the admin Invites page: a crafted invite name could run code in an admin's browser session when the page loaded/clicked; now the name is safely escaped.", "severity": "medium" },
+    { "what": "Bug fix: the Expire button on admin invites no longer breaks when the invite name contains an apostrophe.", "severity": "low" }
+  ],
+  "silent": true }

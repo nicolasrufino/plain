@@ -1,0 +1,13 @@
+{ "id": "fastapi_full-stack-fastapi-template__754ff56c",
+  "summary": "Dependabot dependency bump: locked versions move pydantic 2.13.4->2.13.5, sqlmodel 0.0.39->0.0.47, alembic 1.19.1->1.20.0, plus dev tools (prek, ruff, ty, typer, zizmor, coverage). models.py drops the explicit DateTime(timezone=True) column type because new sqlmodel maps datetime to a timezone-aware UTCDateTime by default (same DB column type), and the pre-commit bump workflow uses the renamed 'prek update' command.",
+  "statements": [
+    {"text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "No logins, money, secrets or data loss involved; the created_at change is equivalent (sqlmodel 0.0.46+ get_sqlalchemy_type returns UTCDateTime = DateTime(timezone=True))."},
+    {"text": "The agent changed .github/workflows/bump-pre-commit-hooks.yml.", "kind": "description", "verdict": "right", "why": "Tooling only: 'prek auto-update' -> 'prek update'."},
+    {"text": "The agent changed uv.lock.", "kind": "description", "verdict": "right", "why": "Lockfile version bumps."},
+    {"text": "1. Test anything that uses pydantic: it was upgraded from >2.0 to >=2.13.5.", "kind": "step", "verdict": "misleading", "why": "Only the minimum constraint moved; the installed version was already 2.13.4 and goes to 2.13.5, a patch release. Testing is harmless but the wording suggests a big jump from 2.0."},
+    {"text": "2. Test anything that uses sqlmodel: it was upgraded from >=0.0.39 to >=0.0.46.", "kind": "step", "verdict": "right", "why": "Real bump (lock 0.0.39 -> 0.0.47) that changes how datetime columns are typed/validated (aware datetimes required on write); worth testing saves of users/items."}
+  ],
+  "misses": [
+    {"what": "alembic (database migrations tool) is also bumped 1.19.1 -> 1.20.0; worth running migrations once to confirm.", "severity": "low"}
+  ],
+  "silent": false }

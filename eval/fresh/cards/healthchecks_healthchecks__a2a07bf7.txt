@@ -1,0 +1,11 @@
+plain · 5 files changed since a2a07bf7~1
+You asked: "Clean up "raise e" -> "raise""
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent also changed hc/api/management/commands/sendalerts.py, hc/api/transports.py,
+      hc/integrations/signal/transport.py, hc/lib/emails.py and hc/lib/s3.py, in ways plain
+      can't describe yet.

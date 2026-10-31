@@ -1,0 +1,12 @@
+plain · 2 files changed since e0fad7b2~1
+You asked: "fix(otel): stop double counting the cache-write TTL breakdown in generic gen_..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in packages/shared/src/server/otel/OtelIngestionProcessor.ts
+      (30 lines added, 3 removed).
+    • The agent changed packages/shared/src/server/otel/OtelIngestionProcessor.ts in a way
+      plain can't describe yet. Ask the agent what it does differently.

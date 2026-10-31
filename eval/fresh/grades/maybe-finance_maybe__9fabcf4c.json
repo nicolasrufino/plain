@@ -1,0 +1,137 @@
+{
+ "id": "maybe-finance_maybe__9fabcf4c",
+ "summary": "Self-hosted mode now pings Redis before every request; if Redis can't be reached, every page redirects to a new public /redis-configuration-error help page (which redirects home once Redis works). Also adds Redis to CI, removes unused early_access action, and whitespace cleanup in many views.",
+ "statements": [
+  {
+   "text": "Nothing flagged",
+   "kind": "reassurance",
+   "verdict": "right",
+   "why": "No login/data/money/secret problem: the only new open page (/redis-configuration-error) is a static help page. Behaviour risks (self-hosted lock-out, per-request Redis ping) are worth knowing but are not security/data-loss issues; see misses."
+  },
+  {
+   "text": "+ New server code that lists data. /redis-configuration-error",
+   "kind": "description",
+   "verdict": "wrong",
+   "why": "It lists no data: PagesController#redis_configuration_error just renders a static 'Redis Configuration Required' help page (blank layout), reachable without login (skip_authentication) and only meaningful on self-hosted installs."
+  },
+  {
+   "text": "The agent changed the accountable sparkline, accounts, ... vehicle parts of your server in ways plain can't describe yet. Ask the agent what they do differently.",
+   "kind": "description",
+   "verdict": "misleading",
+   "why": "None of those features were edited. One check was added to SelfHostable (prepend_before_action :verify_self_host_config) that, on self-hosted installs only, sends every page to /redis-configuration-error when Redis can't be reached. The card lists ~180 'changed' areas without ever saying that."
+  },
+  {
+   "text": "+ The agent added app/views/layouts/blank.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "New minimal layout used by the error page."
+  },
+  {
+   "text": "+ The agent added app/views/pages/redis_configuration_error.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "The new Redis help page."
+  },
+  {
+   "text": "The agent changed .github/workflows/ci.yml.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "CI now runs a Redis service and sets REDIS_URL."
+  },
+  {
+   "text": "The agent changed app/views/accountable_sparklines/_error.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/accounts/_sparkline_error.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/accounts/new/_method_selector.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/chats/_chat.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/credit_cards/new.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/cryptos/new.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/depositories/new.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/imports/_table.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/investments/new.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/loans/new.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/pages/dashboard/_balance_sheet.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/plaid_items/_auto_link_opener.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/plaid_items/edit.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  },
+  {
+   "text": "The agent changed app/views/plaid_items/new.html.erb.",
+   "kind": "description",
+   "verdict": "right",
+   "why": "Whitespace-only (trailing spaces / final newline)."
+  }
+ ],
+ "misses": [
+  {
+   "what": "Self-hosted installs without a reachable Redis are now completely blocked: every page (including login) redirects to the Redis setup page instead of loading.",
+   "severity": "medium"
+  },
+  {
+   "what": "Every request on self-hosted installs opens a new Redis connection (Redis.new.ping, never closed) and only CannotConnectError is caught; a Redis timeout or auth error would make every page error out instead of showing the help page.",
+   "severity": "medium"
+  }
+ ],
+ "silent": false
+}

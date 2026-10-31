@@ -1,0 +1,11 @@
+{ "id": "umami-software_umami__d6a3b8c6",
+  "summary": "Adds a database migration that permanently lowercases existing mixed-case usernames (accounts made before 3.2, which could no longer log in because login now lowercases the typed name), renaming soft-deleted accounts that would clash; live accounts whose lowercase name collides with another account are left unchanged. Plus tests and a doc-comment tweak.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The data rewrite is intended and guarded against collisions (migration.sql:2-24); no security/money problem. But the card says nothing about the user-data change." },
+    { "text": "Apply prisma/migrations/24_lowercase_username to your live database before the new code goes live (`npx prisma migrate deploy`), or the parts that use it will fail.", "kind": "step", "verdict": "misleading", "why": "No code depends on this migration, so nothing 'fails' without it; without it, old mixed-case accounts simply stay locked out. Umami's build and docker start already run `prisma migrate deploy` (scripts/check-db.js:76)." }
+  ],
+  "misses": [
+    { "what": "Existing usernames with capital letters are permanently changed to lowercase; those users (locked out since 3.2) can log in again, and their username will show in lowercase.", "severity": "medium" },
+    { "what": "Accounts whose lowercase name collides with another account are skipped and stay unable to log in; deleted accounts with clashing names get renamed with a suffix.", "severity": "low" }
+  ],
+  "silent": true }

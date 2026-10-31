@@ -1,0 +1,12 @@
+plain · 8 files changed since 9ff78c80~1
+You asked: "fix: require elevated session for creating users"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in api/user.go (6 lines added, 17 removed).
+    • The agent changed docs/spec.json.
+    • The agent also changed api/user.go, auth/authentication.go and router/router.go, in
+      ways plain can't describe yet.

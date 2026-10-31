@@ -1,0 +1,10 @@
+plain · 2 files changed since aa902325~1
+You asked: "fix: stop embeds from sharing the login rate limit (#3031)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed routes/api.base.php and routes/web.base.php in ways plain can't
+      describe yet. Ask the agent what they do differently.

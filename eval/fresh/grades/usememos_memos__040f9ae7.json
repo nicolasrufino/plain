@@ -1,0 +1,13 @@
+{ "id": "usememos_memos__040f9ae7",
+  "summary": "Web UI: the Archived page now shows all of the signed-in user's archived memos regardless of which Space is selected (it used to be filtered by the current Space), and the Archived entry moves out of the Home/Explore switcher in the sidebar into the user menu.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Front-end only; the archived list is still limited to the signed-in user's own memos (Archived.tsx creatorName: user?.name); no access, data or money change." },
+    { "text": "The agent changed CONTEXT.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent changed docs/design/multi-spaces.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "True." },
+    { "text": "The agent also changed AppSidebar.tsx, MemoActionMenu/hooks.ts, MemoView/navigation.ts, UserMenu.tsx, AppSidebarContext.tsx and 2 more files, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "Archived memos are now shown from all Spaces together, no longer filtered by the selected Space.", "severity": "medium" },
+    { "what": "Archived is no longer in the sidebar's Home/Explore switcher; users now reach it from the user (account) menu.", "severity": "medium" }
+  ],
+  "silent": true }

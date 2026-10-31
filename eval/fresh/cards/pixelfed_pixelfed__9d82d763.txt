@@ -1,0 +1,10 @@
+plain · 2 files changed since 9d82d763~1
+You asked: "Add new v2.1/config endpoint for new mobile and webUI clients"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    + New server code that lists data.
+      /api/v2.1/config

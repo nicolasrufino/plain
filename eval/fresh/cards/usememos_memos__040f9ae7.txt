@@ -1,0 +1,14 @@
+plain · 20 files changed since 040f9ae7~1
+You asked: "fix(web): make archived independent of space scope"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed CONTEXT.md, a notes file (not code).
+    • The agent changed docs/design/multi-spaces.md, a notes file (not code).
+    • The agent also changed web/src/components/AppSidebar/AppSidebar.tsx,
+      web/src/components/MemoActionMenu/hooks.ts, web/src/components/MemoView/navigation.ts,
+      web/src/components/UserMenu.tsx, web/src/contexts/AppSidebarContext.tsx and 2 more
+      files, in ways plain can't describe yet.

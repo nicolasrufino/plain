@@ -1,0 +1,16 @@
+plain · 8 files changed since dcf08b59~1
+You asked: "chore(ci): share Go and web setup through composite actions"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    + The agent added .github/actions/setup-go/action.yml.
+    + The agent added .github/actions/setup-web/action.yml.
+    • The agent changed .github/workflows/backend-tests.yml.
+    • The agent changed .github/workflows/build-canary-image.yml.
+    • The agent changed .github/workflows/frontend-tests.yml.
+    • The agent changed .github/workflows/release.yml.
+    • The agent changed .github/workflows/upgrade-smoke.yml.
+    • The agent changed AGENTS.md, a notes file (not code).

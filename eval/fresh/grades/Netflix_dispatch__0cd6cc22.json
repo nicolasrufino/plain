@@ -1,0 +1,11 @@
+{ "id": "Netflix_dispatch__0cd6cc22",
+  "summary": "Auth: attempts to fix a crash when creating a user without a password (e.g. users auto-provisioned on first sign-in via the auth provider, UserRegister(email=...)) by passing password=None instead of bytes(None); also makes the login model's password optional and modernises type hints. But dispatch_user.password is NOT NULL (models.py DispatchUser.password nullable=False), so creation now fails with a database NotNullViolation instead (get_or_create swallows it and returns no user); upstream fixed this next in 82e9444 'Fixes NotNullViolation on user creation'.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "wrong", "why": "This is a login/user-creation change that doesn't work: a None password hits DispatchUser.password nullable=False, so first-time users without a password (SSO/auto-provisioned via get_current_user -> get_or_create(UserRegister(email=...)), or /auth/register without password) still can't be created; get_or_create catches the IntegrityError and returns None. Login also now accepts a missing password field (safely rejected by verify_password)." },
+    { "text": "The agent also changed src/dispatch/auth/service.py, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but vacuous; also omits the auth/models.py change to login/registration models." }
+  ],
+  "misses": [
+    { "what": "The fix is incomplete: new users without a password (first sign-in through the auth provider, or registering without a password) still can't be created because the database requires a password; they get an error instead of an account.", "severity": "high" },
+    { "what": "Login/registration request models changed: password is now optional on login (missing password is just rejected as invalid credentials).", "severity": "low" }
+  ],
+  "silent": true }

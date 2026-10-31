@@ -1,0 +1,11 @@
+{ "id": "langfuse_langfuse__e139e39b",
+  "summary": "Reworks the Topics first-run progress screen: shows analyzing progress (summarizing/grouping/naming with an accessible progress bar), a 'waiting for traces' screen when automatic processing is on, progress for any busy summary run, and a failed screen with retry; the 'Your first topics are ready / Display results' step and per-facet topic counts are removed, so the page switches to results automatically when the run finishes. Drops the now-unused setupTopicCounts server query.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "UI-only change plus removal of a read-only query (topicsRouter.ts setupTopicCounts); no auth/data concern." },
+    { "text": "Most of this change is in web/src/features/topics/TopicSetupProgressView.tsx (113 lines added, 159 removed).", "kind": "description", "verdict": "right", "why": "Matches stat; no behaviour described." },
+    { "text": "The agent changed TopicPilesIllustration.tsx, TopicSetupProgressView.stories.tsx, TopicSetupProgressView.tsx, TopicsPage.clienttest.tsx, TopicsPage.tsx and topicsRouter.ts in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "The Topics page's first-run experience changes: users now see analyzing / waiting-for-traces / failed screens, and when the first run finishes the page jumps straight to results (the 'Your first topics are ready' screen with a Display results button and per-facet topic counts is gone).", "severity": "medium" }
+  ],
+  "silent": true }

@@ -1,0 +1,16 @@
+plain · 5 files changed since 3e07d58d~1
+You asked: "feat(ai-gateway): invite new gateway team members with the AI_GATEWAY role (#..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed
+      web/src/features/ai-gateway/components/TeamInviteFields/components/ExternalInviteeHint.tsx:
+      it now shows "in the organization yet. They'll be invited to the organi…" and "role.".
+    • The agent also changed web/src/features/ai-gateway/constants/gatewayTeamInvites.ts and
+      web/src/features/ai-gateway/server/team/gatewayTeamService.ts, in ways plain can't
+      describe yet.
+
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

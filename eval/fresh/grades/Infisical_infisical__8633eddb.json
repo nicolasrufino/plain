@@ -1,0 +1,14 @@
+{ "id": "Infisical_infisical__8633eddb",
+  "summary": "Performance refactor of secret listing (GET /api/v4/secrets and deprecated v3): cached glob matchers, cheaper permission checks, no per-row zod parse, fast-json-stringify response serializer, skip reference expansion for values without ${. Same permissions and output.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Permission logic is equivalent (secret-v2-bridge-service.ts filter/mask rewrite and permission-fns.ts keep the same allow/deny/mask outcomes); serializer still drops unlisted fields; no data/auth change found." },
+    { "text": "New server code that lists data and works without logging in. /zod", "kind": "warning", "verdict": "wrong", "why": "/zod is a route defined only inside fastify-zod.test.ts on a throwaway Fastify instance; not an app address." },
+    { "text": "New server code that lists data and works without logging in. /fast", "kind": "warning", "verdict": "wrong", "why": "Test-only route in fastify-zod.test.ts; never registered in the real server." },
+    { "text": "New server code that lists data and works without logging in. /fast-not-found", "kind": "warning", "verdict": "wrong", "why": "Test-only route in fastify-zod.test.ts; never registered in the real server." },
+    { "text": "There's now a maximum of 1,000 cached glob matchers.", "kind": "description", "verdict": "right", "why": "lib/casl/index.ts MAX_CACHED_GLOB_MATCHERS = 1000; internal perf cache, no behaviour change." },
+    { "text": "A new package was added: fast-json-stringify (^7.1.3). Make sure you actually need it.", "kind": "step", "verdict": "right", "why": "Added in backend/package.json and used by fastJsonSerializerCompiler on the secrets list routes." }
+  ],
+  "misses": [
+    { "what": "The point of the change: listing secrets (API v3/v4 GET secrets, used by CLI/SDKs) should be faster and use less server memory; responses now go through a different JSON writer.", "severity": "low" }
+  ],
+  "silent": false }

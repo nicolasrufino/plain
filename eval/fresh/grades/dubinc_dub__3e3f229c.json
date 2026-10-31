@@ -1,0 +1,11 @@
+{ "id": "dubinc_dub__3e3f229c",
+  "summary": "Partners banned from the Dub Partner Network can no longer get payouts re-enabled: payout-state recomputation (used by Stripe Connect / payout-method webhooks) keeps payoutsEnabledAt null for banned partners, and connecting a Tremendous payout method via the referrals embed is refused with a 403 for them.",
+  "statements": [
+    {"text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "No new risk is introduced; the change tightens who can be paid."},
+    {"text": "The agent changed verify-otp/route.ts, recipient-account-closed.ts, recipient-configuration-updated.ts, account-application-deauthorized.ts, account-updated.ts and recompute-partner-payout-state.ts in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but gives no meaning, despite this being a payments change."}
+  ],
+  "misses": [
+    {"what": "Money rule change: partners banned from the network now stay with payouts disabled even if they reconnect Stripe/PayPal/stablecoin payout methods (recompute-partner-payout-state.ts:130).", "severity": "high"},
+    {"what": "Banned partners trying to connect a Tremendous payout method in the referrals embed now get an error 'Your account is banned from the Dub Partner Network...'.", "severity": "medium"}
+  ],
+  "silent": true }

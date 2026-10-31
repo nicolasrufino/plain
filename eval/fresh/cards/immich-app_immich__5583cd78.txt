@@ -1,0 +1,12 @@
+plain · 2 files changed since 5583cd78~1
+You asked: "fix(server): normalize bounding boxes when matching detected faces to existin..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in server/src/services/person.service.ts (31 lines added, 16
+      removed).
+    • The agent changed server/src/services/person.service.ts in a way plain can't describe
+      yet. Ask the agent what it does differently.

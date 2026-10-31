@@ -1,0 +1,10 @@
+{ "id": "openstatusHQ_openstatus__050a6031",
+  "summary": "Checker service: instead of every check in a cron tick starting at the exact same instant, each monitor's check now starts at a fixed per-monitor delay of 0-2s after its scheduled time (to stop DNS/TLS slowdowns from bursts); configurable with a new PUBSUB_SPREAD setting, 0 disables it.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "No logins, data, money or secrets involved; only check start timing in apps/checker/pkg/queue/consumer.go." },
+    { "text": "The agent changed apps/checker/cmd/server/main.go and apps/checker/pkg/queue/consumer.go in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but says nothing about what changed." }
+  ],
+  "misses": [
+    { "what": "Uptime checks now start up to 2 seconds after their scheduled time (a fixed offset per monitor) to spread load and make DNS/connection timings more accurate; can be tuned or turned off with the new PUBSUB_SPREAD setting.", "severity": "low" }
+  ],
+  "silent": true }

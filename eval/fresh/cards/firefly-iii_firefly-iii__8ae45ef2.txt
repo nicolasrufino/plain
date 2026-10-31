@@ -1,0 +1,11 @@
+plain · 3 files changed since 8ae45ef2~1
+You asked: "Clean up account list."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed resources/views/accounts/index.blade.php.
+    • The agent also changed resources/assets/v3/vite.config.js, in a way plain can't
+      describe yet.

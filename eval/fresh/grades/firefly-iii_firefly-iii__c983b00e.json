@@ -1,0 +1,13 @@
+{ "id": "firefly-iii_firefly-iii__c983b00e",
+  "summary": "Fixes the sign of transfers in the per-account boxes on the home dashboard: the account is now passed to the tiny transaction list, so a transfer out of that account shows as negative and a transfer in shows as positive (previously the account was unknown and transfers showed with an inconsistent sign). Adds steam_negative/steam_positive helpers.",
+  "statements": [
+    {"text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Display-only fix; stored amounts are untouched. The only usages of the components (index.blade.php, groups-tiny.blade.php) now pass the required account."},
+    {"text": "The agent changed resources/views/components/generic/amount.blade.php.", "kind": "description", "verdict": "right", "why": "True; transfer amounts forced negative/positive depending on direction."},
+    {"text": "The agent changed resources/views/components/lists/groups-tiny.blade.php.", "kind": "description", "verdict": "right", "why": "Passes account through."},
+    {"text": "The agent changed resources/views/index.blade.php.", "kind": "description", "verdict": "right", "why": "Passes the account to the list on the dashboard."},
+    {"text": "The agent also changed helpers.php, Amount.php and GroupsTiny.php, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True; new helpers and a required Account parameter."}
+  ],
+  "misses": [
+    {"what": "On the home dashboard's account boxes, transfers now show the correct sign (money leaving the account negative, money arriving positive) instead of the wrong/inconsistent sign users reported.", "severity": "medium"}
+  ],
+  "silent": true }

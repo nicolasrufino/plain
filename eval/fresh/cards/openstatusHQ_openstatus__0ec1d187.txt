@@ -1,0 +1,14 @@
+plain · 4 files changed since 0ec1d187~1
+You asked: "bugs: minor fix (#2942)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in packages/api/src/router/stripe/shared.ts (12 lines added, 15
+      removed).
+    • The agent changed packages/api/src/router/statusPage.ts,
+      packages/api/src/router/stripe/shared.ts, packages/api/src/service/telegram-updates.ts
+      and packages/services/src/page/update.ts in ways plain can't describe yet. Ask the
+      agent what they do differently.

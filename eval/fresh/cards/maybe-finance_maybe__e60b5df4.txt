@@ -1,0 +1,10 @@
+plain · 2 files changed since e60b5df4~1
+You asked: "Handle bad API data for trade quantity signage (#2416)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed app/models/plaid_account/investments/transactions_processor.rb in a
+      way plain can't describe yet. Ask the agent what it does differently.

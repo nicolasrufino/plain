@@ -1,0 +1,21 @@
+plain · 4 files changed since 3bb3fab6~1
+You asked: "server: drop customer_session_codes table (#16001)"
+
+  Nothing flagged  ·  2 steps before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    + Most of this change is in a new file,
+      server/migrations/versions/2026-10-30-0800_drop_customer_session_codes.py (109 lines
+      added).
+    • The agent changed handbook/engineering/oncall/rotate-secret.mdx.
+    • The agent also deleted server/polar/models/customer_session_code.py.
+
+BEFORE YOU SHIP
+  1. Apply server/migrations/versions/2026-10-30-0800_drop_customer_session_codes.py to your
+     live database before the new code goes live (`alembic upgrade head`), or the parts that
+     use it will fail.
+  2. Back up your data first:
+     server/migrations/versions/2026-10-30-0800_drop_customer_session_codes.py deletes data
+     and can't be undone.

@@ -1,0 +1,12 @@
+{ "id": "openstatusHQ_openstatus__823d281c",
+  "summary": "Subscriber emails for scheduled maintenance now show the window as readable text (e.g. '12 Oct, 22:00 - 13 Oct, 01:00 UTC', time-only end for same-day windows) instead of raw ISO timestamps like '2026-10-12T22:00:00.000Z - ...'; the email template/method is renamed from status-report to page-update and an unused maintenance-email method is removed.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Email formatting and renames only; no logins, money, data or secrets touched." },
+    { "text": "The agent added packages/emails/emails/page-update.tsx. plain can't describe it yet.", "kind": "description", "verdict": "misleading", "why": "It is a rename of status-report.tsx (82% similar), not a new email; reading 'added' + 'deleted' suggests a new template replaced an old one." },
+    { "text": "The agent changed post.ts, format.ts, client.tsx and channels/email.ts in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." },
+    { "text": "The agent deleted packages/emails/emails/status-report.tsx. plain can't describe it yet.", "kind": "description", "verdict": "misleading", "why": "File was renamed to page-update.tsx, not removed; the subscriber email still exists." }
+  ],
+  "misses": [
+    { "what": "Maintenance emails to status-page subscribers now show the maintenance window in a readable format ('12 Oct, 22:00 - 13 Oct, 01:00 UTC') at the top instead of a 'Window' row with raw computer timestamps.", "severity": "medium" }
+  ],
+  "silent": true }

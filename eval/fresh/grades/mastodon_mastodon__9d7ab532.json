@@ -1,0 +1,10 @@
+{ "id": "mastodon_mastodon__9d7ab532",
+  "summary": "Performance fix: hashtag timelines (TagFeed, used by /tags/:id and the hashtag timeline API) now also filter the statuses_tags join by the pagination cursor (max_id/since_id/min_id), so multi-tag (any[]) feeds paged with min_id stop being slow. Same results, faster; plus tests.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Query-only speed-up; statuses_tags is always joined via tagged_with (status.rb:142), no access, data or secret change." },
+    { "text": "The tag part of your server now reads status. /tags/[id]", "kind": "description", "verdict": "misleading", "why": "Hashtag feeds already read posts; the change only adds an extra cursor filter to make paging faster (tag_feed.rb:64-70). An owner would think the page started reading new data." }
+  ],
+  "misses": [
+    { "what": "Hashtag timelines that combine several tags (any[]) load faster when scrolling/refreshing (speed fix, same results).", "severity": "low" }
+  ],
+  "silent": false }

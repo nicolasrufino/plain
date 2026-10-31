@@ -1,0 +1,10 @@
+plain · 4 files changed since 07c65567~1
+You asked: "Fixes #23511: Show correct filepath in script source tab (#23560)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent also changed netbox/extras/tests/test_api.py,
+      netbox/extras/tests/test_scripts.py and netbox/extras/tests/test_views.py (tests).

@@ -1,0 +1,11 @@
+plain · 2 files changed since 279b491b~1
+You asked: "move timestamp truncation logic to application startup, hardcoding both the c..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in server/utils/knex.js (43 lines added, 52 removed).
+    • The agent changed server/queries/visit.queries.js and server/utils/knex.js in ways
+      plain can't describe yet. Ask the agent what they do differently.

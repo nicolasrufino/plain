@@ -1,0 +1,20 @@
+plain · 19 files changed since 7a78354f~1
+You asked: "feat: search the albums and artists lists across the whole library (#2979)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • There's now a default list filter result limit of 100.
+      app/Services/SearchService.php
+  Other files
+    • The agent changed docs/usage/web-interface.md, a notes file (not code).
+    • The agent changed resources/assets/js/components/screens/AlbumListScreen.vue: it now
+      shows "No matching albums.".
+    • The agent changed resources/assets/js/components/screens/ArtistListScreen.vue: it now
+      shows "No matching artists.".
+    • The agent also changed resources/assets/js/components/ui/ListFilter.vue,
+      resources/assets/js/composables/useScrollAwayHeader.ts,
+      resources/assets/js/stores/albumStore.ts and
+      resources/assets/js/stores/artistStore.ts, in ways plain can't describe yet.

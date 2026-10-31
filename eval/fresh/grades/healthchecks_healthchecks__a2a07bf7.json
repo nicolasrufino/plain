@@ -1,0 +1,8 @@
+{ "id": "healthchecks_healthchecks__a2a07bf7",
+  "summary": "Pure code cleanup: 'raise e' replaced with bare 'raise' in alert sending, HTTP/Signal transports, email and S3 helpers, plus import reordering. No behaviour change for users.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Re-raising semantics are equivalent; only traceback details differ." },
+    { "text": "The agent also changed hc/api/management/commands/sendalerts.py, hc/api/transports.py, hc/integrations/signal/transport.py, hc/lib/emails.py and hc/lib/s3.py, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Lists the right files; doesn't say it's a no-op cleanup, but nothing false." }
+  ],
+  "misses": [],
+  "silent": true }

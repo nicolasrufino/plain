@@ -1,0 +1,11 @@
+plain · 3 files changed since 0accfdf3~1
+You asked: "do no reprompt MFA in case of changing between sub orgs"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent changed backend/src/server/routes/v3/login-router.ts and
+      backend/src/services/auth/auth-login-service.ts in ways plain can't describe yet. Ask
+      the agent what they do differently.

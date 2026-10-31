@@ -1,0 +1,15 @@
+{ "id": "immich-app_immich__ca99e909",
+  "summary": "Upgrades the built-in FUTO backups feature (server + web packages 1.11.5 -> 1.12.1) and swaps the restic backup binary in the Docker image for a new build with parallel scanning; adds an admin-only POST /futo-backups/onboarding/restore/continue address and a restoreJobId field in the admin onboarding status so a finished restore isn't re-offered on reload.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "New address is marked admin-only with bearer/cookie/api_key auth in open-api spec (x-immich-admin-only: true); no secret or data-loss risk visible." },
+    { "text": "The agent changed open-api/immich-openapi-specs.json.", "kind": "description", "verdict": "right", "why": "Adds the restore/continue endpoint and restoreJobId field." },
+    { "text": "The agent changed server/Dockerfile.", "kind": "description", "verdict": "right", "why": "True, but doesn't say it replaces the restic backup binary." },
+    { "text": "The agent also changed packages/sdk/src/fetch-client.ts, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "Generated client for the new endpoint/field." },
+    { "text": "Test anything that uses @futo-org/backups-orchestrator-api: it was upgraded from 1.11.5 to 1.12.1.", "kind": "step", "verdict": "right", "why": "server/package.json bump; backups orchestration lives in this package." },
+    { "text": "Test anything that uses @futo-org/backups-orchestrator-ui: it was upgraded from 1.11.5 to 1.12.1.", "kind": "step", "verdict": "right", "why": "web/package.json bump." }
+  ],
+  "misses": [
+    { "what": "The restic program that actually performs backups is replaced with a new build (parallel scan) in the Docker image; backups and restores should be tested end-to-end, not just the npm packages.", "severity": "medium" },
+    { "what": "New admin-only step in the backup onboarding: after a finished restore, admins confirm 'continue' and the restore is no longer offered again on reload.", "severity": "low" }
+  ],
+  "silent": false }

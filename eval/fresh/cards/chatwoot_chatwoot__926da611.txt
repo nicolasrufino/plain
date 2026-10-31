@@ -1,0 +1,29 @@
+plain · 21 files changed since 926da611~1
+You asked: "feat(help-center): allow hiding portals and articles from search engines (#16..."
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    • The hc sitemap.xml part of your server changed in a way plain can't describe yet. Ask
+      the agent what it does differently.
+      /hc/[slug]/sitemap.xml
+  Other files
+    + Most of this change is in a new file,
+      app/javascript/dashboard/components-next/HelpCenter/Pages/PortalSettingsPage/PortalSeoSettings.vue
+      (54 lines added).
+    • The agent added wording in the app (in
+      app/javascript/dashboard/i18n/locale/en/helpCenter.json): "Show in search results",
+      "Turn off to keep this article out of Google and other sea…", "Disabled because this
+      help center is hidden from search r…" and 5 more.
+    • The agent added wording in the app (in config/locales/en.yml): "noindex must be true
+      or false".
+    • The agent changed AGENTS.md, a notes file (not code).
+    • The agent changed app/views/api/v1/accounts/portals/_portal.json.jbuilder.
+    • The agent changed app/views/public/api/v1/portals/sitemap.xml.erb.
+    • The agent also changed
+      app/javascript/dashboard/components-next/HelpCenter/Pages/ArticleEditorPage/ArticleEditorProperties.vue
+      and
+      app/javascript/dashboard/components-next/HelpCenter/Pages/PortalSettingsPage/PortalSettings.vue,
+      in ways plain can't describe yet.

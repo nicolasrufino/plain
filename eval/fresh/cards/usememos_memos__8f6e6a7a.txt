@@ -1,0 +1,18 @@
+plain · 13 files changed since 8f6e6a7a~1
+You asked: "fix(version): derive development CalVer from HEAD commit date"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • Most of this change is in internal/version/version.go (45 lines added, 3 removed).
+    • The agent changed .github/workflows/build-canary-image.yml.
+    • The agent changed .github/workflows/release.yml.
+    • The agent changed AGENTS.md, a notes file (not code).
+    • The agent changed internal/README.md, a notes file (not code).
+    • The agent changed scripts/Dockerfile.
+    • The agent changed scripts/release_smoke_test.sh.
+    • The agent changed scripts/release_version.sh.
+    • The agent changed server/mcp/evals/README.md, a notes file (not code).
+    • The agent also changed internal/version/version.go, in a way plain can't describe yet.

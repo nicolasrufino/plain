@@ -1,0 +1,12 @@
+{ "id": "gotify_server__50970773",
+  "summary": "API docs/model cleanup: POST /message now binds to a dedicated CreateMessage type so the published API spec shows appid as optional (not read-only); server behaviour is unchanged (id/date were already ignored and set server-side).",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Same auth/app ownership checks in api/message.go CreateMessage; id and date still server-set (timeNow in toInternalMessage). No behaviour risk." },
+    { "text": "Most of this change is in model/message.go (35 lines added).", "kind": "description", "verdict": "right", "why": "New CreateMessage struct added there." },
+    { "text": "The agent changed docs/spec.json.", "kind": "description", "verdict": "right", "why": "Adds CreateMessage definition and points POST /message body at it." },
+    { "text": "The agent also changed api/message.go, in a way plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True; uninformative." }
+  ],
+  "misses": [
+    { "what": "The public API documentation for sending a message now shows appid as an optional input (it was wrongly marked read-only); sending messages works the same as before.", "severity": "low" }
+  ],
+  "silent": true }

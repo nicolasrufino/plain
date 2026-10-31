@@ -1,0 +1,14 @@
+{ "id": "Netflix_dispatch__b377dfae",
+  "summary": "Adds a 'Draft with GenAI' button to the incident tactical report dialog. It calls new GET /{organization}/incidents/{id}/report/tactical/generate (login required via the authenticated org router, plus IncidentEditPermission: org admin, commander or reporter), which pulls the incident's Slack channel messages, sends them to the project's AI plugin to draft Conditions/Actions/Needs, logs an 'AI-generated tactical report created' event on the incident, and fills the report form (with an AI disclaimer appended) for review before saving.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "The new address is behind get_current_user (api.py:260-261) and IncidentEditPermission; no secret, money-handling or data-loss problem. (It does send Slack channel contents to the configured AI provider; see misses.)" },
+    { "text": "+ New server code that lists incidents and works without logging in. /{organization}/incidents/[incident_id]/report/tactical/generate", "kind": "description", "verdict": "wrong", "why": "It doesn't list incidents and it requires login: incident_router is mounted on authenticated_organization_api_router with Depends(get_current_user) (api.py:174-176, 260-261) and the route adds PermissionsDependency([IncidentEditPermission]) (incident/views.py:318-321). It generates an AI draft report from one incident's Slack channel and logs an event." },
+    { "text": "The agent also changed src/dispatch/ai/enums.py, src/dispatch/ai/models.py and src/dispatch/ai/service.py, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but vacuous; ai/service.py holds the actual Slack-to-AI report generation." },
+    { "text": "The agent also changed tests/ai/test_ai_service.py (tests).", "kind": "description", "verdict": "right", "why": "Adds tests for generate_tactical_report." }
+  ],
+  "misses": [
+    { "what": "New 'Draft with GenAI' button in the tactical report dialog that auto-fills Conditions/Actions/Needs from the incident's Slack channel (overwrites what's typed, adds an AI disclaimer).", "severity": "medium" },
+    { "what": "Incident Slack channel messages (sensitive security-incident content) are sent to the configured AI provider each time the button is used, which also costs AI usage per click.", "severity": "medium" },
+    { "what": "Each generation records an 'AI-generated tactical report created' event (with the report text) on the incident timeline.", "severity": "low" }
+  ],
+  "silent": false }

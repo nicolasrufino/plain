@@ -1,0 +1,11 @@
+plain · 2 files changed since 59759f36~1
+You asked: "perf(api): Prefetch custom field target relations (#23396)"
+
+  Nothing flagged
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Other files
+    • The agent also changed netbox/extras/api/customfields.py, in a way plain can't
+      describe yet.
+    • The agent also changed netbox/extras/tests/test_customfields.py (tests).

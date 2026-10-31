@@ -1,0 +1,21 @@
+plain · 13 files changed since 8633eddb~1
+You asked: "feat: optimized get secrets heap allocation"
+
+  Nothing flagged  ·  1 step before you ship
+    plain reads logins, payments, database changes and secrets. It doesn't run the code, and it can miss bugs.
+
+WHAT CHANGED
+  Server
+    + New server code that lists data and works without logging in.
+      /zod
+    + New server code that lists data and works without logging in.
+      /fast
+    + New server code that lists data and works without logging in.
+      /fast-not-found
+    • There's now a maximum of 1,000 cached glob matchers.
+      backend/src/lib/casl/index.ts
+
+BEFORE YOU SHIP
+  1. A new package was added: fast-json-stringify (^7.1.3). Make sure you actually need it.
+
+(Hidden: 1 file whose changes don't change what the code does (formatting, unused parameters), or lockfiles.)

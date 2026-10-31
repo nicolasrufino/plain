@@ -1,0 +1,13 @@
+{ "id": "umami-software_umami__f6612191",
+  "summary": "Release bump to 3.4.0; the bundled API client library stops copying URL path values (e.g. websiteId) into request bodies; the annotations list applies its date filter even when a date is 0; the secret-scanning CI step is pinned to an exact version.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "Small bug fixes and version bump; no access, data, money or secret change." },
+    { "text": "The website annotations part of your server changed in a way plain can't describe yet. /api/websites/[websiteId]/annotations", "kind": "description", "verdict": "right", "why": "True but uninformative: date range filter now applies when startAt/endAt is 0 (route.ts:37)." },
+    { "text": "The agent changed .github/workflows/gitleaks.yml.", "kind": "description", "verdict": "right", "why": "Pins the secret-scanning action to a commit hash; tooling only." },
+    { "text": "The agent also changed packages/api-client/src/generated/operations.ts and packages/api-client/src/http.ts, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative: API client no longer sends path params in the body; API_VERSION 3.4.0." }
+  ],
+  "misses": [
+    { "what": "This is the 3.4.0 release (version bump in package.json).", "severity": "low" },
+    { "what": "Fix in the official API client: requests like creating a funnel no longer include the website id in the request body.", "severity": "low" }
+  ],
+  "silent": true }

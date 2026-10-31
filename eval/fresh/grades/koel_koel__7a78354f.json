@@ -1,0 +1,15 @@
+{ "id": "koel_koel__7a78354f",
+  "summary": "Adds a Search box to the Albums and Artists screens that searches the whole library on the server (new logged-in GET api/search/albums and api/search/artists, up to 100 results, optional favorites-only, scoped to what the user can see), with loading skeletons and 'No matching ...' empty states.",
+  "statements": [
+    { "text": "Nothing flagged", "kind": "reassurance", "verdict": "right", "why": "New routes sit inside the auth group in routes/api.base.php; repository search scopes results by user via getMany(user:)." },
+    { "text": "There's now a default list filter result limit of 100.", "kind": "description", "verdict": "right", "why": "SearchService::DEFAULT_LIST_FILTER_RESULT_LIMIT = 100 caps album/artist search results." },
+    { "text": "The agent changed docs/usage/web-interface.md, a notes file (not code).", "kind": "description", "verdict": "right", "why": "Docs line about the new search box." },
+    { "text": "AlbumListScreen.vue: it now shows \"No matching albums.\"", "kind": "description", "verdict": "right", "why": "New empty state when a search finds nothing." },
+    { "text": "ArtistListScreen.vue: it now shows \"No matching artists.\"", "kind": "description", "verdict": "right", "why": "New empty state when a search finds nothing." },
+    { "text": "The agent also changed ListFilter.vue, useScrollAwayHeader.ts, albumStore.ts and artistStore.ts, in ways plain can't describe yet.", "kind": "description", "verdict": "right", "why": "True but uninformative." }
+  ],
+  "misses": [
+    { "what": "The headline feature: the Albums and Artists screens get a new Search box that finds matches across the whole library (not just loaded items), showing at most 100 results.", "severity": "medium" },
+    { "what": "Two new server addresses, api/search/albums and api/search/artists, for logged-in users only.", "severity": "low" }
+  ],
+  "silent": false }
