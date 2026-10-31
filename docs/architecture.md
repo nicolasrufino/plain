@@ -134,6 +134,14 @@ vue-router's `next`, Svelte's `derived`, Jest's `done`). It never applies to set
     receives it. Not `checkout.session.async_payment_succeeded`/`_failed` when every Checkout the app makes takes cards
     only (each `checkout.sessions.create(...)` in the app's code, not tests, says `payment_method_types: ["card"]`, and
     nothing else makes Checkouts: Payment Links, a pricing table, another SDK): card payments are never "pending".
+  - Migration order: one that only drops whole tables (Prisma `DROP TABLE`, Alembic `drop_table`) is applied after the new code
+    is live, since the old code may still use them; one that only updates or deletes rows keeps "before the new code goes live"
+    without "or the parts that use it will fail". A dropped column falls back to the usual step (it may be one the new code can't
+    save rows without, which breaks either order).
+  - Settings: one read only to be tested (`if (process.env.MCP_ENABLED)`, `=== "production"`, `delete`, an assignment) isn't
+    required, unless a missing value stops the app (a throw, an exit, an error answer) or it's compared with something that isn't
+    fixed text (`token !== process.env.SECRET`). Test files' settings, routes and mounts don't count; `.env.example` is found under
+    its other names, and "missing from .env.example" is only said when there is one.
   - Translation files (`locales/en.ts`, `messages/en.json`, `config/locales/en.yml`; not vendored ones, not code in a
     `messages/` folder): "The agent added wording in the app (in locales/en.ts): "Add exercise" ..., and the same in N other
     languages". Wording is a string value that reads as words (not a URL, `true`, an anchor, a plural rule or markup); a key is

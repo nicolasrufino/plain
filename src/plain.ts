@@ -77,6 +77,8 @@ const AI = new Set(['OpenAI', 'Anthropic', 'Google Gemini', 'Groq', 'Mistral', '
 // ponytail: client variable names by convention; follow imports if apps name them differently
 const CLIENTS: Record<string, string> = { stripe: 'Stripe', openai: 'OpenAI', anthropic: 'Anthropic', resend: 'Resend' }   // supabase.* is the database: read as tables
 const TESTS = /(^|\/)(tests?|__tests__|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(tests?(_\w+)?|conftest)\.py$|_test\.(go|py|rb)$|_spec\.rb$/
+// a file of tests itself (not a tests/ folder, which can hold a quiz app's real routes): for what declares routes, mounts or settings
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)__tests__\/|(^|\/)conftest\.py$|(^|\/)tests?\/(?:.*\/)?test_\w+\.py$|_test\.(go|py|rb)$|_spec\.rb$/
 const CODE = /\.([cm]?[jt]sx?|py|vue|svelte|cs|java|rb|go)$|(?<!\.blade)\.php$/   // (Blade and ERB templates aren't read)
 const NOISE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/
 const printer = ts.createPrinter({ removeComments: true })
@@ -97,7 +99,7 @@ export type FileFacts = {
   outside: Set<string>; links: Set<string>; fetches: Set<string>; ui: Set<string>; imports: string[]; written: Set<string>; headings: string[]; forms: number
   binds: Map<string, string>; locals: Map<string, FileFacts>                 // name -> module it came from; top-level functions
   handlers: { server: string; method: string; path: string; guard: boolean; admin?: boolean; mw: string[]; handler?: string; facts: FileFacts; own?: string; imported?: boolean; anyMethod?: boolean; unknown?: boolean; nextAction?: boolean }[]  // Express-style routes, server actions, Python routes (own: the router's prefix)
-  mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean; mw?: string[] }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
+  mounts: { server: string; path: string; target: string; guard: boolean; guardLike: boolean; attr?: string; override?: boolean; mw?: string[]; folded?: boolean }[]  // app.use('/api/x', [guards], router | require('./x')); Python: include_router / register_blueprint
   pages: { path: string; comp: string; guard: boolean | 'unknown' }[]                     // React Router <Route> / { path, element }
   calls: { name: string; path: string; method: string; prop: boolean }[]      // api('/x'), http.post('/x'): resolved against wrappers later
   wrappers: Map<string, string>                                               // fetch helpers and their address prefix: api() -> '/api'
@@ -193,9 +195,25 @@ const hardStop = (t: string) => /redirect\s*\(|redirectToSignIn\s*\(|<RedirectTo
 const RETURNS = /^\s*\{?\s*return\b/
 const REQUIRE_LOGIN = /^(requireUser|requireUserSession|requireAdmin|requireAuth|requireAuthentication|requireLogin|requireLoggedIn|requireSession|requireStaff|requireRole|ensureLoggedIn|ensureAuthenticated|ensureAuth|ensureAdmin|ensureUser)$/
 const fnLike = (n?: ts.Node) => !!n && (ts.isArrowFunction(n) || ts.isFunctionExpression(n))
+// .env.example and the other names it goes by (kutt's .example.env)
+const ENV_EXAMPLE = /(^|\/)(?:\.env\.(?:example|sample|template|dist|local\.example|development\.example)|\.example\.env|env\.example|example\.env)$/
 // `process.env.PORT || 3001` has a real default; `|| ''` or `?? undefined` only quiets TypeScript, the value is still needed
-const hasDefault = (n: ts.Node) => ts.isBinaryExpression(n.parent) && n.parent.left === n && /^(\|\||\?\?)$/.test(n.parent.operatorToken.getText())
-  && !/^(''|""|``|null|undefined)$/.test(n.parent.right.getText().trim())
+// (and a setting only tested, never used as a value: `if (process.env.MCP_ENABLED)`, `process.env.X === ""`, `!process.env.X`,
+// `delete process.env.X`, `process.env.X = "1"`: an opt-in or a cleanup, not one the app needs)
+// (but a check that stops the app when it's missing makes it required: `if (!process.env.STRIPE_KEY) throw new Error(...)`)
+const hasDefault = (n: ts.Node) => { let x = n; while (ts.isParenthesizedExpression(x.parent)) x = x.parent; const p = x.parent
+  if (ts.isBinaryExpression(p) && p.left === x && /^(\|\||\?\?)$/.test(p.operatorToken.getText())) return !/^(''|""|``|null|undefined)$/.test(p.right.getText().trim())
+  // (stopping: a throw, an exit, an error answer, `{ status: 500 }`, in either branch)
+  for (let a: ts.Node | undefined = x.parent; a && !ts.isFunctionLike(a) && !ts.isSourceFile(a); a = a.parent)
+    if (ts.isIfStatement(a) && a.expression.pos <= x.pos && x.end <= a.expression.end) {
+      if (/\bthrow\b|\bprocess\.exit\b|\bexit\s*\(|\bstatus\s*[:(]\s*5\d\d\b|[Ee]rror\b/.test(a.thenStatement.getText() + (a.elseStatement?.getText() ?? ''))) return false; break }
+  // (compared with fixed text, `=== "production"`, `=== ""`: tested; compared with something else, `token !== process.env.SECRET`: used)
+  const fixed = (e: ts.Expression) => ts.isStringLiteralLike(e) || ts.isNumericLiteral(e) || /^(null|undefined|true|false)$/.test(e.getText())
+  if (ts.isBinaryExpression(p) && /^(===?|!==?)$/.test(p.operatorToken.getText())) return fixed(p.left === x ? p.right : p.left)
+  return ts.isBinaryExpression(p) && (p.left === x && p.operatorToken.getText() === '=' || p.operatorToken.getText() === '&&')
+    || ts.isPrefixUnaryExpression(p) && p.operator === ts.SyntaxKind.ExclamationToken || ts.isDeleteExpression(p)
+    || ts.isConditionalExpression(p) && p.condition === x || (ts.isIfStatement(p) || ts.isWhileStatement(p)) && p.expression === x
+    || ts.isCallExpression(p) && p.expression.getText() === 'Boolean' }
 
 // An Angular component: its class, and its template (templateUrl: './orders.html', or template: `...`) as JSX. Template that doesn't
 // convert cleanly: the class's facts only.
@@ -1858,7 +1876,7 @@ export function appFacts(snap: Snap) {
   // Express-style servers: each address becomes its own unit "file#/api/x", with the facts of its handlers.
   const mounts = new Map<string, { path: string; guard: boolean; from: string; mw?: string[] }>()
   const guards: { from: string; path: string }[] = []
-  for (const [p, f] of files) if (!p.endsWith('.py')) for (const m of f.mounts) {
+  for (const [p, f] of files) if (!p.endsWith('.py') && !TEST_FILE.test(p)) for (const m of f.mounts) {
     const q = m.target.startsWith('.') ? resolve(p, m.target) : target(p, m.target), file = q && files.get(q)
     if (file && (file.handlers.length || file.mounts.length)) mounts.set(q!, { ...m, from: p })   // it declares routes: a router
     else if (m.guardLike) guards.push({ from: p, path: m.path })                                  // otherwise it's a login check
@@ -1872,9 +1890,11 @@ export function appFacts(snap: Snap) {
   const guardedPaths = guards.map(g => prefix(g.from).path.replace(/\/$/, '') + g.path)
   // Python: routers are named things inside files, so mounts are keyed by file and router
   const pyMounts = new Map<string, { from: string; server: string; path: string; guard: boolean; override: boolean }>()
-  for (const [p, f] of files) if (p.endsWith('.py')) for (const m of f.mounts) {
-    const q = target(p, m.target)
-    if (q) pyMounts.set(`${q}::${m.attr}`, { from: p, server: m.server, path: m.path.replace(/\/$/, ''), guard: m.guard, override: !!m.override })
+  for (const [p, f] of files) if (p.endsWith('.py') && !TEST_FILE.test(p)) for (const m of f.mounts) {
+    const q = m.folded ? p : target(p, m.target)   // (a router mounted in its own file, kept for the routers below it)
+    // (mounted twice, once without the login dependency: it's open there, so no login for it)
+    const k = `${q}::${m.attr}`, was = pyMounts.get(k)
+    if (q) pyMounts.set(k, { from: p, server: m.server, path: m.path.replace(/\/$/, ''), guard: m.guard && (!was || was.guard), override: !!m.override })
   }
   const pyServer = (file: string, name: string) => (files.get(file) as PyFacts | undefined)?.servers?.get(name)
   const pyPrefix = (file: string, server: string, seen = new Set<string>()): { path: string; guard: boolean; override: boolean; found?: boolean } => {
@@ -2025,6 +2045,8 @@ export function appFacts(snap: Snap) {
       return /^return\s+next\s*\(\s*\)|^\{?\s*return\s+next\s*\(\s*\)/.test(branch.replace(/^\{\s*/, '')) && DENY_NEAR.test(after) && /^(return|throw)\b/.test(after) && !/\bnext\s*\(|\?/.test(after) }   // (not `return req.method === 'GET' ? next() : res.status(403)`)
     return DENY_NEAR.test(branch) && /\breturn\b|\bthrow\b|\bnext\(\s*(?:new\b|create\w*\(|err)/.test(branch) && !/\bnext\s*\(\s*\)/.test(branch) })   // (not a 403 that goes on anyway: `return next()`)
   for (const [p, f] of [...files]) {
+    // (a test file's own little server, fastify-zod.test.ts's /zod, isn't the app's)
+    if (TEST_FILE.test(p)) continue
     const pre = f.handlers.length ? prefix(p) : null
     for (const h of f.handlers) {
       const py = p.endsWith('.py') ? pyRoute(p, h) : undefined
@@ -2214,7 +2236,7 @@ export function appFacts(snap: Snap) {
     // drizzle-kit generate writes drizzle/0001_x.sql (or the `out` folder next to meta/_journal.json)
     dzMigrations: [...snap.keys()].filter(p => /\.sql$/.test(p) && !isMigration(p) && !/prisma\/migrations\//.test(p) && (/(^|\/)drizzle\//.test(p) || snap.has(p.replace(/[^/]+$/, 'meta/_journal.json')))),
     pyMigrations: [...snap.keys()].filter(p => /(^|\/)(migrations\/versions|alembic\/versions|migrations)\/[^/]+\.py$/.test(p) && !p.endsWith('__init__.py')),
-    envExample: envKeys([...snap].filter(([p]) => /(^|\/)\.env\.example$/.test(p)).map(([, t]) => t).join('\n')), deps: deps_,
+    envExample: envKeys([...snap].filter(([p]) => ENV_EXAMPLE.test(p)).map(([, t]) => t).join('\n')), hasEnvExample: [...snap.keys()].some(p => ENV_EXAMPLE.test(p)), deps: deps_,
     migrations: [...snap.keys()].filter(p => /prisma\/migrations\/.+\.sql$/.test(p)), sqlMigrations: [...snap.keys()].filter(isMigration),
   }
 }
@@ -2975,7 +2997,17 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     // the new code doesn't need it first. A changed foreign key (onDelete), a new rule, a MODIFY, a view or a backfill: it may.)
     const rulesOnly = newMigrations.every(m => { const st = (after.get(m) ?? '').replace(/--[^\n]*/g, '').split(';').map(x => x.trim()).filter(Boolean)
       return st.length > 0 && st.every(x => /^CREATE\s+INDEX\b/i.test(x) || /^DROP\s+INDEX\b/i.test(x) && /_idx["`]?\s*(?:ON\b|$)/i.test(x)) })   // (a plain index as Prisma names it: not `_key`, nor a custom-named unique one)
-    ship.push(rulesOnly ? `Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database (\`npx prisma migrate deploy\`). It only adds or removes indexes, which make lookups faster, so the new code doesn't need it first.`
+    // (one that only deletes tables: run it once the new code is out, since the old code may still use them; one that only changes
+    // rows (umami's lowercased usernames), not the tables: still before, but no "the parts that use it will fail")
+    // (only whole tables: a dropped column may be one the new code can't save rows without, which breaks either order)
+    const stmts = (m: string) => (after.get(m) ?? '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '').split(';').map(x => x.trim()).filter(Boolean)
+    const dropOnly = newMigrations.every(m => stmts(m).length > 0 && stmts(m).every(x => /^DROP\s+TABLE\b/i.test(x)))
+    const dataOnly = newMigrations.every(m => stmts(m).length > 0 && stmts(m).every(x => /^(?:UPDATE|DELETE\s+FROM)\b/i.test(x)))   // (not INSERT: rows the new code may need, like seeded roles)
+    const mig = list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))
+    if (dropOnly || dataOnly) ship.push((dropOnly ? `Apply ${mig} to your live database after the new code is live (\`npx prisma migrate deploy\`). It only deletes tables, which the old code may still use.`
+      : `Apply ${mig} to your live database before the new code goes live (\`npx prisma migrate deploy\`). It changes the rows already saved, not the tables.`)
+      + (devOnly.length && !deploys ? ` Don't use the \`${devOnly[0]}\` script there: it runs \`prisma migrate dev\`, which is for your own computer and can offer to wipe the database.` : ''))
+    else ship.push(rulesOnly ? `Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database (\`npx prisma migrate deploy\`). It only adds or removes indexes, which make lookups faster, so the new code doesn't need it first.`
       + (devOnly.length && !deploys ? ` Don't use the \`${devOnly[0]}\` script there: it runs \`prisma migrate dev\`, which is for your own computer and can offer to wipe the database.` : '')
       : `Apply ${list(newMigrations.map(m => m.replace(/\/migration\.sql$/, '')))} to your live database before the new code goes live (\`npx prisma migrate deploy\`), or ${loginTable ? `logging in can fail for everyone, not just the new parts: your login library loads ${things(loginTable)}, and Prisma asks for every column.${others.length ? ` Pages that load ${list(others.map(things))} can fail too.` : ''}` : widened.length ? `pages that load ${list(widened.map(things))} can fail too, not just the new parts (Prisma asks for every column).` : 'the parts that use it will fail.'}`
       + (devOnly.length && !deploys ? ` Don't use the \`${devOnly[0]}\` script there: it runs \`prisma migrate dev\`, which is for your own computer and can offer to wipe the database.` : ''))
@@ -3251,8 +3283,15 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   }
   const cmd = 'django' in B.deps ? '`python manage.py migrate`' : Object.keys(B.deps).some(k => /^flask[-_]migrate$/i.test(k)) ? '`alembic upgrade head`, or `flask db upgrade` with Flask-Migrate' : '`alembic upgrade head`'
   const codeOnlyMigs = 'django' in B.deps ? newPyMigrations.filter(m => !indexOnly(m) && codeOnly(m)) : []
-  const needed = newPyMigrations.filter(m => !indexOnly(m) && !codeOnlyMigs.includes(m)), speed = newPyMigrations.filter(indexOnly)
+  // (an Alembic migration that only drops tables: run it once the new code is out, since the old code may still use them)
+  const dropsOnly = (m: string) => { if ('django' in B.deps) return false; const up = (after.get(m) ?? '').split(/\ndef\s+downgrade\b/)[0]
+    // (op.execute only for SQL that adds nothing: SET LOCAL lock_timeout, UPDATE or DELETE of rows)
+    const ops = [...up.matchAll(/\b(?:op|batch_op)\.(\w+)\(\s*(?:[rf]?(?:"""|'''|"|')\s*(\w+))?/g)].map(x => x[1] === 'execute' && /^(SET|UPDATE|DELETE)$/i.test(x[2] ?? '') ? 'data' : x[1]).filter(o => !/^(f|batch_alter_table)$/.test(o))
+    return ops.length > 0 && ops.every(o => /^(drop_table|drop_index|drop_constraint|data)$/.test(o)) && ops.includes('drop_table') }   // (whole tables only: see Prisma's)
+  const drops = newPyMigrations.filter(m => !indexOnly(m) && !codeOnlyMigs.includes(m) && dropsOnly(m))
+  const needed = newPyMigrations.filter(m => !indexOnly(m) && !codeOnlyMigs.includes(m) && !drops.includes(m)), speed = newPyMigrations.filter(indexOnly)
   if (needed.length) ship.push(`Apply ${list(needed)} to your live database before the new code goes live (${cmd}), or the parts that use it will fail.`)
+  if (drops.length) ship.push(`Apply ${list(drops)} to your live database after the new code is live (${cmd}). It only deletes tables, which the old code may still use.`)
   if (speed.length) ship.push(`Apply ${list(speed)} to your live database too (${cmd}). It only makes lookups faster, so nothing breaks if it runs later.`)
   if (codeOnlyMigs.length) ship.push(`Apply ${list(codeOnlyMigs)} too (${cmd}). It only records settings Django keeps in your code (like labels, or the name for related records), not changes to your tables, so nothing breaks if it runs later.`)
   for (const m of newPyMigrations) {
@@ -3516,8 +3555,9 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
   const csKeys = new Set<string>()
   const flatJson = (o: unknown, pre: string) => { if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) typeof v === 'object' ? flatJson(v, `${pre}${k}__`) : v !== '' && v !== null && csKeys.add(`${pre}${k}`) }
   for (const [p, t] of after) if (/(^|\/)appsettings\.json$/.test(p)) try { flatJson(JSON.parse(t.replace(/^\uFEFF/, '').replace(/\/\/[^\n]*/g, '')), '') } catch { /* not JSON */ }
-  const required = new Set([...B.files.values()].flatMap(f => [...f.envReq]))
-  for (const k of new Set([...B.files.values()].flatMap(f => [...f.env]))) if (!usedBefore.has(k)) {
+  // (not settings only tests read or set)
+  const required = new Set([...B.files].filter(([p]) => !TEST_FILE.test(p.split('#')[0])).flatMap(([, f]) => [...f.envReq]))
+  for (const k of new Set([...B.files].filter(([p]) => !TEST_FILE.test(p.split('#')[0])).flatMap(([, f]) => [...f.env]))) if (!usedBefore.has(k)) {
     // VITE_, NEXT_PUBLIC_, ... are copied into the code every visitor downloads.
     const pub = /^(VITE|NEXT_PUBLIC|REACT_APP|EXPO_PUBLIC|PUBLIC)_/.test(k) && !/PUBLISHABLE|ANON/.test(k)
     if (pub && /SECRET|SERVICE_ROLE|PRIVATE|PASSWORD/.test(k)) problems.push({ kind: 'Unsafe', text: `${k} is a secret, but its name makes it part of the code every visitor's browser downloads, so anyone can read it. Move it to server-only code and give it a name without the ${k.split('_')[0]}_ prefix.` })
@@ -3526,7 +3566,7 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
     const edgeOnly = [...B.files].filter(([, f]) => f.env.has(k)).every(([p]) => /(^|\/)supabase\/functions\//.test(p.split('#')[0]))
     if (edgeOnly && /^SUPABASE_(URL|ANON_KEY|SERVICE_ROLE_KEY|DB_URL)$/.test(k) || !required.has(k) || csKeys.has(k)) continue
     ship.push(edgeOnly ? `Add ${k} to your Supabase project's secrets (Edge Functions → Secrets, or \`supabase secrets set\`).`
-      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java|php|rb|go)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet ? '' : ' It\'s also missing from .env.example.'}`)
+      : `Add ${k} to your hosting settings${B.pyModels.size || B.csModels.size || [...after.keys()].some(p => /\.(cs|csproj|java|php|rb|go)$|(^|\/)(pom\.xml|build\.gradle)/.test(p)) || /^(django|flask|fastapi)$/m.test(Object.keys(B.deps).join('\n')) ? '' : ' (like Vercel)'}.${B.envExample.has(k) || dotnet || !B.hasEnvExample ? '' : ' It\'s also missing from .env.example.'}`)
   }
   for (const [d, v] of Object.entries(B.deps)) {
     if (!(d in A.deps)) ship.push(`A new package was added: ${d} (${v}). Make sure you actually need it.`)
@@ -4162,17 +4202,20 @@ export function analyze(before: Snap, after: Snap, opts: Opts) {
         : `The agent ${verb} ${list(names)}. plain can't describe ${xs.length > 1 ? 'them' : 'it'} yet.` })
     }
   // The biggest part of the change, when nothing on the card says what it is (workout-cool's new 240-line add-exercise-modal.tsx):
-  // where it is and how big, which is always true. Only when one code file (not tests) holds 40% or more of the changed lines.
+  // where it is and how big, which is always true. Only when one code file (not tests) holds most of the changed lines.
   const sizeOf = (p: string) => { const left = new Map<string, number>(); for (const l of (before.get(p) ?? '').split('\n')) if (l.trim()) left.set(l, (left.get(l) ?? 0) + 1)
     let add = 0; for (const l of (after.get(p) ?? '').split('\n')) if (l.trim()) { const k = left.get(l); if (k) left.set(l, k - 1); else add++ }
     return { p, add, del: [...left.values()].reduce((x, y) => x + y, 0) } }
-  const sized = real.filter(p => !p.includes('#') && CODE.test(p) && !TESTS.test(p) && !STYLE.test(p) && !localeSaid.has(p)).map(sizeOf)
-  const changedLines = sized.reduce((x, f) => x + f.add + f.del, 0), big = sized.sort((x, y) => y.add + y.del - x.add - x.del)[0]
+  // ("most": more than half of every changed line outside tests and lockfiles, translations and styles included: chatwoot's .vue
+  // file was 61 of 330)
+  const counted = real.filter(p => !p.includes('#') && !TESTS.test(p) && !NOISE.test(p)).map(sizeOf)
+  const changedLines = counted.reduce((x, f) => x + f.add + f.del, 0)
+  const big = counted.filter(f => CODE.test(f.p) && !STYLE.test(f.p) && !localeSaid.has(f.p)).sort((x, y) => y.add + y.del - x.add - x.del)[0]
   const saidOf = (p: string) => changes.some(c => !c.vague && (c.text.includes(p) && !/can't describe/.test(c.text) || !!route(p) && c.detail === route(p)!.url))
   // (and only on a card that says nothing specific about pages, the server, the database or outside services: elsewhere the
   // file's work is usually what a route or table line already says)
   const specific = changes.some(c => c.group !== 'Other files' && !c.vague)
-  if (big && !specific && changedLines >= 30 && (big.add + big.del) / changedLines >= 0.4 && !saidOf(big.p)) {
+  if (big && !specific && changedLines >= 30 && (big.add + big.del) / changedLines > 0.5 && !saidOf(big.p)) {
     const at = changes.findIndex(c => c.group === 'Other files')
     changes.splice(at < 0 ? changes.length : at, 0, { group: 'Other files', isNew: !before.has(big.p), text: !after.has(big.p) ? `Most of this change is deleting ${big.p} (${big.del} lines).`
       : `Most of this change is in ${before.has(big.p) ? '' : 'a new file, '}${big.p} (${big.add} line${big.add === 1 ? '' : 's'} added${big.del ? `, ${big.del} removed` : ''}).` }) }

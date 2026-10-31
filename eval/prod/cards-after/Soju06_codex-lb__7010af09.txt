@@ -16,8 +16,6 @@ WHAT CHANGED
       file (not code).
     + The agent added openspec/changes/env-reads-through-settings/tasks.md, a notes file
       (not code).
-    • Most of this change is in scripts/generate_settings_reference.py (82 lines added, 3
-      removed).
     • The agent changed docs/reference/settings.md, a notes file (not code).
     • The agent changed openspec/specs/deployment-installation/context.md, a notes file (not
       code).

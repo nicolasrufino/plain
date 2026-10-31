@@ -208,13 +208,17 @@ export function pyFacts(path: string, text: string, empty: (printed?: string) =>
       override: last === 'register_blueprint' && !!given })
   }
   // Mounted in the same file: fold the mount into the routes right away
+  // (and kept, marked folded, for routers in other files mounted on that one: dispatch's incident router hangs off a router this
+  // file mounts with dependencies=[Depends(get_current_user)])
+  const folded: typeof f.mounts = []
   for (let i = 0; i < 5; i++) for (const m of f.mounts.filter(m => servers.has(m.target) && m.target === m.attr)) {
     for (const h of f.handlers) if (h.server === m.target) {
       h.path = m.path.replace(/\/$/, '') + (m.override ? '' : (h.own ?? '').replace(/\/$/, '')) + h.path
       h.guard ||= m.guard || !!servers.get(m.server)?.guard; h.server = m.server; h.own = servers.get(m.server)?.prefix
     }
-    f.mounts.splice(f.mounts.indexOf(m), 1)
+    f.mounts.splice(f.mounts.indexOf(m), 1); folded.push({ ...m, folded: true })
   }
+  f.mounts.push(...folded)
 
   django(root, f, decorated, turnsAway)
 

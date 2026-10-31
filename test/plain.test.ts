@@ -8349,3 +8349,47 @@ console.log('ok (translations)')
   assert.ok(!c(base, { ...base, 'app/page.tsx': base['app/page.tsx'].replace('Hi', 'Hello there'), 'lib/a.ts': 'export const a = 2\n' }).includes('Most of this change'), 'small')
 }
 console.log('ok (biggest part)')
+// A test file's own little server isn't the app's (Infisical's fastify-zod.test.ts declared /zod, /fast)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"express":"4.0.0"}}', 'server.js': 'const express = require("express")\nconst app = express()\napp.listen(3000)\n' }
+  const x = c(base, { ...base, 'src/plugins/zod.test.ts': 'import express from "express"\nconst app = express()\napp.post("/zod", (req, res) => { db.items.create(req.body); res.end() })\n' })
+  assert.ok(!x.includes('/zod') && !x.includes('without logging in'), x)
+}
+console.log('ok (test-file servers)')
+// FastAPI: a router mounted on a router in another file, which that file mounts with the login dependency (Netflix dispatch)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const api = (dep: string) => `from fastapi import APIRouter, Depends\nfrom app.auth import get_current_user\nfrom app.incidents import router as incident_router\napi_router = APIRouter()\nauthed = APIRouter(prefix="/{organization}")\nauthed.include_router(incident_router, prefix="/incidents")\napi_router.include_router(authed${dep})\n`
+  const base = (dep: string) => ({ 'requirements.txt': 'fastapi\n', 'app/auth.py': 'def get_current_user():\n    pass\n', 'app/api.py': api(dep), 'app/main.py': 'from fastapi import FastAPI\nfrom app.api import api_router\napp = FastAPI()\napp.include_router(api_router)\n', 'app/incidents.py': 'from fastapi import APIRouter\nrouter = APIRouter()\n' })
+  const add = (dep: string) => ({ ...base(dep), 'app/incidents.py': 'from fastapi import APIRouter\nrouter = APIRouter()\n\n@router.post("/{incident_id}/report")\ndef report_incident(incident_id: int):\n    db.add(Report(incident_id=incident_id))\n' })
+  assert.ok(c(base(', dependencies=[Depends(get_current_user)]'), add(', dependencies=[Depends(get_current_user)]')).includes('requires login ✓'), 'guarded two levels up')
+  assert.ok(!c(base(''), add('')).includes('requires login ✓'), 'not guarded')
+}
+console.log('ok (fastapi nested mounts)')
+// A migration that only deletes tables or columns goes after the new code (polar); one that only changes rows says so (umami)
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const pr = { 'package.json': '{"dependencies":{"@prisma/client":"5.0.0","next":"15.0.0"}}', 'prisma/schema.prisma': 'model User {\n  id Int @id\n  name String\n}\nmodel Old {\n  id Int @id\n}\n', 'prisma/migrations/1_init/migration.sql': 'CREATE TABLE "User" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL);\nCREATE TABLE "Old" ("id" INTEGER PRIMARY KEY);\n' }
+  const drop = c(pr, { ...pr, 'prisma/schema.prisma': 'model User {\n  id Int @id\n  name String\n}\n', 'prisma/migrations/2_drop/migration.sql': 'DROP TABLE "Old";\n' })
+  assert.ok(drop.includes('Apply prisma/migrations/2_drop to your live database after the new code is live') && /[Bb]ack up/.test(drop), drop)
+  const data = c(pr, { ...pr, 'prisma/migrations/2_lower/migration.sql': 'UPDATE "User" SET "name" = LOWER("name");\n' })
+  assert.ok(data.includes("before the new code goes live (`npx prisma migrate deploy`). It changes the rows already saved, not the tables.") && !data.includes('or the parts that use it will fail'), data)
+  const al = { 'requirements.txt': 'fastapi\nalembic\nsqlalchemy\n', 'alembic/versions/0001_init.py': 'def upgrade():\n    op.create_table("old", sa.Column("id", sa.Integer))\n' }
+  const ad = c(al, { ...al, 'alembic/versions/0002_drop.py': 'revision = "2"\ndown_revision = "1"\ndef upgrade():\n    op.execute("SET LOCAL lock_timeout = \'5s\'")\n    op.drop_index("ix_old_id", table_name="old")\n    op.drop_table("old")\n\ndef downgrade():\n    op.create_table("old")\n' })
+  assert.ok(ad.includes('Apply alembic/versions/0002_drop.py to your live database after the new code is live'), ad)
+  assert.ok(c(al, { ...al, 'alembic/versions/0002_add.py': 'def upgrade():\n    op.add_column("old", sa.Column("x", sa.Integer))\n    op.drop_table("older")\n' }).includes('before the new code goes live'), 'adds something too')
+}
+console.log('ok (drop and data migrations)')
+// A setting only tested is optional (umami's `if (process.env.MCP_ENABLED)`); one whose absence stops the app is required
+{
+  const c = (a: Record<string, string>, b: Record<string, string>) => report(new Map(Object.entries(a)), new Map(Object.entries(b)), { ref: 'main' }).replace(/\s+/g, ' ')
+  const base = { 'package.json': '{"dependencies":{"next":"15.0.0"}}', 'app/api/x/route.ts': 'export async function GET() { return Response.json({}) }\n' }
+  const with_ = (body: string) => ({ ...base, 'app/api/x/route.ts': `export async function GET() {\n${body}\n  return Response.json({})\n}\n` })
+  assert.ok(!c(base, with_('  if (process.env.MCP_ENABLED) console.log("on")')).includes('Add MCP_ENABLED'), 'an opt-in flag')
+  assert.ok(!c(base, with_('  if (process.env.ALPHABET === "") delete process.env.ALPHABET')).includes('Add ALPHABET'), 'a cleanup')
+  assert.ok(c(base, with_('  if (!process.env.STRIPE_KEY) throw new Error("STRIPE_KEY is required")')).includes('Add STRIPE_KEY'), 'a check that stops the app')
+  assert.ok(c(base, with_('  const key = process.env.API_TOKEN\n  await fetch("https://x.dev", { headers: { a: key! } })')).includes('Add API_TOKEN'), 'used as a value')
+  assert.ok(!c(base, with_('  const key = process.env.API_TOKEN\n  await fetch("https://x.dev", { headers: { a: key! } })')).includes('missing from .env.example'), 'no .env.example to be missing from')
+}
+console.log('ok (optional settings)')

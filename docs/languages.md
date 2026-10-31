@@ -264,7 +264,7 @@ Lovable's default for new apps since May 2026, usually with Supabase.
 - **Login checks:**
   - FastAPI:
     - `Depends(get_current_user)` / `Security(...)` in a route's parameters
-    - `dependencies=[Depends(...)]` on the route, the router, or `include_router`
+    - `dependencies=[Depends(...)]` on the route, the router, or `include_router` (also several mounts up, through a router mounted in its own file, like Netflix dispatch's `api_router.include_router(authed, dependencies=[Depends(get_current_user)])`; a router mounted twice needs it on every mount)
   - Flask:
     - `@login_required`, `@jwt_required()`, `@admin_required`
     - a blueprint's `before_request` that aborts or redirects
